@@ -19,6 +19,10 @@ const SETTINGS_PATH = join(ROOT, '.shannon-settings.json');
 const PORT = process.env.PORT || 3000;
 
 const app = express();
+// Railway / Vercel / any reverse proxy: trust the X-Forwarded-* headers so
+// req.protocol correctly reports "https" (not "http"). Without this the
+// Google OAuth redirect URI is built with http://, which Google rejects.
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
 // `extensions: ['html']` lets us serve `/terms` from `terms.html` etc.
 app.use(express.static(join(__dirname, 'public'), { extensions: ['html'] }));
