@@ -77,7 +77,7 @@ try { Anthropic = (await import('@anthropic-ai/sdk')).default; }
 catch { const { execSync } = await import('node:child_process'); execSync('pnpm add -w @anthropic-ai/sdk', { stdio: 'inherit', cwd: import.meta.dirname }); Anthropic = (await import('@anthropic-ai/sdk')).default; }
 
 const client = new Anthropic({ apiKey });
-const MODEL = process.env.SHANNON_MODEL ?? 'claude-opus-4-6';
+const MODEL = process.env.SHANNON_MODEL ?? 'claude-opus-4-7';
 const scanId = randomUUID().slice(0, 8);
 const wsDir = join(import.meta.dirname, 'workspaces', scanId);
 const dirs = ['', 'pre-recon', 'recon', 'red-team', 'blue-team', 'purple-team', 'exploit-verify', 'chain-analysis', 'war-room', 'forensic-package', 'audit',
