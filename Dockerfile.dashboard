@@ -1,26 +1,26 @@
 # Securovix dashboard — production image for Railway.
 #
-# Builds from the package root. Includes the full pnpm workspace because the
-# dashboard imports from sibling packages (@shannon/cli, @shannon/worker) and
-# the run-scan.mjs entry point lives at the workspace root.
+# Strategy: install the dashboard's deps directly via npm (it already ships
+# its own package-lock.json), bypassing pnpm-workspace symlink complexity.
+# This keeps node_modules flat and predictable so Node's ESM resolver finds
+# `express` etc. without any workspace gymnastics.
 
-FROM node:20-alpine AS base
+FROM node:20-alpine
 WORKDIR /app
 
-# pnpm via corepack — no global install needed.
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# 1) Copy ONLY the dashboard's manifests first — keeps Docker cache hot
+#    when only source code changes.
+COPY packages/dashboard/package.json      /app/packages/dashboard/package.json
+COPY packages/dashboard/package-lock.json /app/packages/dashboard/package-lock.json
 
-# 1) Install workspace deps (only manifests for cache friendliness)
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
-COPY packages/cli/package.json       packages/cli/package.json
-COPY packages/worker/package.json    packages/worker/package.json
-COPY packages/dashboard/package.json packages/dashboard/package.json
-RUN pnpm install --frozen-lockfile --prod=false
+# 2) Install production deps inside packages/dashboard (NOT a workspace install).
+#    `npm ci` requires the lock file and is reproducible + faster than `npm install`.
+RUN cd packages/dashboard && npm ci --omit=dev
 
-# 2) Copy source
+# 3) Copy the rest of the workspace AFTER install. The .dockerignore prevents
+#    any local node_modules from clobbering the freshly installed ones.
 COPY . .
 
-# 3) Runtime
 ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000

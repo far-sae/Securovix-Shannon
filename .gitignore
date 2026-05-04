@@ -11,3 +11,13 @@ workspaces/
 coverage/
 .DS_Store
 Thumbs.db
+
+# IDE / agent skill bundles (not part of the product)
+.agents/
+.claude/
+.qoder/
+.cursor/
+.codex/
+
+# Local dashboard settings (may contain API keys)
+.shannon-settings.json

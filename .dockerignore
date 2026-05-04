@@ -1,0 +1,26 @@
+# Never ship local installs into the image — Docker installs fresh.
+node_modules
+**/node_modules
+.pnpm-store
+
+# VCS + IDE
+.git
+.gitignore
+.vscode
+.idea
+*.swp
+
+# Local secrets / state
+.env
+.env.*
+.shannon-settings.json
+*.local.yaml
+
+# Local scan artifacts (the workspaces dir is recreated per-deploy)
+workspaces
+
+# Build / cache junk
+.turbo
+dist
+*.log
+.DS_Store
