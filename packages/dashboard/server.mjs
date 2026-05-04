@@ -125,8 +125,11 @@ function todayKey() { return new Date().toISOString().slice(0, 10); }
 // --- Routes
 app.get('/api/auth/me', (req, res) => {
   const u = getUser(req);
-  if (!u) return res.status(401).json({ ok: false });
-  res.json({ ok: true, user: publicUser(u), googleConfigured: !!process.env.GOOGLE_CLIENT_ID });
+  // Always send googleConfigured — the login screen (401 path) needs it to
+  // decide whether to enable the "Continue with Google" button.
+  const googleConfigured = !!process.env.GOOGLE_CLIENT_ID;
+  if (!u) return res.status(401).json({ ok: false, googleConfigured });
+  res.json({ ok: true, user: publicUser(u), googleConfigured });
 });
 
 app.post('/api/auth/signup', (req, res) => {
