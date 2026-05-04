@@ -1,0 +1,8 @@
+## Authentication: HTTP Basic Auth
+
+To authenticate:
+1. Include Authorization header with Basic scheme: Authorization: Basic <base64(username:password)>
+2. The browser may prompt for credentials on first access
+3. Credentials persist for the session duration
+
+Credentials will be provided via configuration.

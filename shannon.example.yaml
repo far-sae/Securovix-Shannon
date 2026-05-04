@@ -1,0 +1,30 @@
+target:
+  url: https://example.com
+  repoPath: /path/to/source/code
+  urls:
+    focus:
+      - /api/
+      - /admin/
+    avoid:
+      - /docs/
+      - /static/
+
+authentication:
+  type: form
+  loginUrl: https://example.com/login
+  username: testuser
+  password: testpassword
+  # totpSecret: JBSWY3DPEHPK3PXP  # Uncomment for TOTP 2FA
+
+pipeline:
+  retryPreset: default
+  maxConcurrentPipelines: 5
+
+# models:
+#   small: claude-haiku-4-5-20251001
+#   medium: claude-sonnet-4-6
+#   large: claude-opus-4-6
+
+loginInstructions: |
+  Navigate to /login, enter username and password in the form fields,
+  then click the "Sign In" button. Wait for redirect to /dashboard.

@@ -1,0 +1,11 @@
+## Authentication: Form Login
+
+To authenticate with the application:
+1. Navigate to the login page
+2. Enter the username in the username/email field
+3. Enter the password in the password field
+4. Submit the form
+5. Wait for redirect to confirm successful login
+6. If TOTP 2FA is enabled, enter the current TOTP code when prompted
+
+Credentials will be provided via environment variables or config.

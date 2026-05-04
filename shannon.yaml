@@ -1,0 +1,24 @@
+target:
+  url: https://example.com
+  repoPath: /path/to/source/code
+  urls:
+    focus:
+      - /api/
+      - /admin/
+    avoid:
+      - /docs/
+      - /static/
+
+authentication:
+  type: form
+  loginUrl: https://example.com/login
+  username: testuser
+  password: testpassword
+
+pipeline:
+  retryPreset: default
+  maxConcurrentPipelines: 5
+
+loginInstructions: |
+  Navigate to /login, enter username and password in the form fields,
+  then click the "Sign In" button. Wait for redirect to /dashboard.

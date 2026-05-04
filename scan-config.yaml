@@ -1,0 +1,13 @@
+target:
+  url: https://cosyposflow.com
+  urls:
+    focus:
+      - /
+      - /api/
+    avoid:
+      - /static/
+      - /assets/
+
+pipeline:
+  retryPreset: fast
+  maxConcurrentPipelines: 3

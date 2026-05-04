@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en" style="color-scheme:dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Privacy Policy · Securovix</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/tokens.css">
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t1);min-height:100vh;line-height:1.65;padding:48px 24px;-webkit-font-smoothing:antialiased}
+  .doc{max-width:760px;margin:0 auto}
+  .doc-head{display:flex;align-items:center;gap:14px;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid var(--brd)}
+  .doc-head img{width:42px;height:42px;border-radius:50%;box-shadow:0 0 18px rgba(212,247,69,.32)}
+  .doc-head .t{font:700 20px 'Inter',sans-serif;color:var(--t0);letter-spacing:-.3px}
+  .doc-head .s{font:600 10.5px 'JetBrains Mono',monospace;color:var(--t3);letter-spacing:1.4px;text-transform:uppercase;margin-top:3px}
+  h1{font:700 36px/1.15 'Inter',sans-serif;color:var(--t0);letter-spacing:-.6px;margin-bottom:6px}
+  .updated{font:500 12px 'JetBrains Mono',monospace;color:var(--t3);margin-bottom:36px}
+  h2{font:700 18px 'Inter',sans-serif;color:var(--t0);margin:32px 0 10px;letter-spacing:-.2px}
+  p,li{font-size:14.5px;color:var(--t1);margin-bottom:12px}
+  ul{padding-left:22px;margin-bottom:12px}
+  li{margin-bottom:6px}
+  strong{color:var(--t0);font-weight:600}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .back{display:inline-flex;align-items:center;gap:6px;font:600 12px 'JetBrains Mono',monospace;color:var(--t3);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:18px}
+  .back:hover{color:var(--acc)}
+  .ok{background:rgba(74,222,128,.06);border:1px solid rgba(74,222,128,.32);border-radius:10px;padding:16px 18px;margin:18px 0}
+  .ok strong{color:var(--grn)}
+  table{width:100%;border-collapse:collapse;margin:14px 0}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--brd);font-size:13px}
+  th{font-weight:700;color:var(--t0);text-transform:uppercase;font-size:10.5px;letter-spacing:.7px}
+</style>
+</head>
+<body>
+<div class="doc">
+  <a href="/" class="back">← Back to Securovix</a>
+  <div class="doc-head">
+    <img src="/favicon.png" alt="">
+    <div>
+      <div class="t">Securovix</div>
+      <div class="s">Pentest Framework</div>
+    </div>
+  </div>
+
+  <h1>Privacy Policy</h1>
+  <div class="updated">Last updated: 4 May 2026</div>
+
+  <p>This policy describes what data Securovix collects, why, and what we do with it. We follow the principle of <strong>data minimisation</strong> — we keep only what we need to run the Service.</p>
+
+  <div class="ok">
+    <strong>✓ Your API keys never touch our server.</strong> Anthropic / OpenAI / Google / Zhipu keys are stored exclusively in your browser's <code>localStorage</code> and sent directly from your browser to each provider. We have no copy. Same for your scan source code in Code Scan mode — it's POSTed straight to the LLM provider.
+  </div>
+
+  <h2>1. Data we collect</h2>
+  <table>
+    <thead><tr><th>Data</th><th>Why</th><th>Stored where</th></tr></thead>
+    <tbody>
+      <tr><td>Email address</td><td>Account login + recovery</td><td>Our server (hashed password)</td></tr>
+      <tr><td>Display name</td><td>Greeting on the dashboard</td><td>Our server</td></tr>
+      <tr><td>Google profile (if you use Google sign-in)</td><td>Account creation + avatar</td><td>Our server</td></tr>
+      <tr><td>Scan target URLs + run history</td><td>So you can revisit past scans</td><td>Our server</td></tr>
+      <tr><td>LLM API keys</td><td>Routing inference requests</td><td><strong>Your browser only</strong> (localStorage)</td></tr>
+      <tr><td>Source code submitted to Code Scan</td><td>Sending to the LLM</td><td><strong>Not persisted server-side</strong> beyond the run window</td></tr>
+      <tr><td>Session cookie</td><td>Keep you signed in</td><td>HttpOnly, SameSite=Lax cookie</td></tr>
+      <tr><td>Acceptance of Terms + Privacy timestamp</td><td>Legal record</td><td>Our server</td></tr>
+    </tbody>
+  </table>
+
+  <h2>2. Data we do NOT collect</h2>
+  <ul>
+    <li>We do not run analytics trackers (no Google Analytics, no Segment, no Mixpanel).</li>
+    <li>We do not sell, rent, or share your data with advertisers.</li>
+    <li>We do not log the contents of your LLM prompts or responses on our server — those go directly between your browser and the LLM provider.</li>
+    <li>We do not use your scan data to train models.</li>
+  </ul>
+
+  <h2>3. Third-party providers</h2>
+  <p>When you connect an LLM API key, your prompts and responses pass through that provider under <em>their</em> privacy policy:</p>
+  <ul>
+    <li><a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Anthropic</a></li>
+    <li><a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noopener">OpenAI</a></li>
+    <li><a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google</a></li>
+    <li><a href="https://open.bigmodel.cn/" target="_blank" rel="noopener">Zhipu AI</a></li>
+  </ul>
+  <p>If you use Google Sign-In, you also agree to Google's terms.</p>
+
+  <h2>4. Cookies</h2>
+  <p>We use a single first-party HttpOnly cookie (<code>shannon_session</code>) to keep you signed in. It's HMAC-signed, set with <code>SameSite=Lax</code>, and expires after 30 days. We do not use third-party cookies.</p>
+
+  <h2>5. Data retention</h2>
+  <ul>
+    <li><strong>Account data</strong> — kept until you delete your account.</li>
+    <li><strong>Scan history</strong> — kept until you delete the scan or your account.</li>
+    <li><strong>Session cookies</strong> — 30 days.</li>
+    <li><strong>Submitted source code</strong> — discarded after the scan completes; not retained.</li>
+  </ul>
+
+  <h2>6. Your rights (UK GDPR / EU GDPR)</h2>
+  <p>You have the right to:</p>
+  <ul>
+    <li><strong>Access</strong> the data we hold about you.</li>
+    <li><strong>Correct</strong> inaccurate data.</li>
+    <li><strong>Delete</strong> your account and all associated data.</li>
+    <li><strong>Export</strong> your data in a machine-readable format.</li>
+    <li><strong>Object</strong> to processing or <strong>withdraw consent</strong>.</li>
+  </ul>
+  <p>To exercise any of these rights, email <a href="mailto:privacy@securovix.com">privacy@securovix.com</a>. We respond within 30 days.</p>
+
+  <h2>7. Security</h2>
+  <p>Passwords are hashed with PBKDF2-SHA256 (120,000 iterations, 16-byte salt). Sessions are HMAC-SHA256 signed. Production deployments use HTTPS exclusively. We do not store payment information.</p>
+
+  <h2>8. International transfers</h2>
+  <p>Our servers and Supabase database may be located outside your country. By using the Service you consent to your data being transferred and processed in those locations under appropriate safeguards (Standard Contractual Clauses where required).</p>
+
+  <h2>9. Children</h2>
+  <p>The Service is not intended for users under 18. We do not knowingly collect data from minors.</p>
+
+  <h2>10. Changes</h2>
+  <p>If we materially change this policy we'll update the date above and notify signed-in users by email or in-app banner.</p>
+
+  <h2>11. Contact</h2>
+  <p>Privacy questions or requests: <a href="mailto:privacy@securovix.com">privacy@securovix.com</a>.</p>
+
+  <p style="margin-top:48px;padding-top:24px;border-top:1px solid var(--brd);font-size:12px;color:var(--t3)">See also: <a href="/terms">Terms of Service</a></p>
+</div>
+</body>
+</html>

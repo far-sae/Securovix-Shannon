@@ -1,0 +1,143 @@
+/* Shannon design tokens — synced to securovix.com.
+   Source: https://securovix.com/assets/index-CRk2Y14I.css :root {...}
+   Pure dark grays + neon lime brand accent (#d4f745). Inter throughout. */
+
+:root {
+  /* ---------- Surface (hsl 0,0%,X%) ---------- */
+  --bg: #0b0b0b;        /* background — 4.3% */
+  --bg2: #0f0f0f;       /* sidebar    — 6%   */
+  --s1: #121212;        /* card       — 7%   */
+  --s2: #1f1f1f;        /* secondary  — 12%  */
+  --s3: #262626;        /* muted      — 15%  */
+  --s4: #292929;        /* border     — 16%  */
+  --s5: #333333;
+
+  /* ---------- Borders ---------- */
+  --brd: #292929;
+  --brd2: #333333;
+  --brd3: #404040;
+
+  /* ---------- Text ---------- */
+  --t0: #ffffff;        /* foreground / heading */
+  --t1: #e5e5e5;
+  --t2: #a3a3a3;        /* muted-foreground (hsl 0,0%,64%) */
+  --t3: #737373;
+  --t4: #525252;
+
+  /* ---------- Brand accent — signature neon lime (hsl 72,92%,62%) ---------- */
+  --acc: #d4f745;
+  --acc2: #ddff5e;
+  --acc3: #e5ff7a;
+  --acc-deep: #a8c92a;
+  --glow:  rgba(212, 247, 69, 0.16);
+  --glow2: rgba(212, 247, 69, 0.07);
+  --glow3: rgba(212, 247, 69, 0.32);
+
+  /* ---------- Neon shadow utilities (Securovix --neon-glow) ---------- */
+  --neon-glow:        0 0 20px rgba(212, 247, 69, 0.40);
+  --neon-glow-strong: 0 0 40px rgba(212, 247, 69, 0.60);
+
+  /* ---------- Semantic (Tailwind 400/500 family — matches Securovix) ---------- */
+  --grn: #4ade80;        --grn-bg: rgba(74, 222, 128, 0.12);
+  --red: #ef4444;        --red-bg: rgba(239, 68, 68, 0.14);
+  --ylw: #facc15;        --ylw-bg: rgba(250, 204, 21, 0.14);
+  --blu: #60a5fa;        --blu-bg: rgba(96, 165, 250, 0.14);
+  --cyn: #67e8f9;
+  --org: #fb923c;
+  --pur: #c084fc;
+
+  /* ---------- Severity ---------- */
+  --sev-critical: var(--red);    --sev-critical-bg: var(--red-bg);
+  --sev-high:     var(--org);    --sev-high-bg:     rgba(251, 146, 60, 0.14);
+  --sev-medium:   var(--ylw);    --sev-medium-bg:   var(--ylw-bg);
+  --sev-low:      var(--blu);    --sev-low-bg:      var(--blu-bg);
+  --sev-info:     var(--t2);     --sev-info-bg:     rgba(163, 163, 163, 0.12);
+
+  /* ---------- Team colors (functional — kept distinct red/blue) ---------- */
+  --rt: #ef4444;             --rt-glow: rgba(239, 68, 68, 0.50);
+  --bt: #60a5fa;             --bt-glow: rgba(96, 165, 250, 0.50);
+  --pt: #c084fc;             --pt-glow: rgba(192, 132, 252, 0.45);
+  --pt-bg: rgba(192, 132, 252, 0.12);
+
+  /* ---------- Radii (Securovix --radius: .5rem = 8px) ---------- */
+  --r: 12px;
+  --rs: 8px;
+  --rxs: 6px;
+  --r-pill: 999px;
+
+  /* ---------- Spacing scale (8px base) ---------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-14: 56px;
+  --sp-20: 80px;
+
+  /* ---------- Motion ---------- */
+  --fast: 160ms cubic-bezier(.4, 0, .2, 1);
+  --med:  320ms cubic-bezier(.16, 1, .3, 1);
+  --slow: 520ms cubic-bezier(.16, 1, .3, 1);
+  --ease-out:    cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.4, 0, .2, 1);
+
+  /* ---------- Layout ---------- */
+  --sidebar-w: 264px;
+  --sidebar-w-collapsed: 64px;
+  --content-max: 1280px;
+  --bp-sm: 640px;
+  --bp-md: 880px;
+  --bp-lg: 1180px;
+  --bp-xl: 1440px;
+
+  /* ---------- Type scale (Inter throughout, like Securovix) ---------- */
+  --fs-micro: 11px;
+  --fs-label: 12px;
+  --fs-body:  14px;
+  --fs-lg:    16px;
+  --fs-h3:    19px;
+  --fs-h2:    24px;
+  --fs-h1:    32px;
+  --fs-display: 40px;
+  --lh-tight: 1.2;
+  --lh-body:  1.55;
+  --lh-prose: 1.75;
+
+  /* ---------- Elevation ---------- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- Constellation HUD overlays (corner widgets) ---------- */
+.constel-hud{position:absolute;z-index:3;display:flex;gap:6px;align-items:center;font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:1.2px;text-transform:uppercase;color:rgba(212,247,69,.85);background:rgba(8,8,8,.78);padding:8px 12px;border-radius:8px;border:1px solid rgba(212,247,69,.22);backdrop-filter:blur(10px);pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.constel-hud .v{color:#fff;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.4px}
+.constel-hud .lbl{color:var(--t3);letter-spacing:1.5px}
+.constel-hud .pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--acc);box-shadow:0 0 8px var(--acc);animation:pdot 1.4s ease-in-out infinite}
+.constel-hud-tl{top:14px;left:14px}
+.constel-hud-tr{top:14px;right:14px;flex-direction:column;align-items:flex-end;gap:4px}
+
+/* Sweeping scan beam — gentle horizontal line that sweeps the canvas */
+.constel-scan{position:absolute;left:0;right:0;height:1px;z-index:1;pointer-events:none;background:linear-gradient(90deg,transparent 0%,rgba(212,247,69,.14) 30%,rgba(212,247,69,.34) 50%,rgba(212,247,69,.14) 70%,transparent 100%);box-shadow:0 0 18px rgba(212,247,69,.25),0 0 60px rgba(212,247,69,.1);animation:constelScan 9s ease-in-out infinite;opacity:.7}
+@keyframes constelScan{0%{top:8%;opacity:.0}10%{opacity:.7}50%{top:92%;opacity:.7}55%{opacity:0}100%{top:8%;opacity:0}}
+
+/* Reduced motion — nuke the scan beam */
+@media (prefers-reduced-motion: reduce){.constel-scan{display:none}}
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fast: 0ms linear;
+    --med:  0ms linear;
+    --slow: 0ms linear;
+  }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

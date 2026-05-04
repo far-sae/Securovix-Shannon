@@ -1,0 +1,8 @@
+## Authentication: API Key
+
+To authenticate API requests:
+1. Include the API key in the appropriate header (usually Authorization: Bearer <key> or X-API-Key: <key>)
+2. Some endpoints may accept the key as a query parameter
+3. Verify authentication by accessing a protected endpoint
+
+The API key will be provided via configuration.

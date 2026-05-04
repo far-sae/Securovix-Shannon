@@ -1,0 +1,6 @@
+target:
+  url: https://scurovix.com
+  urls:
+pipeline:
+  retryPreset: default
+  maxConcurrentPipelines: 3

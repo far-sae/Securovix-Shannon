@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>RedBlue Scan — AI Red Team vs Blue Team for your code</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+  .grad-bg {
+    background:
+      radial-gradient(900px 500px at 80% -10%, rgba(239, 68, 68, .18), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(59, 130, 246, .18), transparent 60%),
+      #0a0a0b;
+  }
+  .card { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.07); }
+  .codebox { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  .pill { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+</style>
+</head>
+<body class="grad-bg text-zinc-100 min-h-screen">
+
+<header class="max-w-6xl mx-auto px-6 pt-8 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-red-500 to-blue-500 flex items-center justify-center font-black">RB</div>
+    <div>
+      <div class="font-semibold tracking-tight">RedBlue Scan</div>
+      <div class="text-xs text-zinc-400">AI red team vs blue team for your codebase</div>
+    </div>
+  </div>
+  <div id="session-badge" class="hidden text-xs">
+    <span class="pill px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+      <span id="plan-label">—</span> · <span id="usage-label">0/0</span>
+    </span>
+    <button id="logout-btn" class="ml-3 text-zinc-400 hover:text-white">sign out</button>
+  </div>
+</header>
+
+<!-- ============== LANDING / PAYWALL ============== -->
+<section id="landing" class="max-w-6xl mx-auto px-6 pt-16 pb-24">
+  <div class="text-center max-w-3xl mx-auto">
+    <div class="pill inline-block px-3 py-1 rounded-full bg-white/5 border border-white/10 text-zinc-300">Subscription required</div>
+    <h1 class="mt-5 text-5xl md:text-6xl font-black tracking-tight">
+      Two AI agents.<br/>
+      <span class="bg-gradient-to-r from-red-400 via-fuchsia-400 to-blue-400 bg-clip-text text-transparent">One verdict on your code.</span>
+    </h1>
+    <p class="mt-5 text-lg text-zinc-400">
+      Paste a file. The <span class="text-red-400 font-semibold">Red Team</span> attacks it like an adversary would.
+      The <span class="text-blue-400 font-semibold">Blue Team</span> patches every flaw and hands back a fixed version.
+      You see the exploits, the bugs, and the corrected code — in one pass.
+    </p>
+  </div>
+
+  <!-- How it works -->
+  <div class="mt-16 grid md:grid-cols-3 gap-4">
+    <div class="card rounded-xl p-5">
+      <div class="text-red-400 font-bold">1 · Red Team attacks</div>
+      <p class="mt-2 text-sm text-zinc-400">Enumerates injections, auth gaps, logic flaws, race conditions, crypto misuse, and unsafe patterns. Each finding ships with a working PoC.</p>
+    </div>
+    <div class="card rounded-xl p-5">
+      <div class="text-blue-400 font-bold">2 · Blue Team defends</div>
+      <p class="mt-2 text-sm text-zinc-400">Produces a fully patched version of the file that closes every red-team finding while preserving original behavior.</p>
+    </div>
+    <div class="card rounded-xl p-5">
+      <div class="text-emerald-400 font-bold">3 · Auto-fix</div>
+      <p class="mt-2 text-sm text-zinc-400">Copy the corrected code back into your repo, or download it. Patches are tied to finding IDs so you can audit each change.</p>
+    </div>
+  </div>
+
+  <!-- Pricing -->
+  <h2 class="mt-20 text-2xl font-bold tracking-tight text-center">Choose a plan</h2>
+  <p class="text-center text-zinc-400 text-sm mt-2">You cannot scan without an active subscription. Demo keys are listed in the server console.</p>
+
+  <div class="mt-8 grid md:grid-cols-3 gap-5">
+    <div class="card rounded-2xl p-6">
+      <div class="flex items-baseline justify-between">
+        <div class="font-semibold text-lg">Free</div>
+        <div class="text-3xl font-black">$0</div>
+      </div>
+      <div class="text-xs text-zinc-400">3 scans / day</div>
+      <ul class="mt-4 space-y-1 text-sm text-zinc-300">
+        <li>· Red + Blue analysis</li>
+        <li>· Up to 60KB per file</li>
+        <li>· Demo only</li>
+      </ul>
+      <button data-plan="free" class="subscribe-btn mt-6 w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/15">Start free</button>
+    </div>
+    <div class="card rounded-2xl p-6 ring-2 ring-fuchsia-500/40 relative">
+      <div class="absolute -top-3 left-1/2 -translate-x-1/2 pill px-2 py-0.5 rounded-full bg-fuchsia-500 text-white">most popular</div>
+      <div class="flex items-baseline justify-between">
+        <div class="font-semibold text-lg">Pro</div>
+        <div class="text-3xl font-black">$29<span class="text-sm font-normal text-zinc-400">/mo</span></div>
+      </div>
+      <div class="text-xs text-zinc-400">100 scans / day</div>
+      <ul class="mt-4 space-y-1 text-sm text-zinc-300">
+        <li>· Everything in Free</li>
+        <li>· Priority queue</li>
+        <li>· Larger files</li>
+      </ul>
+      <button data-plan="pro" class="subscribe-btn mt-6 w-full py-2.5 rounded-lg bg-fuchsia-500 hover:bg-fuchsia-400 text-white font-semibold">Subscribe Pro</button>
+    </div>
+    <div class="card rounded-2xl p-6">
+      <div class="flex items-baseline justify-between">
+        <div class="font-semibold text-lg">Team</div>
+        <div class="text-3xl font-black">$99<span class="text-sm font-normal text-zinc-400">/mo</span></div>
+      </div>
+      <div class="text-xs text-zinc-400">Unlimited scans</div>
+      <ul class="mt-4 space-y-1 text-sm text-zinc-300">
+        <li>· Everything in Pro</li>
+        <li>· Multi-seat licenses</li>
+        <li>· Audit log retention</li>
+      </ul>
+      <button data-plan="team" class="subscribe-btn mt-6 w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/15">Subscribe Team</button>
+    </div>
+  </div>
+
+  <!-- Activation -->
+  <div class="mt-12 max-w-xl mx-auto card rounded-2xl p-6">
+    <div class="font-semibold">Already paid? Activate your license</div>
+    <p class="text-xs text-zinc-400 mt-1">Paste the license key you received after subscribing.</p>
+    <form id="activate-form" class="mt-4 flex gap-2">
+      <input id="license-input" type="text" placeholder="RBSCAN-XXXX-XXXX-XXXX"
+             class="flex-1 codebox px-3 py-2.5 rounded-lg bg-black/40 border border-white/10 focus:border-fuchsia-400 outline-none uppercase tracking-wider" />
+      <button class="px-5 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-semibold">Activate</button>
+    </form>
+    <div id="activate-error" class="hidden mt-3 text-sm text-red-400"></div>
+  </div>
+</section>
+
+<!-- ============== SCANNER ============== -->
+<section id="scanner" class="hidden max-w-6xl mx-auto px-6 pt-10 pb-24">
+  <div class="grid lg:grid-cols-5 gap-6">
+    <div class="lg:col-span-2">
+      <div class="card rounded-2xl p-5">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold">Source code</div>
+          <div class="flex items-center gap-2">
+            <input id="filename-input" type="text" placeholder="filename.ext"
+                   class="codebox text-xs px-2 py-1 rounded bg-black/40 border border-white/10 w-40" />
+            <button id="sample-btn" class="text-xs text-zinc-400 hover:text-white">load sample</button>
+          </div>
+        </div>
+        <textarea id="code-input" spellcheck="false"
+                  class="codebox mt-3 w-full h-[520px] p-3 rounded-lg bg-black/50 border border-white/10 text-sm leading-relaxed focus:border-fuchsia-400 outline-none resize-none"
+                  placeholder="// paste a file (max 60KB)..."></textarea>
+        <button id="scan-btn" class="mt-4 w-full py-3 rounded-lg bg-gradient-to-r from-red-500 to-blue-500 hover:from-red-400 hover:to-blue-400 font-semibold">
+          Run Red / Blue Scan
+        </button>
+        <div id="scan-status" class="mt-2 text-xs text-zinc-400 min-h-[16px]"></div>
+      </div>
+    </div>
+
+    <div class="lg:col-span-3">
+      <div id="empty-state" class="card rounded-2xl p-10 text-center text-zinc-400">
+        <div class="text-5xl">⚡</div>
+        <p class="mt-3">Paste source on the left and run a scan to see findings here.</p>
+      </div>
+      <div id="results" class="hidden space-y-5"></div>
+    </div>
+  </div>
+</section>
+
+<footer class="text-center text-xs text-zinc-500 py-8">
+  RedBlue Scan · powered by Anthropic Claude
+</footer>
+
+<!-- Subscribe modal -->
+<div id="subscribe-modal" class="hidden fixed inset-0 bg-black/70 z-50 items-center justify-center p-4">
+  <div class="card rounded-2xl max-w-md w-full p-6">
+    <div class="font-semibold text-lg" id="subscribe-title">Subscribe</div>
+    <p class="mt-2 text-sm text-zinc-400" id="subscribe-body">Real billing isn't wired up in this build. Use one of the demo keys printed in the server console to activate the matching plan.</p>
+    <div class="mt-4 codebox text-xs bg-black/40 border border-white/10 rounded-lg p-3 space-y-1">
+      <div><span class="text-zinc-500">free →</span> RBSCAN-FREE-DEMO-2026</div>
+      <div><span class="text-zinc-500">pro  →</span> RBSCAN-PRO-DEMO-2026</div>
+      <div><span class="text-zinc-500">team →</span> RBSCAN-TEAM-DEMO-2026</div>
+    </div>
+    <button id="modal-close" class="mt-5 w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/15">Close</button>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const SEVERITY_COLORS = {
+  critical: 'bg-red-500/15 text-red-300 border-red-500/30',
+  high:     'bg-orange-500/15 text-orange-300 border-orange-500/30',
+  medium:   'bg-yellow-500/15 text-yellow-300 border-yellow-500/30',
+  low:      'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  info:     'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+};
+
+const RISK_COLORS = {
+  critical: 'text-red-400',
+  high:     'text-orange-400',
+  medium:   'text-yellow-400',
+  low:      'text-sky-400',
+  clean:    'text-emerald-400',
+};
+
+const SAMPLE = `// vulnerable login handler — paste your own to scan
+const express = require('express');
+const mysql = require('mysql');
+const app = express();
+app.use(express.json());
+
+const db = mysql.createConnection({ host:'db', user:'root', password:'root', database:'app' });
+
+app.post('/login', (req, res) => {
+  const { user, pass } = req.body;
+  const q = "SELECT id, role FROM users WHERE username='" + user + "' AND password='" + pass + "'";
+  db.query(q, (err, rows) => {
+    if (err) return res.status(500).send(err.message);
+    if (!rows.length) return res.status(401).send('bad creds');
+    res.cookie('uid', rows[0].id, { httpOnly: false });
+    res.send('welcome ' + user);
+  });
+});
+
+app.get('/file', (req, res) => {
+  res.sendFile(__dirname + '/' + req.query.name);
+});
+
+app.listen(3000);
+`;
+
+let session = null;
+
+function loadSession() {
+  const raw = localStorage.getItem('rbscan_session');
+  if (raw) try { session = JSON.parse(raw); } catch {}
+  refreshUi();
+}
+function saveSession() {
+  if (session) localStorage.setItem('rbscan_session', JSON.stringify(session));
+  else localStorage.removeItem('rbscan_session');
+}
+
+function refreshUi() {
+  const badge = $('session-badge');
+  if (session) {
+    $('landing').classList.add('hidden');
+    $('scanner').classList.remove('hidden');
+    badge.classList.remove('hidden');
+    $('plan-label').textContent = session.label;
+    const limit = session.dailyLimit === -1 ? '∞' : session.dailyLimit;
+    $('usage-label').textContent = `${session.used}/${limit}`;
+  } else {
+    $('landing').classList.remove('hidden');
+    $('scanner').classList.add('hidden');
+    badge.classList.add('hidden');
+  }
+}
+
+document.querySelectorAll('.subscribe-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    $('subscribe-title').textContent = 'Subscribe — ' + b.dataset.plan;
+    $('subscribe-modal').classList.remove('hidden');
+    $('subscribe-modal').classList.add('flex');
+  });
+});
+$('modal-close').addEventListener('click', () => {
+  $('subscribe-modal').classList.add('hidden');
+  $('subscribe-modal').classList.remove('flex');
+});
+
+$('activate-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const key = $('license-input').value.trim().toUpperCase();
+  const errEl = $('activate-error');
+  errEl.classList.add('hidden');
+  if (!key) return;
+  try {
+    const r = await fetch('/api/activate', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'activation failed');
+    session = data;
+    saveSession();
+    refreshUi();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
+$('logout-btn').addEventListener('click', () => {
+  session = null; saveSession(); refreshUi();
+});
+
+$('sample-btn').addEventListener('click', () => {
+  $('code-input').value = SAMPLE;
+  $('filename-input').value = 'login.js';
+});
+
+$('scan-btn').addEventListener('click', async () => {
+  if (!session) return;
+  const code = $('code-input').value;
+  if (!code.trim()) { $('scan-status').textContent = 'paste some code first'; return; }
+  $('scan-status').textContent = 'red team and blue team are running...';
+  $('scan-btn').disabled = true;
+  $('scan-btn').classList.add('opacity-60');
+  $('empty-state').classList.add('hidden');
+  $('results').classList.add('hidden');
+
+  try {
+    const r = await fetch('/api/scan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + session.token },
+      body: JSON.stringify({ code, filename: $('filename-input').value || undefined }),
+    });
+    const data = await r.json();
+    if (!data.ok) {
+      if (r.status === 401) { session = null; saveSession(); refreshUi(); }
+      throw new Error(data.error || 'scan failed');
+    }
+    session.used = data.used;
+    saveSession(); refreshUi();
+    renderResults(data.result);
+    $('scan-status').textContent = `done · ${data.used}/${session.dailyLimit === -1 ? '∞' : session.dailyLimit} used today`;
+  } catch (err) {
+    $('scan-status').textContent = 'error: ' + err.message;
+  } finally {
+    $('scan-btn').disabled = false;
+    $('scan-btn').classList.remove('opacity-60');
+  }
+});
+
+function renderResults(r) {
+  const findings = r.redTeam?.findings || [];
+  const patches = r.blueTeam?.patches || [];
+  const risk = r.overallRisk || 'info';
+  const riskClass = RISK_COLORS[risk] || 'text-zinc-300';
+
+  const findingsHtml = findings.length === 0
+    ? `<div class="text-sm text-emerald-400">No findings — code looks clean to the red team.</div>`
+    : findings.map((f) => `
+        <details class="rounded-lg border border-white/10 bg-black/30 p-3 group" open>
+          <summary class="flex items-start justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="pill px-2 py-0.5 rounded-full border ${SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.info}">${escapeHtml(f.severity)}</span>
+                <span class="text-xs text-zinc-500">${escapeHtml(f.id || '')} · ${escapeHtml(f.category || '')}</span>
+              </div>
+              <div class="mt-1 font-medium">${escapeHtml(f.title || '')}</div>
+              ${f.lines?.length ? `<div class="text-xs text-zinc-500 mt-0.5">lines ${f.lines.join(', ')}</div>` : ''}
+            </div>
+            <span class="text-zinc-500 text-xs group-open:rotate-180 transition">▾</span>
+          </summary>
+          <div class="mt-3 text-sm text-zinc-300 space-y-3">
+            <div>${escapeHtml(f.description || '')}</div>
+            ${f.exploit ? `<div><div class="text-xs text-zinc-500 mb-1">proof of concept</div><pre class="codebox text-xs whitespace-pre-wrap bg-black/60 border border-white/10 rounded p-2">${escapeHtml(f.exploit)}</pre></div>` : ''}
+          </div>
+        </details>
+      `).join('');
+
+  const patchesHtml = patches.length === 0
+    ? `<div class="text-sm text-zinc-400">No patches needed.</div>`
+    : patches.map((p) => `
+        <div class="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+          <div class="text-xs text-blue-300">fixes ${(p.findingIds || []).join(', ') || '—'}</div>
+          <div class="mt-1 text-sm font-medium">${escapeHtml(p.description || '')}</div>
+          <div class="text-xs text-zinc-400 mt-1">${escapeHtml(p.rationale || '')}</div>
+        </div>
+      `).join('');
+
+  $('results').innerHTML = `
+    <div class="card rounded-2xl p-5">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-xs text-zinc-500">${escapeHtml(r.language || 'unknown')}</div>
+          <div class="text-2xl font-bold">Overall risk: <span class="${riskClass}">${escapeHtml(risk)}</span></div>
+        </div>
+        <div class="text-right text-xs text-zinc-400">
+          <div>${findings.length} red findings</div>
+          <div>${patches.length} blue patches</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card rounded-2xl p-5">
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-red-500"></div>
+        <div class="font-semibold text-red-300">Red Team — attack surface</div>
+      </div>
+      <p class="mt-2 text-sm text-zinc-400">${escapeHtml(r.redTeam?.summary || '')}</p>
+      <div class="mt-4 space-y-2">${findingsHtml}</div>
+    </div>
+
+    <div class="card rounded-2xl p-5">
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-blue-500"></div>
+        <div class="font-semibold text-blue-300">Blue Team — patches</div>
+      </div>
+      <p class="mt-2 text-sm text-zinc-400">${escapeHtml(r.blueTeam?.summary || '')}</p>
+      <div class="mt-4 space-y-2">${patchesHtml}</div>
+    </div>
+
+    <div class="card rounded-2xl p-5">
+      <div class="flex items-center justify-between">
+        <div class="font-semibold text-emerald-300">Fixed code</div>
+        <div class="flex gap-2">
+          <button id="copy-fix" class="text-xs px-3 py-1.5 rounded bg-white/10 hover:bg-white/15">copy</button>
+          <button id="apply-fix" class="text-xs px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold">apply to editor</button>
+          <button id="download-fix" class="text-xs px-3 py-1.5 rounded bg-white/10 hover:bg-white/15">download</button>
+        </div>
+      </div>
+      <pre class="codebox mt-3 max-h-[420px] overflow-auto text-xs whitespace-pre bg-black/60 border border-white/10 rounded p-3"><code id="fixed-code"></code></pre>
+    </div>
+  `;
+  $('fixed-code').textContent = r.blueTeam?.fixedCode || '';
+  $('results').classList.remove('hidden');
+  $('copy-fix').onclick = () => navigator.clipboard.writeText(r.blueTeam?.fixedCode || '');
+  $('apply-fix').onclick = () => { $('code-input').value = r.blueTeam?.fixedCode || ''; };
+  $('download-fix').onclick = () => {
+    const blob = new Blob([r.blueTeam?.fixedCode || ''], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = ($('filename-input').value || 'fixed.txt');
+    a.click(); URL.revokeObjectURL(url);
+  };
+}
+
+loadSession();
+</script>
+</body>
+</html>

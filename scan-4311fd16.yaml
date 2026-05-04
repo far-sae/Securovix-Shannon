@@ -1,0 +1,6 @@
+target:
+  url: https://cosyposflow.com
+  urls:
+pipeline:
+  retryPreset: subscription
+  maxConcurrentPipelines: 3

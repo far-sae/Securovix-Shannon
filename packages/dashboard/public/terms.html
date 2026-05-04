@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en" style="color-scheme:dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Terms of Service · Securovix</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/tokens.css">
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t1);min-height:100vh;line-height:1.65;padding:48px 24px;-webkit-font-smoothing:antialiased}
+  .doc{max-width:760px;margin:0 auto}
+  .doc-head{display:flex;align-items:center;gap:14px;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid var(--brd)}
+  .doc-head img{width:42px;height:42px;border-radius:50%;box-shadow:0 0 18px rgba(212,247,69,.32)}
+  .doc-head .t{font:700 20px 'Inter',sans-serif;color:var(--t0);letter-spacing:-.3px}
+  .doc-head .s{font:600 10.5px 'JetBrains Mono',monospace;color:var(--t3);letter-spacing:1.4px;text-transform:uppercase;margin-top:3px}
+  h1{font:700 36px/1.15 'Inter',sans-serif;color:var(--t0);letter-spacing:-.6px;margin-bottom:6px}
+  .updated{font:500 12px 'JetBrains Mono',monospace;color:var(--t3);margin-bottom:36px}
+  h2{font:700 18px 'Inter',sans-serif;color:var(--t0);margin:32px 0 10px;letter-spacing:-.2px}
+  p,li{font-size:14.5px;color:var(--t1);margin-bottom:12px}
+  ul{padding-left:22px;margin-bottom:12px}
+  li{margin-bottom:6px}
+  strong{color:var(--t0);font-weight:600}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .back{display:inline-flex;align-items:center;gap:6px;font:600 12px 'JetBrains Mono',monospace;color:var(--t3);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:18px}
+  .back:hover{color:var(--acc)}
+  .danger{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.32);border-radius:10px;padding:16px 18px;margin:18px 0}
+  .danger strong{color:var(--red)}
+</style>
+</head>
+<body>
+<div class="doc">
+  <a href="/" class="back">← Back to Securovix</a>
+  <div class="doc-head">
+    <img src="/favicon.png" alt="">
+    <div>
+      <div class="t">Securovix</div>
+      <div class="s">Pentest Framework</div>
+    </div>
+  </div>
+
+  <h1>Terms of Service</h1>
+  <div class="updated">Last updated: 4 May 2026</div>
+
+  <p>By creating an account or using Securovix ("the Service"), you agree to these Terms. If you do not agree, do not use the Service.</p>
+
+  <div class="danger">
+    <strong>⚠ Authorized testing only.</strong> Securovix runs active penetration-testing techniques against the targets you provide. You may only scan systems you own, or have <strong>explicit written authorization</strong> to test. Unauthorized scanning is illegal under the Computer Misuse Act 1990 (UK), the Computer Fraud and Abuse Act (US), and equivalent laws worldwide. <strong>You bear full legal responsibility</strong> for any target you submit.
+  </div>
+
+  <h2>1. Eligibility</h2>
+  <p>You must be at least 18 years old and legally able to enter into a binding contract. By signing up you confirm you meet these requirements.</p>
+
+  <h2>2. Authorized use</h2>
+  <ul>
+    <li>You will only scan targets you own or for which you hold documented written authorization from the owner.</li>
+    <li>You will not use the Service to attack, exploit, or disrupt any third-party system without consent.</li>
+    <li>You will not use the Service to violate any law, regulation, or third-party right.</li>
+    <li>You will comply with the acceptable-use policies of every LLM provider whose API key you connect (Anthropic, OpenAI, Google, Zhipu, etc.).</li>
+  </ul>
+
+  <h2>3. Your API keys, your bill</h2>
+  <p>Securovix is a "bring-your-own-key" tool. You connect your own Anthropic / OpenAI / Google / Zhipu API keys. <strong>All LLM costs are billed directly to you by each provider</strong> — Securovix never holds your keys server-side and never bills you for inference. Keys are stored only in your browser's <code>localStorage</code>.</p>
+
+  <h2>4. Account and security</h2>
+  <ul>
+    <li>You are responsible for the confidentiality of your password and all activity under your account.</li>
+    <li>You must notify us immediately of any unauthorized access at <a href="mailto:security@securovix.com">security@securovix.com</a>.</li>
+    <li>We may suspend or terminate accounts that violate these Terms with no refund (the Service is currently free).</li>
+  </ul>
+
+  <h2>5. The Service is provided "as is"</h2>
+  <p>Securovix is provided <strong>without warranty of any kind</strong>, express or implied, including but not limited to merchantability, fitness for a particular purpose, and non-infringement. Findings produced by AI agents are <strong>not guaranteed to be accurate or complete</strong> and must be independently verified by a qualified security professional before being acted upon.</p>
+
+  <h2>6. Limitation of liability</h2>
+  <p>To the maximum extent permitted by law, Securovix and its operators are <strong>not liable</strong> for any indirect, incidental, special, consequential, or punitive damages, or for any loss of data, profit, or revenue, arising from your use of the Service. Total liability for any direct damages is capped at £100.</p>
+
+  <h2>7. Indemnification</h2>
+  <p>You agree to indemnify and hold Securovix harmless from any claim, loss, or expense (including legal fees) arising from (a) your use of the Service, (b) targets you submitted, or (c) your breach of these Terms.</p>
+
+  <h2>8. Changes</h2>
+  <p>We may update these Terms from time to time. Continued use of the Service after changes are posted constitutes acceptance of the revised Terms.</p>
+
+  <h2>9. Governing law</h2>
+  <p>These Terms are governed by the laws of England and Wales. Any dispute will be subject to the exclusive jurisdiction of the courts of England and Wales.</p>
+
+  <h2>10. Contact</h2>
+  <p>Questions about these Terms: <a href="mailto:legal@securovix.com">legal@securovix.com</a>.</p>
+
+  <p style="margin-top:48px;padding-top:24px;border-top:1px solid var(--brd);font-size:12px;color:var(--t3)">See also: <a href="/privacy">Privacy Policy</a></p>
+</div>
+</body>
+</html>

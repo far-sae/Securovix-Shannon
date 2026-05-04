@@ -1,0 +1,10 @@
+## Authentication: SSO
+
+To authenticate via Single Sign-On:
+1. Navigate to the application login page
+2. Click the SSO / "Sign in with [Provider]" button
+3. Complete the SSO provider authentication flow
+4. Wait for redirect back to the application
+5. Verify session is established
+
+Note: SSO flows may require pre-configured sessions or tokens.

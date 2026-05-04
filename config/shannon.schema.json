@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Shannon Configuration",
+  "description": "Configuration schema for Shannon penetration testing framework",
+  "type": "object",
+  "required": ["target"],
+  "properties": {
+    "target": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Target application URL"
+        },
+        "repoPath": {
+          "type": "string",
+          "description": "Path to application source code for white-box analysis"
+        },
+        "urls": {
+          "type": "object",
+          "properties": {
+            "focus": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "URL patterns to prioritize during testing"
+            },
+            "avoid": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "URL patterns to avoid during testing"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "authentication": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["form", "sso", "api-key", "http-basic"],
+          "description": "Authentication method"
+        },
+        "loginUrl": {
+          "type": "string",
+          "description": "URL of the login page"
+        },
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "apiKey": {
+          "type": "string"
+        },
+        "totpSecret": {
+          "type": "string",
+          "description": "Base32-encoded TOTP secret for 2FA"
+        },
+        "ssoProvider": {
+          "type": "string"
+        },
+        "customHeaders": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "pipeline": {
+      "type": "object",
+      "properties": {
+        "retryPreset": {
+          "type": "string",
+          "enum": ["default", "fast", "subscription"],
+          "default": "default",
+          "description": "Retry behavior preset"
+        },
+        "maxConcurrentPipelines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "default": 5,
+          "description": "Maximum parallel agent pipelines"
+        }
+      },
+      "additionalProperties": false
+    },
+    "models": {
+      "type": "object",
+      "properties": {
+        "small": { "type": "string" },
+        "medium": { "type": "string" },
+        "large": { "type": "string" }
+      },
+      "additionalProperties": false,
+      "description": "Model ID overrides per tier"
+    },
+    "loginInstructions": {
+      "type": "string",
+      "description": "Free-form login instructions for agents"
+    }
+  },
+  "additionalProperties": false
+}

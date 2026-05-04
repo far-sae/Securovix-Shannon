@@ -1,0 +1,4 @@
+packages:
+  - 'packages/cli'
+  # Worker only builds inside Docker — not on host
+  # - 'packages/worker'

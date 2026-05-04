@@ -1,0 +1,32 @@
+{
+  "name": "@shannon/worker",
+  "version": "0.0.0-development",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@temporalio/worker": "^1.11.0",
+    "@temporalio/workflow": "^1.11.0",
+    "@temporalio/activity": "^1.11.0",
+    "@temporalio/client": "^1.11.0",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "playwright": "^1.48.0",
+    "yaml": "^2.4.0",
+    "ajv": "^8.17.0",
+    "zod": "^3.23.0",
+    "better-sqlite3": "^11.0.0",
+    "otpauth": "^9.3.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

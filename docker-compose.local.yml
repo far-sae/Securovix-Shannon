@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  temporal:
+    ports:
+      - "7233:7233"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./prompts:/app/prompts
+      - ./workspaces:/workspace
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - SHANNON_LOCAL=1
+    depends_on:
+      - temporal
+    network_mode: "host"

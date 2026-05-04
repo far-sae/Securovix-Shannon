@@ -1,0 +1,16 @@
+{
+  "name": "@shannon/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "marked": "^15.0.0",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "yaml": "^2.4.0"
+  }
+}

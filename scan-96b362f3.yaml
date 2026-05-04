@@ -1,0 +1,6 @@
+target:
+  url: https://securovix.com
+  urls:
+pipeline:
+  retryPreset: default
+  maxConcurrentPipelines: 3
