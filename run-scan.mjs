@@ -76,7 +76,9 @@ let Anthropic;
 try { Anthropic = (await import('@anthropic-ai/sdk')).default; }
 catch { const { execSync } = await import('node:child_process'); execSync('pnpm add -w @anthropic-ai/sdk', { stdio: 'inherit', cwd: import.meta.dirname }); Anthropic = (await import('@anthropic-ai/sdk')).default; }
 
-const client = new Anthropic({ apiKey });
+// maxRetries=5 with the SDK's built-in exponential backoff handles 429s on Tier 1 keys.
+// timeout=10min keeps long deliverables (report, war-room) from being killed mid-stream.
+const client = new Anthropic({ apiKey, maxRetries: 5, timeout: 600_000 });
 const MODEL = process.env.SHANNON_MODEL ?? 'claude-opus-4-7';
 const scanId = randomUUID().slice(0, 8);
 const wsDir = join(import.meta.dirname, 'workspaces', scanId);
@@ -94,11 +96,34 @@ console.log(`  Model:     ${MODEL}\n`);
 
 function save(p, c) { writeFileSync(join(wsDir, p), c); }
 function elapsed(s) { return ((Date.now() - s) / 1000).toFixed(1); }
-async function llm(sys, usr, max = 8192) {
+// Default max_tokens lowered from 8192 → 4000. Anthropic reserves the FULL max_tokens
+// against your OTPM (output-tokens-per-minute) quota for the duration of the request,
+// even if the model emits less. The old 8192 default was the main reason scans tripped
+// rate limits on Tier 1 / Tier 2 keys. Long deliverables (war-room, report) still pass
+// 8192 explicitly — they run sequentially and don't burst.
+async function llm(sys, usr, max = 4000) {
   const r = await client.messages.create({ model: MODEL, max_tokens: max, messages: [{ role: 'user', content: `${sys}\n\n${usr}` }] });
   const text = r.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
   return { text, cost: parseFloat((r.usage.input_tokens * 0.000003 + r.usage.output_tokens * 0.000015).toFixed(6)), tokens: r.usage };
 }
+
+// Concurrency-limited Promise.all. Used by Phase 3 to cap simultaneous Red Team
+// requests so we don't burst through OTPM. With limit=3 and max_tokens=4096,
+// peak in-flight reservation is ~12k output tokens — well inside Tier 1 Sonnet 4.6 (~16k).
+async function pMap(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function done(agent, metrics) { session.completedAgents.push(agent); session.metrics[agent] = metrics; save('session.json', JSON.stringify(session, null, 2)); }
 
 // ================================================================
@@ -195,10 +220,15 @@ const categories = [
   { id: 'info-disclosure', name: 'Information Disclosure', icon: '📋' },
 ];
 
-console.log(`  [Phase 3] RED TEAM — Attack Phase (${categories.length} agents parallel)...`);
+// Concurrency capped at 3 (was 8 = all parallel). Anthropic rate limits are bucketed
+// per minute and they reserve max_tokens up-front, so 8 simultaneous 4k-output requests
+// instantly burst past the OTPM ceiling on Tier 1/2 keys. 3-at-a-time keeps us under
+// the limit and the SDK's built-in retry covers any spillover.
+const RED_CONCURRENCY = Number(process.env.SHANNON_RED_CONCURRENCY) || 3;
+console.log(`  [Phase 3] RED TEAM — Attack Phase (${categories.length} agents, ${RED_CONCURRENCY} at a time)...`);
 t = Date.now();
 
-const redResults = await Promise.all(categories.map(async (cat) => {
+const redResults = await pMap(categories, RED_CONCURRENCY, async (cat) => {
   const r = await llm(
     `You are a RED TEAM operator — an elite offensive hacker. Your codename is RED-${cat.id.toUpperCase()}.
 Your ONLY job is to ATTACK and find real vulnerabilities. Be aggressive, creative, and thorough.
@@ -259,7 +289,7 @@ OUTPUT FORMAT:
   save(`vuln/${cat.id}/exploitation-queue.json`, JSON.stringify({ category: cat.id, findings }, null, 2));
   done(`red-${cat.id}`, { cost: r.cost, turns: 1, duration: Date.now() - t });
   return { cat, result: r, hasFindings, findings };
-}));
+});
 
 console.log(`           Done (${elapsed(t)}s, $${redResults.reduce((s, r) => s + r.result.cost, 0).toFixed(6)})`);
 save('red-team/summary.md', redResults.map(r => `## ${r.cat.icon} ${r.cat.name}\nFindings: ${r.findings.length} (${r.findings.filter(f => f.type === 'confirmed').length} confirmed, ${r.findings.filter(f => f.type === 'likely').length} likely)\n`).join('\n'));
@@ -662,7 +692,8 @@ END WITH:
 - False positives eliminated: X
 - Mitigated (defense in place): X
 - Needs investigation: X
-- Severity adjustments made: X`
+- Severity adjustments made: X`,
+  8192
 );
 save('war-room/transcript.md', warRoomResult.text);
 done('war-room', { cost: warRoomResult.cost, turns: 1, duration: Date.now() - t });
@@ -753,7 +784,8 @@ RULES:
 - ONLY include CONFIRMED findings from war room
 - Show Red vs Blue perspective for each finding
 - Zero false positives
-- Every finding has a POC and a fix`
+- Every finding has a POC and a fix`,
+  8192
 );
 save('report.md', reportResult.text);
 done('report', { cost: reportResult.cost, turns: 1, duration: Date.now() - t });
