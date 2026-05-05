@@ -3895,23 +3895,26 @@ function csRenderProjectResult(){
   const findings=CS_PROJECT.findings;
   const sevCount=findings.reduce((a,f)=>{a[f.severity]=(a[f.severity]||0)+1;return a},{});
   const filesWithFindings=Array.from(CS_PROJECT.patches.entries()).filter(([_,p])=>p.findings.length>0);
+  const totalPatched=CS_PROJECT.patches.size;
 
   box.innerHTML=`
-    <div style="margin-top:18px;padding:18px 20px;border-radius:14px;background:linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid var(--brd)">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px">
-        <div>
-          <div class="h-display" style="font-size:22px">Project results</div>
-          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
+    <div style="margin-top:18px;padding:22px 24px;border-radius:14px;background:linear-gradient(180deg,rgba(212,247,69,.10),var(--bg2));border:2px solid var(--acc)">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:18px">
+        <div style="flex:1;min-width:240px">
+          <div style="color:var(--acc2);font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:700">✓ Scan complete</div>
+          <div class="h-display" style="font-size:24px;margin-top:4px">Project results — ${totalPatched} files patched</div>
+          <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">
             ${sevCount.critical?`<span class="sev sev-critical">${ico('alert-octagon',{cls:'ico-sm'})}<span>${sevCount.critical} Critical</span></span>`:''}
             ${sevCount.high    ?`<span class="sev sev-high">${ico('alert-triangle',{cls:'ico-sm'})}<span>${sevCount.high} High</span></span>`:''}
             ${sevCount.medium  ?`<span class="sev sev-medium">${ico('info',{cls:'ico-sm'})}<span>${sevCount.medium} Medium</span></span>`:''}
             ${sevCount.low     ?`<span class="sev sev-low">${ico('info',{cls:'ico-sm'})}<span>${sevCount.low} Low</span></span>`:''}
             ${findings.length===0?`<span class="sev sev-info">${ico('circle-check',{cls:'ico-sm'})}<span>No findings</span></span>`:''}
-            <span style="color:var(--t3);font-size:12px;margin-left:6px">${filesWithFindings.length} of ${CS_PROJECT.patches.size} files patched</span>
+            <span style="color:var(--t3);font-size:12px">${filesWithFindings.length} of ${totalPatched} files have findings</span>
           </div>
         </div>
-        <div>
-          <button class="btn btn-p" onclick="csDownloadFixedZip()" style="display:inline-flex;align-items:center;gap:6px">${ico('inbox',{cls:'ico-sm'})} Download fixes (.zip)</button>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:240px">
+          <button class="btn btn-p" onclick="csDownloadFixedZip()" style="padding:14px 22px;font-size:14px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;gap:8px">${ico('inbox',{cls:'ico-sm'})} Download corrected code (.zip)</button>
+          <span style="color:var(--t3);font-size:11px;text-align:center">All ${totalPatched} patched files in original folder structure</span>
         </div>
       </div>
     </div>
@@ -3936,6 +3939,8 @@ function csRenderProjectResult(){
         </details>`).join('')}
     </div>
   `;
+  // Scroll the result (with the big Download button) into view so the user can't miss it.
+  box.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 async function csDownloadFixedZip(){
@@ -4148,7 +4153,32 @@ function csTurnRender(text){
 
 function csRenderFinal(r){
   if(!r){$('cs-out').innerHTML+=`<div class="crd" style="padding:18px;color:var(--red)">No result returned.</div>`;return}
-  if(r.error){$('cs-out').innerHTML+=`<div class="crd" style="padding:18px;border-color:rgba(239,68,68,.4)"><span class="bx bx-r">parse error</span> &nbsp;<span style="color:var(--t1);font-size:13px">${H(r.error)}</span><pre style="margin-top:10px;background:var(--bg);padding:10px;border-radius:8px;font-family:'JetBrains Mono';font-size:11px;white-space:pre-wrap;max-height:300px;overflow:auto">${H(r.raw||'')}</pre></div>`;return}
+  if(r.error){
+    // Parse failed — but we may still be able to extract a fixed-code block from the raw text.
+    // Look for the last ```...``` fence and offer it as a downloadable fixed file so the user
+    // doesn't lose the work even when the synthesis JSON is malformed.
+    const raw=r.raw||'';
+    const fences=[...raw.matchAll(/```(?:[a-z]+)?\s*\n([\s\S]*?)```/gi)];
+    const salvaged=fences.length?fences[fences.length-1][1].trim():'';
+    const fname=$('cs-fname').value||'fixed.txt';
+    window._csMultiFixed=salvaged;
+    window._csMultiFixedName=fname;
+    $('cs-out').innerHTML+=`<div class="crd" style="padding:18px;border-color:rgba(239,68,68,.4)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:0">
+          <span class="bx bx-r">parse error</span> &nbsp;<span style="color:var(--t1);font-size:13px">${H(r.error)}</span>
+          ${salvaged?`<div style="color:var(--t3);font-size:11.5px;margin-top:6px">Recovered ${salvaged.length.toLocaleString()} chars from the last code block — use the buttons →</div>`:''}
+        </div>
+        ${salvaged?`<div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-g" style="padding:6px 12px;font-size:11px" onclick="csCopyText(window._csMultiFixed||'')">${ico('check',{cls:'ico-sm'})} Copy</button>
+          <button class="btn btn-p" style="padding:6px 12px;font-size:11px" onclick="csDl(window._csMultiFixed||'',window._csMultiFixedName||'fixed.txt','text/plain')">${ico('file-text',{cls:'ico-sm'})} Download</button>
+        </div>`:''}
+      </div>
+      <pre style="margin-top:10px;background:var(--bg);padding:10px;border-radius:8px;font-family:'JetBrains Mono';font-size:11px;white-space:pre-wrap;max-height:300px;overflow:auto">${H(raw)}</pre>
+    </div>`;
+    const out=$('cs-out');if(out)out.scrollIntoView({behavior:'smooth',block:'end'});
+    return;
+  }
 
   const findings=r.redTeam?.findings||[];
   const patches=r.blueTeam?.patches||[];
@@ -4186,6 +4216,13 @@ function csRenderFinal(r){
   `;
   document.querySelectorAll('.cs-tab').forEach(b=>b.onclick=()=>csShowTab(b.dataset.tab));
   csShowTab('findings');
+  // Scroll the result (with the Download button) into view so users actually see it
+  // when the scan finishes — otherwise it lands below a long live transcript.
+  const out=$('cs-out');
+  if(out){
+    const lastCard=out.querySelector('.crd:nth-last-child(2)');
+    (lastCard||out).scrollIntoView({behavior:'smooth',block:'start'});
+  }
 }
 
 function csShowTab(tab){
