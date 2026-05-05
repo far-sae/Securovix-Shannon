@@ -4154,9 +4154,8 @@ function csTurnRender(text){
 function csRenderFinal(r){
   if(!r){$('cs-out').innerHTML+=`<div class="crd" style="padding:18px;color:var(--red)">No result returned.</div>`;return}
   if(r.error){
-    // Parse failed — but we may still be able to extract a fixed-code block from the raw text.
-    // Look for the last ```...``` fence and offer it as a downloadable fixed file so the user
-    // doesn't lose the work even when the synthesis JSON is malformed.
+    // Hard parse failure with no recoverable fields. Last-ditch: scan raw text for a
+    // ```...``` block and offer that as a download so the user isn't empty-handed.
     const raw=r.raw||'';
     const fences=[...raw.matchAll(/```(?:[a-z]+)?\s*\n([\s\S]*?)```/gi)];
     const salvaged=fences.length?fences[fences.length-1][1].trim():'';
@@ -4185,6 +4184,13 @@ function csRenderFinal(r){
   const risk=r.overallRisk||'info';
   const riskC={critical:'var(--red)',high:'var(--org)',medium:'var(--ylw)',low:'var(--blu)',clean:'var(--grn)',info:'var(--t2)'}[risk]||'var(--t2)';
   const fixedCode=r.blueTeam?.fixedCode||'';
+  // Partial-recovery banner — server got fixedCode out even though the wrapper JSON was truncated.
+  if(r._partial){
+    $('cs-out').innerHTML+=`<div class="crd" style="padding:14px 18px;border-color:rgba(255,194,77,.55);background:rgba(255,194,77,.08);margin-top:14px">
+      <div style="color:var(--ylw);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px">Partial recovery</div>
+      <div style="color:var(--t1);font-size:13px;margin-top:4px">Final synthesis JSON was truncated, but Shannon salvaged the corrected code${findings.length?` and ${findings.length} finding${findings.length===1?'':'s'}`:''}. Download below.</div>
+    </div>`;
+  }
   const fixedName=$('cs-fname').value||'fixed.txt';
   window._csMultiFixed=fixedCode;
   window._csMultiFixedName=fixedName;

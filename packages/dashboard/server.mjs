@@ -452,14 +452,17 @@ const CS_PHASES = [
   { id: 'synth',      agentId: 'b2', step: 'Synthesize fixed code & full report' },
 ];
 
-async function csCallProvider(provider, model, system, user, keys) {
+async function csCallProvider(provider, model, system, user, keys, maxTokens) {
+  // The synthesis turn must hold the full fixed source code + markdown report, so we
+  // bump max tokens for that turn. Earlier turns stay lean.
+  const mt = maxTokens || 4000;
   if (provider === 'claude') {
     const apiKey = keys?.claude;
     if (!apiKey) throw new Error('No Anthropic API key supplied');
     const client = new Anthropic({ apiKey });
     const resp = await client.messages.create({
       model: model || 'claude-opus-4-7',
-      max_tokens: 4000,
+      max_tokens: mt,
       system,
       messages: [{ role: 'user', content: user }],
     });
@@ -473,7 +476,7 @@ async function csCallProvider(provider, model, system, user, keys) {
       body: JSON.stringify({
         model: model || 'gpt-5',
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        max_tokens: 4000, temperature: 0.4,
+        max_tokens: mt, temperature: 0.4,
       }),
     });
     const j = await r.json();
@@ -489,7 +492,7 @@ async function csCallProvider(provider, model, system, user, keys) {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { maxOutputTokens: 4000, temperature: 0.4 },
+        generationConfig: { maxOutputTokens: mt, temperature: 0.4 },
       }),
     });
     const j = await r.json();
@@ -504,7 +507,7 @@ async function csCallProvider(provider, model, system, user, keys) {
       body: JSON.stringify({
         model: model || 'glm-4-plus',
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        max_tokens: 4000, temperature: 0.4,
+        max_tokens: mt, temperature: 0.4,
       }),
     });
     const j = await r.json();
@@ -514,14 +517,14 @@ async function csCallProvider(provider, model, system, user, keys) {
   throw new Error('Unknown provider: ' + provider);
 }
 
-async function csCallAgent(agent, system, user, keys) {
+async function csCallAgent(agent, system, user, keys, maxTokens) {
   try {
-    const text = await csCallProvider(agent.provider, agent.model, system, user, keys);
+    const text = await csCallProvider(agent.provider, agent.model, system, user, keys, maxTokens);
     return { text, fallback: false };
   } catch (err) {
     if (agent.provider === 'claude') throw err;
     const fbSystem = system + `\n\n[FALLBACK ROLEPLAY: The "${agent.label}" provider failed (${err.message}). Continue in-character as ${agent.label} but execute on Anthropic.]`;
-    const text = await csCallProvider('claude', null, fbSystem, user, keys);
+    const text = await csCallProvider('claude', null, fbSystem, user, keys, maxTokens);
     return { text, fallback: true, fallbackReason: err.message };
   }
 }
@@ -576,6 +579,147 @@ function csBuildUser(code, filename, transcript, phase, isFinalSynth) {
   return u;
 }
 
+// Robust extractor for the final synthesis turn.
+// Models occasionally truncate their output (no closing ``` fence, or the JSON itself
+// gets cut off mid-string). When that happens, the strict JSON.parse fails and we used
+// to drop the entire result on the floor — including the corrected code the user came
+// for. This helper tries multiple strategies in order:
+//   1. Strict parse of the ```json fence (happy path)
+//   2. Strict parse of the largest {...} block we can find
+//   3. String-level extraction of "fixedCode": "..." with proper escape handling
+// On a partial recovery we return { _partial: true, ...recoveredFields } so the UI can
+// show a yellow banner and STILL surface a Download fixed file button.
+function csParseSynthesis(text) {
+  if (!text) return { error: 'No synthesis text', raw: '' };
+
+  // Strategy 1: ```json fenced block, optionally without closing fence (truncated).
+  let body = null;
+  const closed = text.match(/```json\s*([\s\S]+?)\s*```/);
+  if (closed) {
+    body = closed[1];
+  } else {
+    const open = text.match(/```json\s*([\s\S]+)$/);
+    if (open) body = open[1].replace(/```\s*$/, '');
+  }
+  if (!body) {
+    // No fence at all — try to pull the outermost JSON object from the raw text.
+    const s = text.indexOf('{'), e = text.lastIndexOf('}');
+    if (s >= 0 && e > s) body = text.slice(s, e + 1);
+    else body = text;
+  }
+
+  // Strategy 2: strict parse on whatever we extracted.
+  try {
+    const obj = JSON.parse(body);
+    return obj;
+  } catch { /* fall through to salvage */ }
+
+  // Strategy 2b: trim from the last balanced } and try again.
+  const lastBrace = body.lastIndexOf('}');
+  if (lastBrace > 0) {
+    try {
+      const obj = JSON.parse(body.slice(0, lastBrace + 1));
+      return obj;
+    } catch { /* fall through */ }
+  }
+
+  // Strategy 3: salvage individual fields with string-level extraction.
+  // The big one is "fixedCode" — that's the file the user actually wants.
+  const recovered = { _partial: true, raw: text.slice(0, 12000) };
+
+  const fixedCode = csExtractStringField(body, 'fixedCode');
+  if (fixedCode) {
+    recovered.blueTeam = recovered.blueTeam || {};
+    recovered.blueTeam.fixedCode = fixedCode;
+  }
+  const language = csExtractStringField(body, 'language');
+  if (language) recovered.language = language;
+  const overallRisk = csExtractStringField(body, 'overallRisk');
+  if (overallRisk) recovered.overallRisk = overallRisk;
+  const redSummary = csExtractStringField(body, 'summary'); // first occurrence — likely redTeam.summary
+  if (redSummary) {
+    recovered.redTeam = recovered.redTeam || {};
+    recovered.redTeam.summary = redSummary;
+  }
+  // Try to grab the findings array even if truncated.
+  const findings = csExtractFindingsArray(body);
+  if (findings.length) {
+    recovered.redTeam = recovered.redTeam || {};
+    recovered.redTeam.findings = findings;
+  }
+  // If salvage gave us absolutely nothing useful, fall back to the original parse-error shape.
+  if (!recovered.blueTeam?.fixedCode && !recovered.redTeam?.findings?.length) {
+    return { error: 'Failed to parse final synthesis (no recoverable fields)', raw: text.slice(0, 12000) };
+  }
+  return recovered;
+}
+
+// Extract a single JSON string-field value from text, properly handling escaped quotes
+// and backslashes. Returns null if not found or unterminated.
+function csExtractStringField(text, fieldName) {
+  const re = new RegExp('"' + fieldName + '"\\s*:\\s*"', 'g');
+  const m = re.exec(text);
+  if (!m) return null;
+  let i = m.index + m[0].length;
+  let out = '';
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '\\' && i + 1 < text.length) {
+      const n = text[i + 1];
+      // Standard JSON escapes
+      if (n === 'n') out += '\n';
+      else if (n === 't') out += '\t';
+      else if (n === 'r') out += '\r';
+      else if (n === '"') out += '"';
+      else if (n === '\\') out += '\\';
+      else if (n === '/') out += '/';
+      else if (n === 'b') out += '\b';
+      else if (n === 'f') out += '\f';
+      else if (n === 'u' && i + 5 < text.length) {
+        try { out += String.fromCharCode(parseInt(text.slice(i + 2, i + 6), 16)); i += 4; } catch { out += n; }
+      } else out += n;
+      i += 2;
+    } else if (c === '"') {
+      return out;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  // Unterminated — return what we got. Better partial code than nothing.
+  return out || null;
+}
+
+// Best-effort extraction of the findings array from a possibly-truncated synthesis.
+function csExtractFindingsArray(text) {
+  const m = text.match(/"findings"\s*:\s*\[/);
+  if (!m) return [];
+  // Walk forward, collecting balanced { ... } objects until we hit ] or run out.
+  let i = m.index + m[0].length;
+  const out = [];
+  while (i < text.length) {
+    while (i < text.length && /\s|,/.test(text[i])) i++;
+    if (text[i] === ']' || i >= text.length) break;
+    if (text[i] !== '{') break;
+    // Find matching closing brace, respecting strings + escapes.
+    let depth = 0, j = i, inStr = false, escNext = false;
+    for (; j < text.length; j++) {
+      const c = text[j];
+      if (escNext) { escNext = false; continue; }
+      if (c === '\\') { escNext = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { j++; break; } }
+    }
+    if (depth !== 0) break; // truncated — stop salvaging
+    const raw = text.slice(i, j);
+    try { out.push(JSON.parse(raw)); } catch { /* skip malformed finding */ }
+    i = j;
+  }
+  return out;
+}
+
 const csRuns = new Map();
 const CS_RUN_TTL_MS = 30 * 60 * 1000;
 setInterval(() => {
@@ -612,8 +756,12 @@ async function csOrchestrate(runId) {
 
     let text = '', fallback = false, fbReason, errored = false;
     const t0 = Date.now();
+    // The synthesis turn carries the full fixed source code + markdown report, so it
+    // needs a much larger output budget than the analytical turns. 16k keeps us safe
+    // for typical files (~2k LOC) without blowing past provider per-call caps.
+    const maxTokens = isFinalSynth ? 16000 : 4000;
     try {
-      const r = await csCallAgent(agent, sys, user, keys);
+      const r = await csCallAgent(agent, sys, user, keys, maxTokens);
       text = r.text; fallback = r.fallback; fbReason = r.fallbackReason;
     } catch (err) {
       errored = true;
@@ -643,11 +791,11 @@ async function csOrchestrate(runId) {
   const last = run.transcript[run.transcript.length - 1];
   let result = null;
   if (last) {
-    const fence = last.text.match(/```json\s*([\s\S]+?)\s*```/);
-    try { result = JSON.parse(fence ? fence[1] : last.text); }
-    catch (e) { result = { error: 'Failed to parse final synthesis: ' + e.message, raw: last.text.slice(0, 8000) }; }
-    // Award a "win" to the provider that produced the parseable synthesis
-    if (result && !result.error) csUpdateLeaderboard(last.realProvider || last.provider, 1.5, 0, 0, { win: true });
+    result = csParseSynthesis(last.text);
+    // Award a "win" to the provider that produced a fully parseable synthesis (not partial)
+    if (result && !result.error && !result._partial) {
+      csUpdateLeaderboard(last.realProvider || last.provider, 1.5, 0, 0, { win: true });
+    }
   }
 
   run.result = result;
