@@ -3431,7 +3431,7 @@ function renderCodeScanner(me){
     <section class="cs-hero">
       <div class="section-eyebrow">Source-Code · Red vs Blue</div>
       <h1>Code Scan</h1>
-      <p>Drop or paste any source file. Shannon spins up a 4-agent war room (2 Red, 2 Blue) — watch them attack and defend live in the constellation, then download the fully-patched code.</p>
+      <p>Two modes: paste a single file for the full <strong style="color:var(--t1)">4-agent war room</strong> (2 Red + 2 Blue, live transcript), or drop a whole repo (folder or .zip) for a <strong style="color:var(--t1)">project sweep</strong> — Shannon walks the tree, scans each source file, and gives you back a downloadable zip with every patched file in place.</p>
       <div class="cs-hero-row">
         <div style="margin-left:auto">${planBadge}</div>
       </div>
@@ -3446,6 +3446,11 @@ function renderCodeScanner(me){
       <button class="btn btn-p" type="button" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" onclick="promptForAnthropicKey('Add your Anthropic key to unlock the war room.').then(k=>{if(k)pgCode()})">${ico('plus',{cls:'ico-sm'})} Add key</button>
     </div>`:''}
 
+    <div class="cs-tabs" style="margin-bottom:18px">
+      <button class="cs-tab ${CS_MODE==='snippet'?'on':''}" data-cs-mode="snippet" onclick="csSetMode('snippet')">${ico('file-text',{cls:'ico-sm'})} Snippet / single file</button>
+      <button class="cs-tab ${CS_MODE==='project'?'on':''}" data-cs-mode="project" onclick="csSetMode('project')">${ico('inbox',{cls:'ico-sm'})} Whole project (folder or .zip)</button>
+    </div>
+
     <div id="cs-mode-pane"></div>
   </div>`;
 
@@ -3453,10 +3458,10 @@ function renderCodeScanner(me){
 }
 
 function csSetMode(mode){
+  if(mode!=='snippet'&&mode!=='project')mode='snippet';
   CS_MODE=mode;
-  document.querySelectorAll('.cs-mode').forEach(b=>{
-    const isActive=b.textContent.toLowerCase().includes(mode==='project'?'project':mode);
-    b.classList.toggle('on',(mode==='snippet'&&b.textContent.includes('Snippet'))||(mode==='file'&&b.textContent.includes('Single'))||(mode==='project'&&b.textContent.includes('Project')));
+  document.querySelectorAll('[data-cs-mode]').forEach(b=>{
+    b.classList.toggle('on',b.dataset.csMode===mode);
   });
   csRenderMode();
 }
@@ -3464,13 +3469,8 @@ function csSetMode(mode){
 function csRenderMode(){
   const pane=$('cs-mode-pane');
   if(!pane)return;
-  // Single unified upload page — drop, paste, or attach any source file.
-  CS_MODE='snippet';
-  csRenderSnippetMode(pane);
-  return;
-  // Legacy modes kept here only as dead code reachable via direct calls (unused by the UI).
-  if(CS_MODE==='file')csRenderFileMode(pane);
-  else if(CS_MODE==='project')csRenderProjectMode(pane);
+  if(CS_MODE==='project')csRenderProjectMode(pane);
+  else csRenderSnippetMode(pane);
 }
 
 // ===== SNIPPET MODE (existing war-room flow) =====
