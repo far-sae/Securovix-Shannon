@@ -4154,16 +4154,24 @@ function csRenderFinal(r){
   const patches=r.blueTeam?.patches||[];
   const risk=r.overallRisk||'info';
   const riskC={critical:'var(--red)',high:'var(--org)',medium:'var(--ylw)',low:'var(--blu)',clean:'var(--grn)',info:'var(--t2)'}[risk]||'var(--t2)';
+  const fixedCode=r.blueTeam?.fixedCode||'';
+  const fixedName=$('cs-fname').value||'fixed.txt';
+  window._csMultiFixed=fixedCode;
+  window._csMultiFixedName=fixedName;
 
   $('cs-out').innerHTML+=`
-    <div class="crd" style="padding:18px 20px;margin-top:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <div class="crd" style="padding:18px 20px;margin-top:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px">
       <div>
         <div style="color:var(--t3);font-size:11px;text-transform:uppercase;letter-spacing:.8px">${H(r.language||'unknown')}</div>
         <div class="h-display" style="font-size:22px;margin-top:2px">Overall risk: <span style="color:${riskC}">${H(risk)}</span></div>
+        <div style="color:var(--t3);font-size:12px;margin-top:6px">
+          <span style="color:var(--rt);font-weight:600">${findings.length}</span> red findings ·
+          <span style="color:var(--bt);font-weight:600">${patches.length}</span> blue patches
+        </div>
       </div>
-      <div style="text-align:right;color:var(--t3);font-size:12px">
-        <div><span style="color:var(--rt);font-weight:600">${findings.length}</span> red findings</div>
-        <div><span style="color:var(--bt);font-weight:600">${patches.length}</span> blue patches</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-g" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" ${fixedCode?'':'disabled'} onclick="csCopyText(window._csMultiFixed||'')">${ico('check',{cls:'ico-sm'})} Copy fixed</button>
+        <button class="btn btn-p" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" ${fixedCode?'':'disabled'} onclick="csDl(window._csMultiFixed||'',window._csMultiFixedName||'fixed.txt','text/plain')">${ico('file-text',{cls:'ico-sm'})} Download fixed file</button>
       </div>
     </div>
     <div class="crd" style="padding:0;margin-top:14px;overflow:hidden">
