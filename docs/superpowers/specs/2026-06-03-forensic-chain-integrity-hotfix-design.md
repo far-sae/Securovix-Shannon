@@ -17,8 +17,8 @@ Shannon's forensic evidence store is meant to be a **tamper-evident SHA-256 hash
 ### Bug 2 — Hasher is bypassable (CRITICAL)
 `append()` ([evidence-store.ts:51](../../../packages/worker/src/forensic/evidence-store.ts#L51)) is **public** and inserts a caller-supplied `ForensicEntry` verbatim, skipping the hasher entirely. Any component holding the store reference can forge or insert unhashed entries. The "only the hasher writes the chain" invariant is unenforced.
 
-### Bug 3 — No write serialization (CRITICAL/HIGH)
-`record()` → `hasher.computeHash()` mutates the in-memory `previousHash` / `sequenceNumber` with **no mutex or queue**. `scan.ts` fans out vuln/exploit pairs under `Promise.all` ([workflows/scan.ts:70](../../../packages/worker/src/workflows/scan.ts#L70)), so multiple activities complete concurrently in one worker process. `better-sqlite3` serializes the DB insert, but the cursor mutation is **not atomic with the insert** → interleaved completions yield non-monotonic / aliased sequence numbers and an invalid chain.
+### Bug 3 — Fragile write-serialization invariant (latent; HIGH)
+`record()` → `hasher.computeHash()` mutates the in-memory `previousHash` / `sequenceNumber`, then `append()` inserts. **Correction after reading the source:** `record()` is currently **fully synchronous** (no `await` between cursor mutation and insert), so Node's single-threaded loop serializes concurrent calls atomically — the race is **not reachable today**, even under `scan.ts`'s `Promise.all` ([workflows/scan.ts:70](../../../packages/worker/src/workflows/scan.ts#L70)). But the invariant is **undocumented and fragile**: the moment any `await` is introduced between the cursor mutation and the insert — exactly what Track B's broker path (async HMAC validation, OOB correlation) invites — interleaved completions would yield non-monotonic / aliased sequence numbers and an invalid chain.
 
 ### Bug 4 — Two unconnected hashers (correctness hazard)
 The DI container constructs a standalone `evidenceHasher = new EvidenceChainHasher()` ([di/container.ts:51,68,111](../../../packages/worker/src/di/container.ts#L51)), while `EvidenceStore` constructs its **own private** `this.hasher` through which all real writes flow. Two cursors over one chain invites silent forks the moment anything hashes through the wrong one.
@@ -47,8 +47,8 @@ On store open, if the table is non-empty: seed the hasher cursor from the last r
 ### 3.2 Enforce single writer (Bug 2)
 Make `append()` **private** (rename to `#appendRaw` / `private appendRaw`). The only public write surface is `record(entryWithoutHash)`, which computes the hash via the single hasher and then inserts atomically. Audit all current callers of `append()` and migrate them to `record()`.
 
-### 3.3 Serialize writes (Bug 3)
-Route all `record()` calls through an **in-process concurrency-1 async queue** so hash-compute + insert is one atomic critical section. Reuse the existing mutex pattern in [audit/mutex.ts](../../../packages/worker/src/audit/mutex.ts) if it fits; otherwise a small promise-chained mutex on the `EvidenceStore`. Confirm (and assert in DI) that `EvidenceStore` is a **per-scan singleton** — one writer instance per `evidence.db`.
+### 3.3 Lock the write-serialization invariant (Bug 3)
+Because `record()` is synchronous today, the fix is **not** a mutex (that would be over-engineering for code that is already atomic). Instead: (1) add a regression test that fires many concurrent `record()` calls via `Promise.all` and asserts the chain stays valid and contiguous, locking the current behaviour; (2) document the invariant in code — `record()` must stay synchronous, with no `await` between `computeHash` and `append`; Track B's broker path must complete all async work before calling `record()`. **Only if** `record()` ever becomes async, add an explicit concurrency-1 queue around the compute+insert critical section (reuse the [audit/mutex.ts](../../../packages/worker/src/audit/mutex.ts) pattern). Confirm `EvidenceStore` is a per-scan singleton.
 
 ### 3.4 Unify the hasher (Bug 4)
 Remove `container.evidenceHasher`. The `EvidenceStore` owns the only `EvidenceChainHasher`. Anything that needs hashing goes through the store. Update [di/container.ts](../../../packages/worker/src/di/container.ts) and any references.
