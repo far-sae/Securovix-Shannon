@@ -5,7 +5,6 @@ import { ExploitEligibilityChecker } from '../agents/eligibility.js';
 import type { CheckpointPlugin, FindingsPlugin, ReportPlugin } from '../plugins/interfaces.js';
 import { NoopCheckpointPlugin, NoopFindingsPlugin, NoopReportPlugin } from '../plugins/noop.js';
 import { EvidenceStore } from '../forensic/evidence-store.js';
-import { EvidenceChainHasher } from '../forensic/hasher.js';
 import { HttpCaptureLayer } from '../forensic/http-capture.js';
 import type { CustodyMetadata } from '../forensic/types.js';
 import { EvasionStrategyEngine } from '../evasion/strategy-engine.js';
@@ -48,7 +47,6 @@ export interface Container {
 
   // Module 5: Forensic Evidence
   evidenceStore?: EvidenceStore;
-  evidenceHasher: EvidenceChainHasher;
   httpCaptureLayer?: HttpCaptureLayer;
   custodyMetadata?: CustodyMetadata;
 
@@ -65,7 +63,6 @@ export function createContainer(workspaceDir?: string): Container {
   const exploitChecker = new ExploitEligibilityChecker();
 
   // Forensic evidence
-  const evidenceHasher = new EvidenceChainHasher();
   const evidenceStore = workspaceDir ? new EvidenceStore(workspaceDir) : undefined;
 
   // Evasion
@@ -108,8 +105,6 @@ export function createContainer(workspaceDir?: string): Container {
 
     // Module 5: Forensic Evidence
     evidenceStore,
-    evidenceHasher,
-
     // Module 6: Adaptive Evasion
     evasionEngine,
     detectionDetector,
