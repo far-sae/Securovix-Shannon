@@ -80,4 +80,9 @@ export class EvidenceChainHasher {
   getHead(): { hash: string; sequence: number } {
     return { hash: this.previousHash, sequence: this.sequenceNumber };
   }
+
+  seedState(previousHash: string, sequenceNumber: number): void {
+    this.previousHash = previousHash;
+    this.sequenceNumber = sequenceNumber;
+  }
 }

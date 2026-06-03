@@ -21,3 +21,7 @@ Thumbs.db
 
 # Local dashboard settings (may contain API keys)
 .shannon-settings.json
+
+# graphify generated knowledge-graph outputs (regenerate with /graphify)
+graphify-out/
+.graphify_*
