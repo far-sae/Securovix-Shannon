@@ -34,18 +34,49 @@ export class EvidenceStore {
   }
 
   private restoreHasherState(): void {
-    const last = this.db.prepare(
-      'SELECT current_hash, sequence_number FROM evidence_chain ORDER BY sequence_number DESC LIMIT 1',
-    ).get() as { current_hash: string; sequence_number: number } | undefined;
+    const last = this.db
+      .prepare('SELECT * FROM evidence_chain ORDER BY sequence_number DESC LIMIT 1')
+      .get() as
+      | {
+          sequence_number: number;
+          timestamp: string;
+          previous_hash: string;
+          current_hash: string;
+          agent_name: string;
+          action_type: string;
+          payload: string;
+          metadata: string;
+        }
+      | undefined;
 
-    if (last) {
-      // Reconstruct hasher state from last entry
-      this.hasher = new EvidenceChainHasher();
-      const entries = this.getAll();
-      for (const entry of entries) {
-        // Replay to restore internal state
-      }
+    if (!last) return; // empty chain — hasher stays at genesis
+
+    // Recompute the last entry's hash from its stored fields. A mismatch means the
+    // evidence.db was corrupted or tampered with — fail loud rather than silently
+    // resetting to genesis (which would fork the chain on the next append).
+    const recomputed = createHash('sha256')
+      .update(
+        JSON.stringify({
+          sequenceNumber: last.sequence_number,
+          timestamp: last.timestamp,
+          previousHash: last.previous_hash,
+          agentName: last.agent_name,
+          actionType: last.action_type,
+          payload: JSON.parse(last.payload),
+          metadata: JSON.parse(last.metadata),
+        }),
+      )
+      .digest('hex');
+
+    if (recomputed !== last.current_hash) {
+      throw new Error(
+        `Evidence chain integrity error: last entry (seq ${last.sequence_number}) hash ` +
+          'does not recompute on restore. evidence.db may be corrupted or tampered with.',
+      );
     }
+
+    // Continue the chain from the last persisted entry.
+    this.hasher.seedState(last.current_hash, last.sequence_number + 1);
   }
 
   append(entry: ForensicEntry): void {
