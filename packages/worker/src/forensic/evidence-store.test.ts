@@ -49,4 +49,16 @@ describe('EvidenceStore concurrency invariant', () => {
     expect(store.verifyIntegrity().valid).toBe(true);
     store.close();
   });
+
+  it('record() is synchronous (returns an entry, not a Promise)', () => {
+    // This is the assertion that actually locks the invariant: if a future change
+    // makes record() async (returning a Promise), this fails — catching exactly the
+    // regression the comment in evidence-store.ts warns against.
+    const ws = tmpWorkspace();
+    const store = new EvidenceStore(ws);
+    const result = store.record('agent', 'checkpoint', makePayload('x'), makeMetadata());
+    expect(result instanceof Promise).toBe(false);
+    expect(result.sequenceNumber).toBe(0);
+    store.close();
+  });
 });
