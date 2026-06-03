@@ -4,12 +4,7 @@ import { createContainer } from './container.js';
 // createContainer() constructs LLMClientFactory, which requires exactly one LLM
 // provider env var. Pin a single dummy provider for this test (no network calls
 // happen at construction) and restore the prior environment afterward.
-const PROVIDER_VARS = [
-  'ANTHROPIC_API_KEY',
-  'AWS_BEDROCK_REGION',
-  'VERTEX_PROJECT_ID',
-  'SHANNON_LLM_BASE_URL',
-];
+const PROVIDER_VARS = ['ANTHROPIC_API_KEY', 'AWS_BEDROCK_REGION', 'VERTEX_PROJECT_ID', 'SHANNON_LLM_BASE_URL'];
 
 describe('createContainer', () => {
   const saved: Record<string, string | undefined> = {};

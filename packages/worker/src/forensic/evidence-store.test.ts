@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import Database from 'better-sqlite3';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
+import { describe, expect, it } from 'vitest';
 import { EvidenceStore } from './evidence-store.js';
 import { makeMetadata, makePayload, tmpWorkspace } from './test-helpers.js';
 
@@ -40,9 +40,7 @@ describe('EvidenceStore concurrency invariant', () => {
     const store = new EvidenceStore(ws);
     await Promise.all(
       Array.from({ length: 50 }, (_, i) =>
-        Promise.resolve().then(() =>
-          store.record('agent', 'checkpoint', makePayload(`e${i}`), makeMetadata()),
-        ),
+        Promise.resolve().then(() => store.record('agent', 'checkpoint', makePayload(`e${i}`), makeMetadata())),
       ),
     );
     const all = store.getAll();
