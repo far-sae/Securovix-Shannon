@@ -79,7 +79,7 @@ export class EvidenceStore {
     this.hasher.seedState(last.current_hash, last.sequence_number + 1);
   }
 
-  append(entry: ForensicEntry): void {
+  private append(entry: ForensicEntry): void {
     this.db.prepare(`
       INSERT INTO evidence_chain (sequence_number, timestamp, previous_hash, current_hash, agent_name, action_type, payload, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
