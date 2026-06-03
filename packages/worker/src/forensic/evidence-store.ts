@@ -95,6 +95,13 @@ export class EvidenceStore {
     );
   }
 
+  // INVARIANT (chain integrity): record() must remain fully synchronous — no `await`
+  // between hasher.computeHash() (which mutates the in-memory cursor) and append()
+  // (the DB insert). The single-threaded event loop then serializes concurrent
+  // record() calls atomically. Track B's broker path must finish all async work
+  // (HMAC validation, OOB correlation) BEFORE calling record(). See
+  // evidence-store.test.ts "concurrency invariant". If record() ever becomes async,
+  // add an explicit concurrency-1 queue around the compute+insert critical section.
   record(
     agentName: string,
     actionType: ForensicEntry['actionType'],
