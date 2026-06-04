@@ -17,3 +17,5 @@ export type { SandboxLimits, SandboxResult } from './exec/sandbox.js';
 export { createBrokerHandler } from './api/handler.js';
 export type { BrokerHandlerDeps, BrokerResponse } from './api/handler.js';
 export { createBrokerServer } from './api/server.js';
+export { createForwardProxy } from './proxy/forward-proxy.js';
+export type { ForwardProxyDeps } from './proxy/forward-proxy.js';

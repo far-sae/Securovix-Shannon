@@ -1,0 +1,11 @@
+# Local-only deliberately-vulnerable lab for tool-broker end-to-end tests.
+# NOT for deployment. Bring up with:  docker compose -f docker-compose.lab.yml up -d --build
+services:
+  ssti-lab:
+    build: ./lab/ssti-app
+    image: shannon-lab-ssti:local
+    container_name: shannon-lab-ssti
+    networks: [shannon-lab]
+networks:
+  shannon-lab:
+    name: shannon-lab
