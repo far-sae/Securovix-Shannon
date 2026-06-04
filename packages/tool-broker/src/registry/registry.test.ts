@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { ToolRegistry } from './registry.js';
+import { describe, expect, it } from 'vitest';
 import { DESCRIPTORS } from './descriptors.js';
+import { ToolRegistry } from './registry.js';
 
 const reg = new ToolRegistry(DESCRIPTORS);
 

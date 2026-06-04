@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { ScopeEnforcer } from './enforcer.js';
+import { describe, expect, it } from 'vitest';
 import type { ScopeConfig } from '../types.js';
+import { ScopeEnforcer } from './enforcer.js';
 
 const cfg: ScopeConfig = {
   targetHost: 'app.example.com',

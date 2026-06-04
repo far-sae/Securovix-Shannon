@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { ipv4ToInt, ipInCidr, isPrivateOrSpecial } from './ip.js';
+import { describe, expect, it } from 'vitest';
+import { ipInCidr, ipv4ToInt, isPrivateOrSpecial } from './ip.js';
 
 describe('ipv4ToInt', () => {
   it('parses dotted-quad to a 32-bit int', () => {

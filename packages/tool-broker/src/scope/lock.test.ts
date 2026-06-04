@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { signScopeToken, verifyScopeToken } from './lock.js';
+import { describe, expect, it } from 'vitest';
 import type { ScopeConfig } from '../types.js';
+import { signScopeToken, verifyScopeToken } from './lock.js';
 
 const KEY = 'test-scan-secret-key';
 const cfg: ScopeConfig = {

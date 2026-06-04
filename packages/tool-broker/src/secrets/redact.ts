@@ -12,9 +12,7 @@ const PATTERNS: RegExp[] = [
 export function redact(text: string): string {
   let out = text;
   for (const re of PATTERNS) {
-    out = out.replace(re, (match, p1?: string) =>
-      typeof p1 === 'string' ? `${p1}[REDACTED]` : '[REDACTED]',
-    );
+    out = out.replace(re, (match, p1?: string) => (typeof p1 === 'string' ? `${p1}[REDACTED]` : '[REDACTED]'));
   }
   return out;
 }

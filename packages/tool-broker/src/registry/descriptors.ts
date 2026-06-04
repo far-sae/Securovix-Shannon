@@ -11,8 +11,16 @@ export const DESCRIPTORS: ToolDescriptor[] = [
       { name: 'risk', flag: '--risk', enumValues: ['1', '2'] },
     ],
     blocklist: [
-      '--os-shell', '--os-pwn', '--os-cmd', '--file-read', '--file-write',
-      '--priv-esc', '--second-url', '--dns-domain', '--eval', '--tamper',
+      '--os-shell',
+      '--os-pwn',
+      '--os-cmd',
+      '--file-read',
+      '--file-write',
+      '--priv-esc',
+      '--second-url',
+      '--dns-domain',
+      '--eval',
+      '--tamper',
     ],
   },
   {
