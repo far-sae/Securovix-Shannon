@@ -6,6 +6,13 @@ services:
     image: shannon-lab-ssti:local
     container_name: shannon-lab-ssti
     networks: [shannon-lab]
+  # In-house deterministic SSTI prober tool image (no GPL deps). Build-only — the broker
+  # sandbox runs it on demand. Build with: docker compose -f docker-compose.lab.yml --profile tools build
+  ssti-probe:
+    build: ./lab/ssti-probe
+    image: shannon-ssti-probe:local
+    profiles: [tools]
+    command: ["true"]
 networks:
   shannon-lab:
     name: shannon-lab
