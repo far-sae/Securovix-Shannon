@@ -1,15 +1,16 @@
 import type { Container } from '../../di/container.js';
-import { preReconActivity } from './pre-recon.js';
-import { reconActivity } from './recon.js';
-import { vulnAgentActivity } from './vuln-agents.js';
-import { exploitAgentActivity } from './exploit-agents.js';
-import { reportActivity } from './report.js';
-import { deceptionScanActivity } from './deception-scan.js';
+import { brokerExploitActivity } from './broker-exploit.js';
 import { chainAnalysisActivity } from './chain-analysis.js';
 import { chainExploitActivity } from './chain-exploit.js';
-import { warRoomActivity } from './war-room.js';
-import { purpleTeamActivity } from './purple-team.js';
+import { deceptionScanActivity } from './deception-scan.js';
+import { exploitAgentActivity } from './exploit-agents.js';
 import { forensicPackageActivity } from './forensic-package.js';
+import { preReconActivity } from './pre-recon.js';
+import { purpleTeamActivity } from './purple-team.js';
+import { reconActivity } from './recon.js';
+import { reportActivity } from './report.js';
+import { vulnAgentActivity } from './vuln-agents.js';
+import { warRoomActivity } from './war-room.js';
 
 export interface PreReconInput {
   configPath: string;
@@ -97,6 +98,20 @@ export interface ForensicPackageInput {
   workspaceDir: string;
 }
 
+export interface BrokerExploitInput {
+  category: string;
+  scopeToken: string; // signed scope-lock token from the CLI
+  configPath: string;
+  workspaceDir: string;
+  scanId: string;
+  wafVendor?: string;
+}
+
+export interface BrokerExploitOutput {
+  skipped: boolean;
+  findingsCount: number;
+}
+
 export interface ScanActivities {
   runPreRecon(input: PreReconInput): Promise<void>;
   runRecon(input: ReconInput): Promise<void>;
@@ -109,6 +124,7 @@ export interface ScanActivities {
   runPurpleTeam(input: PurpleTeamInput): Promise<PurpleTeamOutput>;
   assembleReport(input: ReportInput): Promise<string>;
   buildForensicPackage(input: ForensicPackageInput): Promise<void>;
+  runBrokerExploit(input: BrokerExploitInput): Promise<BrokerExploitOutput>;
 }
 
 export function createActivities(container: Container): ScanActivities {
@@ -124,5 +140,6 @@ export function createActivities(container: Container): ScanActivities {
     runPurpleTeam: (input) => purpleTeamActivity(container, input),
     assembleReport: (input) => reportActivity(container, input),
     buildForensicPackage: (input) => forensicPackageActivity(container, input),
+    runBrokerExploit: (input) => brokerExploitActivity(container, input),
   };
 }

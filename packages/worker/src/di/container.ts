@@ -15,6 +15,7 @@ import { EvasionStrategyEngine } from '../evasion/strategy-engine.js';
 import { EvidenceStore } from '../forensic/evidence-store.js';
 import type { HttpCaptureLayer } from '../forensic/http-capture.js';
 import type { CustodyMetadata } from '../forensic/types.js';
+import { KnowledgeStore } from '../knowledge/knowledge-store.js';
 import { LLMClientFactory } from '../llm/client.js';
 import type { CheckpointPlugin, FindingsPlugin, ReportPlugin } from '../plugins/interfaces.js';
 import { NoopCheckpointPlugin, NoopFindingsPlugin, NoopReportPlugin } from '../plugins/noop.js';
@@ -60,6 +61,9 @@ export interface Container {
   // Module 7: Tool Broker (Track B) — client present only when BROKER_URL is set.
   toolClient?: ToolClient;
   brokerBreaker: CircuitBreaker;
+
+  // Module 8: Learning Brain (Track A) — present only with a workspace.
+  knowledgeStore?: KnowledgeStore;
 }
 
 export function createContainer(workspaceDir?: string): Container {
@@ -89,6 +93,9 @@ export function createContainer(workspaceDir?: string): Container {
   const toolClient = brokerUrl
     ? new ToolClient({ brokerUrl, recordKey: process.env.SHANNON_BROKER_RECORD_KEY ?? '' })
     : undefined;
+
+  // Learning Brain (Track A): cross-scan knowledge, persisted in the workspace.
+  const knowledgeStore = workspaceDir ? new KnowledgeStore(workspaceDir) : undefined;
 
   return {
     // Core
@@ -127,5 +134,8 @@ export function createContainer(workspaceDir?: string): Container {
     // Module 7: Tool Broker
     toolClient,
     brokerBreaker,
+
+    // Module 8: Learning Brain
+    knowledgeStore,
   };
 }
