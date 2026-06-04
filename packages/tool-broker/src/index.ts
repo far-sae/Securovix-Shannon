@@ -14,3 +14,6 @@ export { normalizeSqlmapCsv, normalizeNucleiJsonl, normalizeFfufJson } from './n
 export type { NormalizedToolFinding } from './normalize/normalizer.js';
 export { runInSandbox } from './exec/sandbox.js';
 export type { SandboxLimits, SandboxResult } from './exec/sandbox.js';
+export { createBrokerHandler } from './api/handler.js';
+export type { BrokerHandlerDeps, BrokerResponse } from './api/handler.js';
+export { createBrokerServer } from './api/server.js';
