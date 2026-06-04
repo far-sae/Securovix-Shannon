@@ -1,4 +1,4 @@
-import type { ToolRequest } from '@shannon/tool-broker';
+import type { NormalizedToolFinding, ToolRequest } from '@shannon/tool-broker';
 import { type BrokerInvokeDeps, brokerInvoke } from '../broker/broker-invoke.js';
 
 export interface BrokerDispatchCtx {
@@ -29,7 +29,11 @@ export const SSTI_TOOL_DEFS = [
 // ToolRequest, invokes it through the circuit breaker, and returns a compact JSON string
 // for the tool_result. Circuit-open is surfaced so the model can fall back to manual
 // reasoning instead of hanging.
-export function makeBrokerDispatch(deps: BrokerInvokeDeps, ctx: BrokerDispatchCtx) {
+export function makeBrokerDispatch(
+  deps: BrokerInvokeDeps,
+  ctx: BrokerDispatchCtx,
+  onFindings?: (findings: NormalizedToolFinding[]) => void,
+) {
   return async function dispatch(name: string, input: unknown, _id: string): Promise<string> {
     const params = (input ?? {}) as Record<string, string | number>;
     const request: ToolRequest = { tool: name, params, scanId: ctx.scanId, scopeToken: ctx.scopeToken };
@@ -38,6 +42,7 @@ export function makeBrokerDispatch(deps: BrokerInvokeDeps, ctx: BrokerDispatchCt
       return JSON.stringify({ status: 'broker-unavailable', note: 'broker circuit open — degrade to manual analysis' });
     }
     const { result, findings } = outcome.response;
+    if (onFindings && findings.length > 0) onFindings(findings);
     return JSON.stringify({
       status: result.status,
       findings,
