@@ -85,6 +85,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.39.0
         version: 0.39.0
+      '@shannon/tool-broker':
+        specifier: workspace:*
+        version: link:../tool-broker
       '@temporalio/activity':
         specifier: ^1.11.0
         version: 1.17.2
