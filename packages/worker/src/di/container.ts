@@ -1,21 +1,23 @@
-import { ConfigLoader } from '../config/loader.js';
-import { LLMClientFactory } from '../llm/client.js';
-import { AgentOrchestrator } from '../agents/orchestrator.js';
 import { ExploitEligibilityChecker } from '../agents/eligibility.js';
-import type { CheckpointPlugin, FindingsPlugin, ReportPlugin } from '../plugins/interfaces.js';
-import { NoopCheckpointPlugin, NoopFindingsPlugin, NoopReportPlugin } from '../plugins/noop.js';
-import { EvidenceStore } from '../forensic/evidence-store.js';
-import { HttpCaptureLayer } from '../forensic/http-capture.js';
-import type { CustodyMetadata } from '../forensic/types.js';
-import { EvasionStrategyEngine } from '../evasion/strategy-engine.js';
-import { DetectionDetector } from '../evasion/detector.js';
-import { EvasionMiddleware } from '../evasion/http-middleware.js';
-import { AttackGraph } from '../attack-graph/graph.js';
+import { AgentOrchestrator } from '../agents/orchestrator.js';
 import { ChainScorer } from '../attack-graph/chain-scorer.js';
-import { DeceptionFingerprinter } from '../counter-deception/fingerprinter.js';
-import { DeceptionClassifier } from '../counter-deception/deception-classifier.js';
+import { AttackGraph } from '../attack-graph/graph.js';
+import { CircuitBreaker } from '../broker/circuit-breaker.js';
+import { ToolClient } from '../broker/tool-client.js';
 import { SchemaParser } from '../business-logic/schema-parser.js';
 import { StateMachineBuilder } from '../business-logic/state-machine.js';
+import { ConfigLoader } from '../config/loader.js';
+import { DeceptionClassifier } from '../counter-deception/deception-classifier.js';
+import { DeceptionFingerprinter } from '../counter-deception/fingerprinter.js';
+import { DetectionDetector } from '../evasion/detector.js';
+import { EvasionMiddleware } from '../evasion/http-middleware.js';
+import { EvasionStrategyEngine } from '../evasion/strategy-engine.js';
+import { EvidenceStore } from '../forensic/evidence-store.js';
+import type { HttpCaptureLayer } from '../forensic/http-capture.js';
+import type { CustodyMetadata } from '../forensic/types.js';
+import { LLMClientFactory } from '../llm/client.js';
+import type { CheckpointPlugin, FindingsPlugin, ReportPlugin } from '../plugins/interfaces.js';
+import { NoopCheckpointPlugin, NoopFindingsPlugin, NoopReportPlugin } from '../plugins/noop.js';
 import { WarRoomModerator } from '../war-room/moderator.js';
 
 export interface Container {
@@ -54,6 +56,10 @@ export interface Container {
   evasionEngine: EvasionStrategyEngine;
   detectionDetector: DetectionDetector;
   evasionMiddleware: EvasionMiddleware;
+
+  // Module 7: Tool Broker (Track B) — client present only when BROKER_URL is set.
+  toolClient?: ToolClient;
+  brokerBreaker: CircuitBreaker;
 }
 
 export function createContainer(workspaceDir?: string): Container {
@@ -75,6 +81,14 @@ export function createContainer(workspaceDir?: string): Container {
   if (workspaceDir) {
     evasionEngine.restoreProfile(workspaceDir);
   }
+
+  // Tool broker (Track B): breaker is always present; the client is wired only when a
+  // BROKER_URL is configured, so non-broker scans (and tests) build cleanly without it.
+  const brokerBreaker = new CircuitBreaker({ failureThreshold: 3, cooldownMs: 30_000 });
+  const brokerUrl = process.env.BROKER_URL;
+  const toolClient = brokerUrl
+    ? new ToolClient({ brokerUrl, recordKey: process.env.SHANNON_BROKER_RECORD_KEY ?? '' })
+    : undefined;
 
   return {
     // Core
@@ -109,5 +123,9 @@ export function createContainer(workspaceDir?: string): Container {
     evasionEngine,
     detectionDetector,
     evasionMiddleware,
+
+    // Module 7: Tool Broker
+    toolClient,
+    brokerBreaker,
   };
 }
