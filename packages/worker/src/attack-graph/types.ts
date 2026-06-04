@@ -1,4 +1,19 @@
-export type VulnCategory = 'sqli' | 'xss' | 'ssrf' | 'auth-bypass' | 'authz-bypass' | 'rce' | 'credential-theft' | 'business-logic';
+export type VulnCategory =
+  | 'sqli'
+  | 'xss'
+  | 'ssrf'
+  | 'auth-bypass'
+  | 'authz-bypass'
+  | 'rce'
+  | 'credential-theft'
+  | 'business-logic'
+  // Track B classes (typed now; agents added in Phase 3+)
+  | 'rce-ssti'
+  | 'rce-deser'
+  | 'token-forgery'
+  | 'prompt-injection'
+  | 'graphql-idor'
+  | 'request-smuggling';
 
 export interface VulnNode {
   id: string;

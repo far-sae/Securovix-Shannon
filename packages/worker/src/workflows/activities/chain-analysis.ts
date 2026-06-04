@@ -120,6 +120,12 @@ function inferPreconditions(category: string, finding: Record<string, unknown>):
     case 'business-logic':
       pre.push('authenticated');
       break;
+    case 'graphql-idor':
+      pre.push('authenticated');
+      break;
+    case 'token-forgery':
+      pre.push('authenticated');
+      break;
   }
   return pre;
 }
@@ -144,6 +150,24 @@ function inferPostconditions(category: string, finding: Record<string, unknown>)
       break;
     case 'business-logic':
       post.push('workflow-manipulation', 'financial-impact');
+      break;
+    case 'rce-ssti':
+      post.push('remote-code-execution', 'internal-network-access');
+      break;
+    case 'rce-deser':
+      post.push('remote-code-execution', 'admin-access');
+      break;
+    case 'token-forgery':
+      post.push('authenticated', 'elevated-privileges');
+      break;
+    case 'prompt-injection':
+      post.push('data-access', 'workflow-manipulation');
+      break;
+    case 'graphql-idor':
+      post.push('data-access');
+      break;
+    case 'request-smuggling':
+      post.push('session-hijack', 'data-access');
       break;
   }
   return post;
