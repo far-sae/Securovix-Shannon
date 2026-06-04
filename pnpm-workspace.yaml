@@ -3,3 +3,4 @@ packages:
   # Worker is included so its vitest suite can run on the host.
   # Production worker builds still happen inside Docker (native deps).
   - 'packages/worker'
+  - 'packages/tool-broker'
