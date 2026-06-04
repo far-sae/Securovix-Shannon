@@ -2727,6 +2727,9 @@ async function pgScan(sid){
   M.innerHTML=`<div class="pg" style="display:flex;align-items:center;justify-content:center;padding-top:140px;gap:14px"><span class="sp sp-l"></span><span style="color:var(--t2)">Loading results…</span></div>`;
   const d=await api('/scans/'+sid);
   const s=d.session,f=d.files;
+  // Track B/C — broker-verified exploitation findings + compliance roll-up (may be empty).
+  const broker=await api('/scans/'+sid+'/broker').catch(()=>({findings:[],rows:[],owaspCoverage:{},cweCoverage:{}}));
+  const hasBroker=(broker.findings?.length||0)>0||(broker.rows?.length||0)>0;
   const cost=Object.values(s.metrics||{}).reduce((a,m)=>a+(m.cost||0),0);
   const dur=s.completedAt?((new Date(s.completedAt)-new Date(s.startedAt))/1000|0):0;
   const agents=Object.entries(s.metrics||{});
@@ -2739,6 +2742,7 @@ async function pgScan(sid){
   const tabs=[
     {id:'overview',l:'Overview',custom:true},
     {id:'posture',l:'Risk Posture',custom:true},
+    ...(hasBroker?[{id:'verified',l:'Verified Exploits',custom:true}]:[]),
     {id:'redblue',l:'Battle View',custom:true},
     {id:'chain-graph',l:'Chain Graph',custom:true},
     {id:'analytics',l:'Analytics',custom:true},
@@ -2762,7 +2766,7 @@ async function pgScan(sid){
   // Group tabs into 5 top-level sections
   const groups=[
     {id:'g-overview', l:'Overview',     ico:'gauge',     ids:['overview']},
-    {id:'g-findings', l:'Findings',     ico:'list',      ids:['posture','exploitv',...tabs.filter(t=>t.kind).map(t=>t.id)]},
+    {id:'g-findings', l:'Findings',     ico:'list',      ids:['posture','verified','exploitv',...tabs.filter(t=>t.kind).map(t=>t.id)]},
     {id:'g-rb',       l:'Red vs Blue',  ico:'swords',    ids:['redblue','redteam','blueteam','purpleteam','purpleverdict']},
     {id:'g-chain',    l:'Attack Chain', ico:'radar',     ids:['chain-graph','chain','warroom']},
     {id:'g-artifacts',l:'Artifacts',    ico:'file-text', ids:['report','prerecon','recon','forensic','probes','analytics']},
@@ -2772,7 +2776,7 @@ async function pgScan(sid){
   for(const g of groups){g.ids=g.ids.filter(id=>tabIds.has(id))}
 
   window._T=tabs;window._G=groups;window._activeGroup=groups[0].id;window._activeTab='overview';
-  window._agents=agents;window._cost=cost;window._sid=sid;window._s=s;window._f=f;window._rb=rb;window._score=score;window._grade=grade;
+  window._agents=agents;window._cost=cost;window._sid=sid;window._s=s;window._f=f;window._rb=rb;window._score=score;window._grade=grade;window._broker=broker;
 
   M.innerHTML=`<div class="pg">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;gap:16px;flex-wrap:wrap">
@@ -2823,6 +2827,7 @@ function stab(id,el){
   const tab=window._T.find(t=>t.id===id);if(!tab)return;
   if(tab.custom){
     if(id==='overview')renderOverview();
+    else if(id==='verified')renderVerified();
     else if(id==='posture')renderPosture();
     else if(id==='redblue')renderRedBlue();
     else if(id==='chain-graph')renderChainGraph();
@@ -2837,6 +2842,56 @@ function stab(id,el){
     // Empty artifact — show a friendly empty state instead of blank
     $('TP').innerHTML=`<div class="empty-state" style="margin-top:10px"><div class="empty-state-icon" style="color:var(--t3)">${ico('inbox',{cls:'ico-xl'})}</div><h3>Nothing here yet</h3><p>This artifact wasn't produced for this scan. Try another tab on the left.</p></div>`;
   }
+}
+
+// ===== VERIFIED EXPLOITS TAB (Track B/C) =====
+// Surfaces the broker's tool-CONFIRMED exploitation findings (zero false positives by
+// construction — each is proven by a benign marker/canary) and their OWASP/CWE/MITRE map.
+function renderVerified(){
+  const b=window._broker||{findings:[],rows:[],owaspCoverage:{},cweCoverage:{}};
+  const findings=b.findings||[],rows=b.rows||[];
+  const classes=[...new Set(findings.map(f=>f.category))];
+  const owasp=Object.entries(b.owaspCoverage||{}).sort((a,c)=>c[1]-a[1]);
+  const sevCls=s=>['critical','high','medium','low','info'].includes((s||'').toLowerCase())?(s||'').toLowerCase():'medium';
+  $('TP').innerHTML=`<div style="animation:rvIn .3s var(--med)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <h3 class="h-display" style="font-size:22px;color:var(--t0)">Tool-Verified Exploits</h3>
+      <span class="bx bx-g" style="font-size:11px">${findings.length} confirmed</span>
+    </div>
+    <p style="color:var(--t2);margin-bottom:18px;line-height:1.6;max-width:760px">Findings here were exploited through the scope-locked tool broker and confirmed by a benign proof marker (arithmetic eval, planted canary, or cross-identity read). Unlike inferred findings, these carry <strong style="color:var(--t1)">zero false positives by construction</strong>${classes.length?` — across ${classes.length} vuln class${classes.length>1?'es':''}: ${classes.map(H).join(', ')}.`:'.'}</p>
+
+    ${owasp.length?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px">
+      ${owasp.map(([k,n])=>`<span class="sev sev-high" style="font-size:11px">${ico('shield',{cls:'ico-sm'})}<span>${H(k)} &middot; ${n}</span></span>`).join('')}
+    </div>`:''}
+
+    ${findings.length?`<div class="risk-grid">
+      ${findings.map(f=>`<div class="risk-card ${sevCls(f.severity)}">
+        <div class="risk-card-h"><div class="risk-card-cat">${H(f.category)}</div><div class="risk-card-sev ${sevCls(f.severity)}">${H(f.severity||'medium')}</div></div>
+        <div class="risk-card-name">${H(f.detail||f.tool||'verified finding')}</div>
+        <div class="risk-card-meta"><span>${ico('zap',{cls:'ico-sm'})} ${H(f.tool||'broker')}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px" title="${H(f.target||'')}">${H(f.target||'')}</span></div>
+      </div>`).join('')}
+    </div>`:'<div class="empty" style="padding:40px 20px"><p style="color:var(--t3)">No broker-verified exploits for this scan.</p></div>'}
+
+    ${rows.length?`<h3 class="h-display" style="font-size:18px;margin:30px 0 12px;color:var(--t0)">Compliance Mapping</h3>
+    <div style="overflow-x:auto;border:1px solid var(--brd);border-radius:var(--rs)">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--brd);background:var(--bg2)">
+          <th style="text-align:left;padding:9px 12px;color:var(--t2);font-weight:600">Category</th>
+          <th style="text-align:left;padding:9px 12px;color:var(--t2);font-weight:600">Severity</th>
+          <th style="text-align:left;padding:9px 12px;color:var(--t2);font-weight:600">OWASP 2021</th>
+          <th style="text-align:left;padding:9px 12px;color:var(--t2);font-weight:600">CWE</th>
+          <th style="text-align:left;padding:9px 12px;color:var(--t2);font-weight:600">MITRE ATT&CK</th>
+        </tr></thead>
+        <tbody>${rows.map(r=>`<tr style="border-bottom:1px solid var(--brd2)">
+          <td style="padding:10px 12px;color:var(--t1)">${H(r.category)}</td>
+          <td style="padding:10px 12px"><span class="sev sev-${sevCls(r.severity)}" style="font-size:10px">${H(r.severity||'medium')}</span></td>
+          <td style="padding:10px 12px"><code style="background:var(--s2);padding:2px 6px;border-radius:4px;font-size:11px;color:var(--acc3)">${H(r.owasp)}</code></td>
+          <td style="padding:10px 12px"><code style="background:var(--s2);padding:2px 6px;border-radius:4px;font-size:11px;color:var(--acc3)">${H(r.cwe)}</code></td>
+          <td style="padding:10px 12px;font-size:11px;color:var(--t2)">${(r.mitre||[]).map(H).join(', ')}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>`:''}
+  </div>`;
 }
 
 // ===== OVERVIEW TAB =====

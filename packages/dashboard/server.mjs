@@ -1076,6 +1076,37 @@ app.get('/api/scans/:id', (req, res) => {
   res.json({ session, files });
 });
 
+// ---- API: Broker-verified findings + compliance (Track B/C) ----
+// The broker exploitation phase writes structured artifacts per vuln class:
+//   workspaces/<id>/broker/<category>/findings.json   (NormalizedToolFinding[])
+//   workspaces/<id>/broker/<category>/compliance.json (ComplianceReport)
+// We aggregate them across whatever classes ran into one verified-findings view +
+// a merged OWASP/CWE coverage roll-up. Tool-confirmed only → these are real, not noise.
+app.get('/api/scans/:id/broker', (req, res) => {
+  const brokerDir = join(WORKSPACES, req.params.id, 'broker');
+  if (!existsSync(brokerDir)) return res.json({ findings: [], rows: [], owaspCoverage: {}, cweCoverage: {} });
+  const rj = p => { try { return existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : null; } catch { return null; } };
+
+  const findings = [];
+  const rows = [];
+  const owaspCoverage = {};
+  const cweCoverage = {};
+
+  for (const category of readdirSync(brokerDir)) {
+    const catDir = join(brokerDir, category);
+    if (!statSync(catDir).isDirectory()) continue;
+    for (const f of rj(join(catDir, 'findings.json')) || []) findings.push({ category, ...f });
+    const compliance = rj(join(catDir, 'compliance.json'));
+    if (compliance) {
+      for (const r of compliance.rows || []) rows.push(r);
+      for (const [k, n] of Object.entries(compliance.owaspCoverage || {})) owaspCoverage[k] = (owaspCoverage[k] || 0) + n;
+      for (const [k, n] of Object.entries(compliance.cweCoverage || {})) cweCoverage[k] = (cweCoverage[k] || 0) + n;
+    }
+  }
+
+  res.json({ findings, rows, owaspCoverage, cweCoverage });
+});
+
 // ---- API: Start scan ----
 app.post('/api/scans', (req, res) => {
   const { targetUrl, authType, username, password, retryPreset, focusUrls, avoidUrls, apiKey: bodyKey, warRoom, providerKeys } = req.body;
