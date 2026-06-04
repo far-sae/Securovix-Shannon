@@ -67,6 +67,9 @@ export interface BrokerConfig {
   scope?: ScopeConfig;
   budgets?: BudgetConfig;
   oob?: OOBConfig;
+  // Broker-backed exploitation classes to run (Track B). Each must be a known
+  // broker-capable class (see CLASS_CONFIGS). Omitted/empty → run all of them.
+  categories?: string[];
 }
 
 export interface ShannonConfig {

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
+import { brokerCapableCategories } from '../scan/broker-scope.js';
 import { type Result, err, ok } from '../result.js';
 import type { ShannonConfig } from './schema.js';
 import { isValidCidr } from './scope-rules.js';
@@ -35,6 +36,14 @@ export function validateConfig(config: ShannonConfig): Result<ShannonConfig> {
     const mode = broker.oob?.mode;
     if (mode !== undefined && mode !== 'reflected-only' && mode !== 'self-hosted') {
       return err(new Error(`broker.oob.mode must be 'reflected-only' or 'self-hosted', got: ${mode}`));
+    }
+    if (broker.categories !== undefined) {
+      const capable = new Set(brokerCapableCategories());
+      for (const cat of broker.categories) {
+        if (!capable.has(cat)) {
+          return err(new Error(`Unknown broker.categories entry '${cat}'. Valid: ${[...capable].sort().join(', ')}`));
+        }
+      }
     }
   }
 

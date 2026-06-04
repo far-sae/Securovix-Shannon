@@ -70,20 +70,37 @@ const FORWARDED_ENV_VARS = [
   'VERTEX_PROJECT_ID',
   'OPENAI_API_KEY',
   'GEMINI_API_KEY',
+  // Scope-lock HMAC key: the worker signs the scope token, the broker verifies it.
+  // Both must share this exact value for Track-B broker exploitation to activate.
+  'SHANNON_BROKER_SCOPE_KEY',
+  'BROKER_URL',
 ];
 
 async function startWorker(opts: WorkerOpts): Promise<void> {
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.SHANNON_LLM_API_KEY && !process.env.AWS_BEDROCK_REGION && !process.env.VERTEX_PROJECT_ID) {
+  if (
+    !process.env.ANTHROPIC_API_KEY &&
+    !process.env.SHANNON_LLM_API_KEY &&
+    !process.env.AWS_BEDROCK_REGION &&
+    !process.env.VERTEX_PROJECT_ID
+  ) {
     throw new Error(
       'No LLM provider configured. Set ANTHROPIC_API_KEY (get one at https://console.anthropic.com/settings/keys), or configure another provider via SHANNON_LLM_API_KEY, AWS_BEDROCK_REGION, or VERTEX_PROJECT_ID.',
     );
   }
 
-  const args = ['run', '--rm', '--network', 'shannon_default',
-    '-e', `TEMPORAL_TASK_QUEUE=${opts.taskQueue}`,
-    '-e', `SHANNON_CONFIG=${JSON.stringify(opts.config)}`,
-    '-e', `SHANNON_RESUME=${opts.resume}`,
-    '-v', `${opts.workspaceDir}:/workspace`,
+  const args = [
+    'run',
+    '--rm',
+    '--network',
+    'shannon_default',
+    '-e',
+    `TEMPORAL_TASK_QUEUE=${opts.taskQueue}`,
+    '-e',
+    `SHANNON_CONFIG=${JSON.stringify(opts.config)}`,
+    '-e',
+    `SHANNON_RESUME=${opts.resume}`,
+    '-v',
+    `${opts.workspaceDir}:/workspace`,
   ];
 
   for (const name of FORWARDED_ENV_VARS) {
