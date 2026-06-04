@@ -104,6 +104,41 @@
     "loginInstructions": {
       "type": "string",
       "description": "Free-form login instructions for agents"
+    },
+    "broker": {
+      "type": "object",
+      "properties": {
+        "allowStateChanging": { "type": "boolean", "default": false },
+        "scopeLockPublicKey": { "type": "string" },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "allowlistCidrs": { "type": "array", "items": { "type": "string" } },
+            "allowPrivateCidrs": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "budgets": {
+          "type": "object",
+          "properties": {
+            "maxToolInvocations": { "type": "integer", "minimum": 1 },
+            "maxHttpRequests": { "type": "integer", "minimum": 1 },
+            "maxWallClockMs": { "type": "integer", "minimum": 1 },
+            "maxCostUsd": { "type": "number", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "oob": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["reflected-only", "self-hosted"] },
+            "serverUrl": { "type": "string" },
+            "tokenHandle": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

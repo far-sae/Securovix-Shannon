@@ -1,38 +1,57 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-import Ajv from 'ajv';
+import { type Result, err, ok } from '../result.js';
 import type { ShannonConfig } from './schema.js';
-import { type Result, ok, err } from '../result.js';
+import { isValidCidr } from './scope-rules.js';
 
-const ajv = new Ajv({ allErrors: true });
+export function validateConfig(config: ShannonConfig): Result<ShannonConfig> {
+  if (!config.target?.url) {
+    return err(new Error('Config must specify target.url'));
+  }
+
+  if (config.pipeline?.maxConcurrentPipelines !== undefined) {
+    const max = config.pipeline.maxConcurrentPipelines;
+    if (max < 1 || max > 5) {
+      return err(new Error('maxConcurrentPipelines must be between 1 and 5'));
+    }
+  }
+
+  const broker = config.broker;
+  if (broker) {
+    for (const cidr of broker.scope?.allowlistCidrs ?? []) {
+      if (!isValidCidr(cidr)) return err(new Error(`Invalid CIDR in broker.scope.allowlistCidrs: ${cidr}`));
+    }
+    for (const cidr of broker.scope?.allowPrivateCidrs ?? []) {
+      if (!isValidCidr(cidr)) return err(new Error(`Invalid CIDR in broker.scope.allowPrivateCidrs: ${cidr}`));
+    }
+    const budgets = broker.budgets;
+    if (budgets) {
+      for (const [key, val] of Object.entries(budgets)) {
+        if (val !== undefined && (typeof val !== 'number' || val <= 0)) {
+          return err(new Error(`broker.budgets.${key} must be a positive number`));
+        }
+      }
+    }
+    const mode = broker.oob?.mode;
+    if (mode !== undefined && mode !== 'reflected-only' && mode !== 'self-hosted') {
+      return err(new Error(`broker.oob.mode must be 'reflected-only' or 'self-hosted', got: ${mode}`));
+    }
+  }
+
+  return ok(config);
+}
 
 export class ConfigLoader {
   load(path: string): Result<ShannonConfig> {
     if (!existsSync(path)) {
       return err(new Error(`Config file not found: ${path}`));
     }
-
     try {
       const raw = readFileSync(path, 'utf-8');
       const config = parseYaml(raw) as ShannonConfig;
-      return this.validate(config);
+      return validateConfig(config);
     } catch (e) {
       return err(e instanceof Error ? e : new Error(String(e)));
     }
-  }
-
-  private validate(config: ShannonConfig): Result<ShannonConfig> {
-    if (!config.target?.url) {
-      return err(new Error('Config must specify target.url'));
-    }
-
-    if (config.pipeline?.maxConcurrentPipelines !== undefined) {
-      const max = config.pipeline.maxConcurrentPipelines;
-      if (max < 1 || max > 5) {
-        return err(new Error('maxConcurrentPipelines must be between 1 and 5'));
-      }
-    }
-
-    return ok(config);
   }
 }

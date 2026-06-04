@@ -89,6 +89,12 @@ export class ChainScorer {
       'rce': ['TA0002', 'TA0003'],
       'credential-theft': ['TA0006'],
       'business-logic': ['TA0001', 'TA0040'],
+      'rce-ssti': ['TA0002', 'TA0003'],
+      'rce-deser': ['TA0002', 'TA0003'],
+      'token-forgery': ['TA0001', 'TA0004', 'TA0006'],
+      'prompt-injection': ['TA0001', 'TA0002'],
+      'graphql-idor': ['TA0001', 'TA0007', 'TA0009'],
+      'request-smuggling': ['TA0001', 'TA0005'],
     };
 
     for (const node of path) {
