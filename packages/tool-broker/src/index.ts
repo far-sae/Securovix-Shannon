@@ -12,3 +12,5 @@ export { authorizeRequest } from './core/authorize.js';
 export type { AuthorizeDeps, AuthorizeResult, ResolvedTarget } from './core/authorize.js';
 export { normalizeSqlmapCsv, normalizeNucleiJsonl, normalizeFfufJson } from './normalize/normalizer.js';
 export type { NormalizedToolFinding } from './normalize/normalizer.js';
+export { runInSandbox } from './exec/sandbox.js';
+export type { SandboxLimits, SandboxResult } from './exec/sandbox.js';
