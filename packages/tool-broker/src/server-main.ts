@@ -63,12 +63,19 @@ export function buildServerFromEnv(): Server {
   const imageMap = process.env.SHANNON_TOOL_IMAGES
     ? (JSON.parse(process.env.SHANNON_TOOL_IMAGES) as Record<string, string>)
     : {};
+  // Operator-registered tool descriptors beyond the shipped DESCRIPTORS — e.g. the
+  // in-house deterministic probers, which are intentionally kept out of the default
+  // registry. Each must still pass through the same arg-allowlist + blocklist gate.
+  const extraDescriptors = process.env.SHANNON_EXTRA_DESCRIPTORS
+    ? (JSON.parse(process.env.SHANNON_EXTRA_DESCRIPTORS) as ToolDescriptor[])
+    : undefined;
   return buildServer({
     scope,
     scopeKey: process.env.SHANNON_BROKER_SCOPE_KEY ?? '',
     recordKey: process.env.SHANNON_BROKER_RECORD_KEY ?? '',
     scanNet: process.env.SHANNON_SCAN_NET ?? 'bridge',
     imageForTool: (tool) => imageMap[tool] ?? `shannon-tool-${tool}:local`,
+    extraDescriptors,
   });
 }
 
