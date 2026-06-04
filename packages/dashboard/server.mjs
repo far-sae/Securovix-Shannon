@@ -42,7 +42,9 @@ function ensureSessionSecret() {
     const s = _crypto.randomBytes(32).toString('hex');
     writeFileSync(SESSION_SECRET_PATH, s);
     return s;
-  } catch { return _crypto.randomBytes(32).toString('hex'); }
+  } catch {
+    return _crypto.randomBytes(32).toString('hex');
+  }
 }
 const SESSION_SECRET = process.env.SHANNON_SESSION_SECRET || ensureSessionSecret();
 const SESSION_TTL_DAYS = 30;
@@ -53,18 +55,23 @@ const SESSION_TTL_DAYS = 30;
 const PLAN_LIMITS = { starter: 0, pro: -1 };
 const PLAN_LABELS = { starter: 'Starter', pro: 'Pro' };
 const PLAN_PRICING = {
-  starter: { monthly: 0,  yearly: 0,   currency: 'GBP' },
-  pro:     { monthly: 15, yearly: 120, currency: 'GBP' },
+  starter: { monthly: 0, yearly: 0, currency: 'GBP' },
+  pro: { monthly: 15, yearly: 120, currency: 'GBP' },
 };
 const PLAN_FEATURES = {
   starter: ['Dashboard', 'New Scan (web pentest)', 'Settings & API keys'],
-  pro:     ['Everything in Starter', 'Code Scan (multi-LLM war room)', 'Unlimited code scans', 'Findings + patches + report'],
+  pro: [
+    'Everything in Starter',
+    'Code Scan (multi-LLM war room)',
+    'Unlimited code scans',
+    'Findings + patches + report',
+  ],
 };
 
 // loadUsers / saveUsers now provided by db.mjs (Supabase or JSON-file backend).
 function findUserByEmail(email) {
   const users = loadUsers();
-  return Object.values(users).find(u => u.email === String(email || '').toLowerCase()) || null;
+  return Object.values(users).find((u) => u.email === String(email || '').toLowerCase()) || null;
 }
 function hashPassword(pwd, salt) {
   const s = salt || _crypto.randomBytes(16).toString('hex');
@@ -73,7 +80,11 @@ function hashPassword(pwd, salt) {
 }
 function verifyPassword(pwd, hash, salt) {
   const { hash: h } = hashPassword(pwd, salt);
-  try { return _crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(hash, 'hex')); } catch { return false; }
+  try {
+    return _crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(hash, 'hex'));
+  } catch {
+    return false;
+  }
 }
 function signSession(userId) {
   const payload = JSON.stringify({ uid: userId, iat: Date.now() });
@@ -91,7 +102,9 @@ function verifySession(token) {
     const payload = JSON.parse(Buffer.from(b64, 'base64url').toString());
     if (Date.now() - payload.iat > SESSION_TTL_DAYS * 86400_000) return null;
     return payload;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 function parseCookies(req) {
   const c = req.headers.cookie || '';
@@ -104,7 +117,10 @@ function parseCookies(req) {
 }
 function setSessionCookie(res, userId) {
   const token = signSession(userId);
-  res.setHeader('Set-Cookie', `shannon_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}`);
+  res.setHeader(
+    'Set-Cookie',
+    `shannon_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}`,
+  );
 }
 function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', 'shannon_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
@@ -118,13 +134,18 @@ function getUser(req) {
 function publicUser(u) {
   if (!u) return null;
   return {
-    id: u.id, email: u.email, name: u.name, picture: u.picture || null,
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    picture: u.picture || null,
     googleLinked: !!u.googleId,
     subscription: u.subscription || null,
     createdAt: u.createdAt,
   };
 }
-function todayKey() { return new Date().toISOString().slice(0, 10); }
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 // --- Routes
 app.get('/api/auth/me', (req, res) => {
@@ -137,11 +158,14 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 app.post('/api/auth/signup', (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase();
   const password = String(req.body?.password || '');
   const name = String(req.body?.name || '').trim() || email.split('@')[0];
   // Terms + Privacy consent — required for legal record.
-  if (!req.body?.acceptedTerms) return res.status(400).json({ error: 'You must accept the Terms of Service and Privacy Policy.' });
+  if (!req.body?.acceptedTerms)
+    return res.status(400).json({ error: 'You must accept the Terms of Service and Privacy Policy.' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (findUserByEmail(email)) return res.status(409).json({ error: 'An account with that email already exists.' });
@@ -150,7 +174,11 @@ app.post('/api/auth/signup', (req, res) => {
   const { hash, salt } = hashPassword(password);
   const acceptedAt = Number(req.body?.acceptedAt) || Date.now();
   users[id] = {
-    id, email, name, passwordHash: hash, salt,
+    id,
+    email,
+    name,
+    passwordHash: hash,
+    salt,
     createdAt: Date.now(),
     subscription: null,
     // Legal consent record — captured at signup time per UK GDPR Art. 7(1).
@@ -168,7 +196,9 @@ app.post('/api/auth/signup', (req, res) => {
 });
 
 app.post('/api/auth/login', (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase();
   const password = String(req.body?.password || '');
   const u = findUserByEmail(email);
   if (!u || !u.passwordHash || !verifyPassword(password, u.passwordHash, u.salt)) {
@@ -178,17 +208,31 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ ok: true, user: publicUser(u) });
 });
 
-app.post('/api/auth/logout', (req, res) => { clearSessionCookie(res); res.json({ ok: true }); });
+app.post('/api/auth/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
 
 // Google OAuth — requires GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env vars
 app.get('/auth/google', (req, res) => {
   const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) return res.status(500).send('Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars before restarting the server.');
+  if (!clientId)
+    return res
+      .status(500)
+      .send(
+        'Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars before restarting the server.',
+      );
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/google/callback`;
-  const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-    client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
-    scope: 'openid email profile', access_type: 'online', prompt: 'select_account',
-  });
+  const url =
+    'https://accounts.google.com/o/oauth2/v2/auth?' +
+    new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'openid email profile',
+      access_type: 'online',
+      prompt: 'select_account',
+    });
   res.redirect(url);
 });
 
@@ -203,18 +247,34 @@ app.get('/auth/google/callback', async (req, res) => {
     const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ code: String(code), client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' }),
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
     });
     const td = await tokenResp.json();
     if (!tokenResp.ok) throw new Error(td.error_description || td.error || 'token exchange failed');
-    const userResp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { authorization: 'Bearer ' + td.access_token } });
+    const userResp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { authorization: 'Bearer ' + td.access_token },
+    });
     const profile = await userResp.json();
     if (!userResp.ok || !profile.email) throw new Error('userinfo failed');
     const users = loadUsers();
-    let user = Object.values(users).find(u => u.googleId === profile.sub) || findUserByEmail(profile.email);
+    let user = Object.values(users).find((u) => u.googleId === profile.sub) || findUserByEmail(profile.email);
     if (!user) {
       const id = _crypto.randomBytes(8).toString('hex');
-      user = { id, email: profile.email.toLowerCase(), name: profile.name || profile.email, picture: profile.picture || null, googleId: profile.sub, createdAt: Date.now(), subscription: null };
+      user = {
+        id,
+        email: profile.email.toLowerCase(),
+        name: profile.name || profile.email,
+        picture: profile.picture || null,
+        googleId: profile.sub,
+        createdAt: Date.now(),
+        subscription: null,
+      };
       users[id] = user;
     } else {
       if (!user.googleId) user.googleId = profile.sub;
@@ -237,18 +297,18 @@ app.post('/api/auth/subscribe', (req, res) => {
   if (!PLAN_LIMITS.hasOwnProperty(plan)) return res.status(400).json({ error: 'Invalid plan.' });
   const users = loadUsers();
   const pricing = PLAN_PRICING[plan];
-  const renewsAt = plan === 'starter'
-    ? null
-    : Date.now() + (cycle === 'yearly' ? 365 : 30) * 86400_000;
+  const renewsAt = plan === 'starter' ? null : Date.now() + (cycle === 'yearly' ? 365 : 30) * 86400_000;
   users[u.id].subscription = {
-    plan, label: PLAN_LABELS[plan],
+    plan,
+    label: PLAN_LABELS[plan],
     dailyLimit: PLAN_LIMITS[plan],
     cycle,
     priceGbp: pricing[cycle],
     currency: pricing.currency,
     startedAt: Date.now(),
     renewsAt,
-    used: 0, day: todayKey(),
+    used: 0,
+    day: todayKey(),
   };
   saveUsers(users);
   res.json({ ok: true, user: publicUser(users[u.id]) });
@@ -256,7 +316,7 @@ app.post('/api/auth/subscribe', (req, res) => {
 
 app.get('/api/auth/plans', (_req, res) => {
   res.json({
-    plans: Object.keys(PLAN_LIMITS).map(p => ({
+    plans: Object.keys(PLAN_LIMITS).map((p) => ({
       plan: p,
       label: PLAN_LABELS[p],
       pricing: PLAN_PRICING[p],
@@ -296,12 +356,19 @@ function csSession(req) {
   const u = getUser(req);
   if (u) {
     return {
-      isOwner: false, userId: u.id, user: u,
-      plan: 'free', label: 'Free',
-      dailyLimit: -1, used: 0,
+      isOwner: false,
+      userId: u.id,
+      user: u,
+      plan: 'free',
+      label: 'Free',
+      dailyLimit: -1,
+      used: 0,
     };
   }
-  if (CS_OWNER_USAGE.day !== csToday()) { CS_OWNER_USAGE.day = csToday(); CS_OWNER_USAGE.used = 0; }
+  if (CS_OWNER_USAGE.day !== csToday()) {
+    CS_OWNER_USAGE.day = csToday();
+    CS_OWNER_USAGE.used = 0;
+  }
   return { isOwner: true, plan: 'free', label: 'Free', dailyLimit: -1, used: CS_OWNER_USAGE.used };
 }
 function csIncrementUserUsage(userId) {
@@ -357,8 +424,10 @@ app.get('/api/code-scan/me', (req, res) => {
     authed: !!u,
     user: publicUser(u),
     isOwner: s.isOwner,
-    plan: s.plan, label: s.label,
-    used: s.used, dailyLimit: s.dailyLimit,
+    plan: s.plan,
+    label: s.label,
+    used: s.used,
+    dailyLimit: s.dailyLimit,
   });
 });
 
@@ -373,14 +442,14 @@ app.get('/api/code-scan/me', (req, res) => {
 //   Google:    Gemini 2.5 Pro
 //   Zhipu:     GLM-4-Plus  (latest stable)
 const CS_PROVIDERS = {
-  claude: { label: 'Claude Opus 4.7',  short: 'C', color: '#e26847', model: 'claude-opus-4-7',  base: 96 },
-  openai: { label: 'GPT-5',            short: 'G', color: '#10a37f', model: 'gpt-5',            base: 94 },
-  gemini: { label: 'Gemini 2.5 Pro',   short: 'g', color: '#5b94c4', model: 'gemini-2.5-pro',   base: 90 },
-  glm:    { label: 'GLM-4-Plus',       short: 'Z', color: '#88b3a8', model: 'glm-4-plus',       base: 80 },
+  claude: { label: 'Claude Opus 4.7', short: 'C', color: '#e26847', model: 'claude-opus-4-7', base: 96 },
+  openai: { label: 'GPT-5', short: 'G', color: '#10a37f', model: 'gpt-5', base: 94 },
+  gemini: { label: 'Gemini 2.5 Pro', short: 'g', color: '#5b94c4', model: 'gemini-2.5-pro', base: 90 },
+  glm: { label: 'GLM-4-Plus', short: 'Z', color: '#88b3a8', model: 'glm-4-plus', base: 80 },
 };
 const CS_ROLES = [
-  { id: 'r1', team: 'red',  name: 'Red Lead' },
-  { id: 'r2', team: 'red',  name: 'Red Operator' },
+  { id: 'r1', team: 'red', name: 'Red Lead' },
+  { id: 'r2', team: 'red', name: 'Red Operator' },
   { id: 'b1', team: 'blue', name: 'Blue Architect' },
   { id: 'b2', team: 'blue', name: 'Blue Engineer' },
 ];
@@ -408,20 +477,20 @@ function csUpdateLeaderboard(p, deltaScore, ms, chars, opts = {}) {
 // Score a single turn's output (no fallback bonus, length & success bonus, errors penalised)
 function csQualityDelta(text, fallback, errored) {
   if (errored) return -8;
-  if (fallback) return -4;  // didn't run on the agent's native provider
+  if (fallback) return -4; // didn't run on the agent's native provider
   const len = (text || '').length;
-  let q = 0.4;              // base credit for completing the turn
+  let q = 0.4; // base credit for completing the turn
   if (len > 200) q += 0.4;
   if (len > 800) q += 0.6;
   if (len > 2000) q += 0.6;
-  return Math.min(2.0, q);  // cap per-turn delta
+  return Math.min(2.0, q); // cap per-turn delta
 }
 
 // Auto-pick agents from the provider keys the user supplied, ranked by leaderboard score.
 // Top score → Red Lead, then Red Operator, Blue Architect, Blue Engineer.
 function csPickAgents(keys) {
   // Provider is "available" if it has its own key, OR is claude (which is always the fallback).
-  const eligible = Object.keys(CS_PROVIDERS).filter(p => p === 'claude' ? !!keys?.claude : !!keys?.[p]);
+  const eligible = Object.keys(CS_PROVIDERS).filter((p) => (p === 'claude' ? !!keys?.claude : !!keys?.[p]));
   if (!eligible.includes('claude')) eligible.unshift('claude'); // claude must be present as fallback
   const ranked = [...eligible].sort((a, b) => csProviderScore(b) - csProviderScore(a));
   // Build a pool of 4 (repeat top providers if fewer than 4 keys are available)
@@ -443,13 +512,13 @@ function csPickAgents(keys) {
 }
 
 const CS_PHASES = [
-  { id: 'red-recon',  agentId: 'r1', step: 'Red Lead surveys the attack surface' },
-  { id: 'red-cross',  agentId: 'r2', step: 'Red Operator cross-checks findings, adds new vectors' },
-  { id: 'blue-defend',agentId: 'b1', step: 'Blue Architect drafts patches' },
-  { id: 'blue-harden',agentId: 'b2', step: 'Blue Engineer hardens patches' },
+  { id: 'red-recon', agentId: 'r1', step: 'Red Lead surveys the attack surface' },
+  { id: 'red-cross', agentId: 'r2', step: 'Red Operator cross-checks findings, adds new vectors' },
+  { id: 'blue-defend', agentId: 'b1', step: 'Blue Architect drafts patches' },
+  { id: 'blue-harden', agentId: 'b2', step: 'Blue Engineer hardens patches' },
   { id: 'red-bypass', agentId: 'r1', step: 'Red Lead probes for patch bypasses' },
   { id: 'blue-final', agentId: 'b1', step: 'Blue Architect addresses bypasses' },
-  { id: 'synth',      agentId: 'b2', step: 'Synthesize fixed code & full report' },
+  { id: 'synth', agentId: 'b2', step: 'Synthesize fixed code & full report' },
 ];
 
 async function csCallProvider(provider, model, system, user, keys, maxTokens) {
@@ -466,17 +535,24 @@ async function csCallProvider(provider, model, system, user, keys, maxTokens) {
       system,
       messages: [{ role: 'user', content: user }],
     });
-    return (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    return (resp.content || [])
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
   }
   if (provider === 'openai') {
     if (!keys?.openai) throw new Error('No OpenAI key supplied');
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: { 'authorization': 'Bearer ' + keys.openai, 'content-type': 'application/json' },
+      headers: { authorization: 'Bearer ' + keys.openai, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: model || 'gpt-5',
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        max_tokens: mt, temperature: 0.4,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        max_tokens: mt,
+        temperature: 0.4,
       }),
     });
     const j = await r.json();
@@ -486,28 +562,35 @@ async function csCallProvider(provider, model, system, user, keys, maxTokens) {
   if (provider === 'gemini') {
     if (!keys?.gemini) throw new Error('No Gemini key supplied');
     const m = model || 'gemini-2.5-pro';
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(keys.gemini)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { maxOutputTokens: mt, temperature: 0.4 },
-      }),
-    });
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(keys.gemini)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: 'user', parts: [{ text: user }] }],
+          generationConfig: { maxOutputTokens: mt, temperature: 0.4 },
+        }),
+      },
+    );
     const j = await r.json();
     if (!r.ok) throw new Error(j.error?.message || `Gemini HTTP ${r.status}`);
-    return j.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+    return j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
   }
   if (provider === 'glm') {
     if (!keys?.glm) throw new Error('No GLM key supplied');
     const r = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
       method: 'POST',
-      headers: { 'authorization': 'Bearer ' + keys.glm, 'content-type': 'application/json' },
+      headers: { authorization: 'Bearer ' + keys.glm, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: model || 'glm-4-plus',
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        max_tokens: mt, temperature: 0.4,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        max_tokens: mt,
+        temperature: 0.4,
       }),
     });
     const j = await r.json();
@@ -523,7 +606,9 @@ async function csCallAgent(agent, system, user, keys, maxTokens) {
     return { text, fallback: false };
   } catch (err) {
     if (agent.provider === 'claude') throw err;
-    const fbSystem = system + `\n\n[FALLBACK ROLEPLAY: The "${agent.label}" provider failed (${err.message}). Continue in-character as ${agent.label} but execute on Anthropic.]`;
+    const fbSystem =
+      system +
+      `\n\n[FALLBACK ROLEPLAY: The "${agent.label}" provider failed (${err.message}). Continue in-character as ${agent.label} but execute on Anthropic.]`;
     const text = await csCallProvider('claude', null, fbSystem, user, keys, maxTokens);
     return { text, fallback: true, fallbackReason: err.message };
   }
@@ -531,9 +616,10 @@ async function csCallAgent(agent, system, user, keys, maxTokens) {
 
 function csBuildSystem(agent, phase, isFinalSynth) {
   const role = agent.team === 'red' ? 'OFFENSIVE security researcher' : 'DEFENSIVE security engineer';
-  const teamGoal = agent.team === 'red'
-    ? 'Red Team — find every flaw and produce concrete exploits'
-    : 'Blue Team — patch every flaw without breaking original behavior';
+  const teamGoal =
+    agent.team === 'red'
+      ? 'Red Team — find every flaw and produce concrete exploits'
+      : 'Blue Team — patch every flaw without breaking original behavior';
   let txt = `You are ${agent.label}, an ${role} in a multi-agent code-security war room. Your team: ${teamGoal}.
 
 You will see a running transcript of every other agent's contribution. Address peers by name. Build on or critique their work — DO NOT repeat what others have said.
@@ -603,7 +689,8 @@ function csParseSynthesis(text) {
   }
   if (!body) {
     // No fence at all — try to pull the outermost JSON object from the raw text.
-    const s = text.indexOf('{'), e = text.lastIndexOf('}');
+    const s = text.indexOf('{'),
+      e = text.lastIndexOf('}');
     if (s >= 0 && e > s) body = text.slice(s, e + 1);
     else body = text;
   }
@@ -612,7 +699,9 @@ function csParseSynthesis(text) {
   try {
     const obj = JSON.parse(body);
     return obj;
-  } catch { /* fall through to salvage */ }
+  } catch {
+    /* fall through to salvage */
+  }
 
   // Strategy 2b: trim from the last balanced } and try again.
   const lastBrace = body.lastIndexOf('}');
@@ -620,7 +709,9 @@ function csParseSynthesis(text) {
     try {
       const obj = JSON.parse(body.slice(0, lastBrace + 1));
       return obj;
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
   }
 
   // Strategy 3: salvage individual fields with string-level extraction.
@@ -676,7 +767,12 @@ function csExtractStringField(text, fieldName) {
       else if (n === 'b') out += '\b';
       else if (n === 'f') out += '\f';
       else if (n === 'u' && i + 5 < text.length) {
-        try { out += String.fromCharCode(parseInt(text.slice(i + 2, i + 6), 16)); i += 4; } catch { out += n; }
+        try {
+          out += String.fromCharCode(parseInt(text.slice(i + 2, i + 6), 16));
+          i += 4;
+        } catch {
+          out += n;
+        }
       } else out += n;
       i += 2;
     } else if (c === '"') {
@@ -702,19 +798,41 @@ function csExtractFindingsArray(text) {
     if (text[i] === ']' || i >= text.length) break;
     if (text[i] !== '{') break;
     // Find matching closing brace, respecting strings + escapes.
-    let depth = 0, j = i, inStr = false, escNext = false;
+    let depth = 0,
+      j = i,
+      inStr = false,
+      escNext = false;
     for (; j < text.length; j++) {
       const c = text[j];
-      if (escNext) { escNext = false; continue; }
-      if (c === '\\') { escNext = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
+      if (escNext) {
+        escNext = false;
+        continue;
+      }
+      if (c === '\\') {
+        escNext = true;
+        continue;
+      }
+      if (c === '"') {
+        inStr = !inStr;
+        continue;
+      }
       if (inStr) continue;
       if (c === '{') depth++;
-      else if (c === '}') { depth--; if (depth === 0) { j++; break; } }
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) {
+          j++;
+          break;
+        }
+      }
     }
     if (depth !== 0) break; // truncated — stop salvaging
     const raw = text.slice(i, j);
-    try { out.push(JSON.parse(raw)); } catch { /* skip malformed finding */ }
+    try {
+      out.push(JSON.parse(raw));
+    } catch {
+      /* skip malformed finding */
+    }
     i = j;
   }
   return out;
@@ -722,15 +840,25 @@ function csExtractFindingsArray(text) {
 
 const csRuns = new Map();
 const CS_RUN_TTL_MS = 30 * 60 * 1000;
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, r] of csRuns) if (r.endedAt && now - r.endedAt > CS_RUN_TTL_MS) csRuns.delete(k);
-}, 5 * 60 * 1000).unref?.();
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [k, r] of csRuns) if (r.endedAt && now - r.endedAt > CS_RUN_TTL_MS) csRuns.delete(k);
+  },
+  5 * 60 * 1000,
+).unref?.();
 
 function csBc(run, ev) {
   run.events.push(ev);
   const msg = `data: ${JSON.stringify(ev)}\n\n`;
-  run.sseClients = run.sseClients.filter(c => { try { c.write(msg); return true; } catch { return false; } });
+  run.sseClients = run.sseClients.filter((c) => {
+    try {
+      c.write(msg);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 async function csOrchestrate(runId) {
@@ -742,19 +870,39 @@ async function csOrchestrate(runId) {
 
   csBc(run, { type: 'agents', agents });
   csBc(run, { type: 'phases', phases: CS_PHASES });
-  csBc(run, { type: 'lineup', summary: agents.map(a => `${a.name}: ${CS_PROVIDERS[a.provider].label} (score ${a.score.toFixed(1)})`).join(' · ') });
+  csBc(run, {
+    type: 'lineup',
+    summary: agents
+      .map((a) => `${a.name}: ${CS_PROVIDERS[a.provider].label} (score ${a.score.toFixed(1)})`)
+      .join(' · '),
+  });
 
   for (let i = 0; i < CS_PHASES.length; i++) {
-    if (run.cancelled) { csBc(run, { type: 'cancelled' }); break; }
+    if (run.cancelled) {
+      csBc(run, { type: 'cancelled' });
+      break;
+    }
     const phase = CS_PHASES[i];
-    const agent = agents.find(a => a.id === phase.agentId);
+    const agent = agents.find((a) => a.id === phase.agentId);
     const isFinalSynth = i === CS_PHASES.length - 1;
-    csBc(run, { type: 'phase-start', phaseIndex: i, phaseId: phase.id, agentId: agent.id, label: agent.label, team: agent.team, step: phase.step, provider: agent.provider });
+    csBc(run, {
+      type: 'phase-start',
+      phaseIndex: i,
+      phaseId: phase.id,
+      agentId: agent.id,
+      label: agent.label,
+      team: agent.team,
+      step: phase.step,
+      provider: agent.provider,
+    });
 
     const sys = csBuildSystem(agent, phase, isFinalSynth);
     const user = csBuildUser(run.code, run.filename, run.transcript, phase, isFinalSynth);
 
-    let text = '', fallback = false, fbReason, errored = false;
+    let text = '',
+      fallback = false,
+      fbReason,
+      errored = false;
     const t0 = Date.now();
     // The synthesis turn carries the full fixed source code + markdown report, so it
     // needs a much larger output budget than the analytical turns. 16k keeps us safe
@@ -762,7 +910,9 @@ async function csOrchestrate(runId) {
     const maxTokens = isFinalSynth ? 16000 : 4000;
     try {
       const r = await csCallAgent(agent, sys, user, keys, maxTokens);
-      text = r.text; fallback = r.fallback; fbReason = r.fallbackReason;
+      text = r.text;
+      fallback = r.fallback;
+      fbReason = r.fallbackReason;
     } catch (err) {
       errored = true;
       // Penalise the provider that failed and abort the run
@@ -780,9 +930,19 @@ async function csOrchestrate(runId) {
     csUpdateLeaderboard(realProvider, csQualityDelta(text, fallback, errored), dt, text.length);
 
     const turn = {
-      phaseIndex: i, phaseId: phase.id, agentId: agent.id, label: agent.label, team: agent.team,
-      step: phase.step, text, fallback, fallbackReason: fbReason, provider: agent.provider, realProvider,
-      ms: dt, ts: Date.now(),
+      phaseIndex: i,
+      phaseId: phase.id,
+      agentId: agent.id,
+      label: agent.label,
+      team: agent.team,
+      step: phase.step,
+      text,
+      fallback,
+      fallbackReason: fbReason,
+      provider: agent.provider,
+      realProvider,
+      ms: dt,
+      ts: Date.now(),
     };
     run.transcript.push(turn);
     csBc(run, { type: 'turn', ...turn });
@@ -816,7 +976,8 @@ app.post('/api/code-scan/multi/start', (req, res) => {
   }
   const { code, filename, keys: bodyKeys } = req.body || {};
   if (!code || typeof code !== 'string') return res.status(400).json({ ok: false, error: 'Provide source code.' });
-  if (code.length > 1_000_000) return res.status(413).json({ ok: false, error: 'Code exceeds 1MB. Try splitting it into smaller files.' });
+  if (code.length > 1_000_000)
+    return res.status(413).json({ ok: false, error: 'Code exceeds 1MB. Try splitting it into smaller files.' });
 
   // Browser-supplied keys are the source of truth. Server settings file & env are LEGACY fallbacks only.
   const legacy = loadSettings();
@@ -824,20 +985,35 @@ app.post('/api/code-scan/multi/start', (req, res) => {
     claude: bodyKeys?.claude || legacy.apiKey || process.env.ANTHROPIC_API_KEY || '',
     openai: bodyKeys?.openai || legacy.openaiKey || '',
     gemini: bodyKeys?.gemini || legacy.geminiKey || '',
-    glm:    bodyKeys?.glm    || legacy.glmKey    || '',
+    glm: bodyKeys?.glm || legacy.glmKey || '',
   };
   if (!keys.claude) {
-    return res.status(400).json({ ok: false, error: 'Anthropic key required. Add it in Settings → War-Room Provider Keys (stored only in your browser).' });
+    return res
+      .status(400)
+      .json({
+        ok: false,
+        error: 'Anthropic key required. Add it in Settings → War-Room Provider Keys (stored only in your browser).',
+      });
   }
 
   const runId = randomUUID().slice(0, 8);
   const sessForRun = session.isOwner ? { isOwner: true } : { isOwner: false, userId: session.userId };
 
   const run = {
-    id: runId, code, filename: filename || null, keys,
-    transcript: [], events: [], sseClients: [], agents: [],
-    status: 'running', result: null, cancelled: false,
-    startedAt: Date.now(), endedAt: null, session: sessForRun,
+    id: runId,
+    code,
+    filename: filename || null,
+    keys,
+    transcript: [],
+    events: [],
+    sseClients: [],
+    agents: [],
+    status: 'running',
+    result: null,
+    cancelled: false,
+    startedAt: Date.now(),
+    endedAt: null,
+    session: sessForRun,
   };
   csRuns.set(runId, run);
 
@@ -845,7 +1021,7 @@ app.post('/api/code-scan/multi/start', (req, res) => {
   const lineup = csPickAgents(keys);
   run.agents = lineup;
 
-  csOrchestrate(runId).catch(err => {
+  csOrchestrate(runId).catch((err) => {
     run.status = 'failed';
     run.error = err.message;
     run.endedAt = Date.now();
@@ -858,11 +1034,13 @@ app.post('/api/code-scan/multi/start', (req, res) => {
 app.get('/api/code-scan/multi/:id/events', (req, res) => {
   const run = csRuns.get(req.params.id);
   if (!run) return res.status(404).json({ ok: false, error: 'Run not found' });
-  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   for (const ev of run.events) res.write(`data: ${JSON.stringify(ev)}\n\n`);
   if (run.status === 'running') {
     run.sseClients.push(res);
-    req.on('close', () => { run.sseClients = run.sseClients.filter(c => c !== res); });
+    req.on('close', () => {
+      run.sseClients = run.sseClients.filter((c) => c !== res);
+    });
   } else {
     res.end();
   }
@@ -871,7 +1049,15 @@ app.get('/api/code-scan/multi/:id/events', (req, res) => {
 app.get('/api/code-scan/multi/:id/result', (req, res) => {
   const run = csRuns.get(req.params.id);
   if (!run) return res.status(404).json({ ok: false, error: 'Run not found' });
-  res.json({ ok: true, status: run.status, transcript: run.transcript, result: run.result, error: run.error, agents: run.agents || [], phases: CS_PHASES });
+  res.json({
+    ok: true,
+    status: run.status,
+    transcript: run.transcript,
+    result: run.result,
+    error: run.error,
+    agents: run.agents || [],
+    phases: CS_PHASES,
+  });
 });
 
 app.post('/api/code-scan/multi/:id/cancel', (req, res) => {
@@ -914,10 +1100,19 @@ function extractJsonFence(text) {
   if (!text) return null;
   const fence = text.match(/```(?:json)?\s*([\s\S]+?)\s*```/);
   const raw = fence ? fence[1] : text;
-  try { return JSON.parse(raw); } catch { /* try first { ... last } */ }
-  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
+  try {
+    return JSON.parse(raw);
+  } catch {
+    /* try first { ... last } */
+  }
+  const start = raw.indexOf('{'),
+    end = raw.lastIndexOf('}');
   if (start >= 0 && end > start) {
-    try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      return null;
+    }
   }
   return null;
 }
@@ -932,7 +1127,10 @@ async function quickScanFile({ apiKey, code, filename }) {
     system: QUICK_SYSTEM,
     messages: [{ role: 'user', content: userPrompt }],
   });
-  const text = (r.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+  const text = (r.content || [])
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n');
   const parsed = extractJsonFence(text);
   if (!parsed) return { ok: false, error: 'Failed to parse model output', raw: text };
   return { ok: true, result: parsed };
@@ -964,19 +1162,21 @@ app.post('/api/code-scan/quick', async (req, res) => {
 // Provider performance leaderboard — drives the auto-pick and lets the user see who's winning.
 app.get('/api/code-scan/leaderboard', (req, res) => {
   const lb = csLoadLeaderboard();
-  const rows = Object.keys(CS_PROVIDERS).map(p => ({
-    provider: p,
-    label: CS_PROVIDERS[p].label,
-    color: CS_PROVIDERS[p].color,
-    short: CS_PROVIDERS[p].short,
-    score: lb[p]?.score ?? CS_PROVIDERS[p].base,
-    base: CS_PROVIDERS[p].base,
-    runs: lb[p]?.runs ?? 0,
-    wins: lb[p]?.wins ?? 0,
-    avgMs: lb[p]?.runs ? Math.round(lb[p].totalMs / lb[p].runs) : 0,
-    avgChars: lb[p]?.runs ? Math.round(lb[p].totalChars / lb[p].runs) : 0,
-    lastRun: lb[p]?.lastRun ?? null,
-  })).sort((a, b) => b.score - a.score);
+  const rows = Object.keys(CS_PROVIDERS)
+    .map((p) => ({
+      provider: p,
+      label: CS_PROVIDERS[p].label,
+      color: CS_PROVIDERS[p].color,
+      short: CS_PROVIDERS[p].short,
+      score: lb[p]?.score ?? CS_PROVIDERS[p].base,
+      base: CS_PROVIDERS[p].base,
+      runs: lb[p]?.runs ?? 0,
+      wins: lb[p]?.wins ?? 0,
+      avgMs: lb[p]?.runs ? Math.round(lb[p].totalMs / lb[p].runs) : 0,
+      avgChars: lb[p]?.runs ? Math.round(lb[p].totalChars / lb[p].runs) : 0,
+      lastRun: lb[p]?.lastRun ?? null,
+    }))
+    .sort((a, b) => b.score - a.score);
   res.json({ ok: true, leaderboard: rows, totalRuns: rows.reduce((a, r) => a + r.runs, 0) });
 });
 
@@ -988,9 +1188,16 @@ app.post('/api/code-scan/leaderboard/reset', (req, res) => {
 // ---- Settings persistence ----
 function loadSettings() {
   if (existsSync(SETTINGS_PATH)) {
-    try { return JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8')); } catch { }
+    try {
+      return JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
+    } catch {}
   }
-  return { apiKey: process.env.ANTHROPIC_API_KEY || '', model: process.env.SHANNON_MODEL || 'claude-opus-4-7', provider: 'anthropic', baseUrl: '' };
+  return {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.SHANNON_MODEL || 'claude-opus-4-7',
+    provider: 'anthropic',
+    baseUrl: '',
+  };
 }
 
 // Sensitive provider keys MUST NOT be persisted on the server; the browser holds them.
@@ -1032,8 +1239,11 @@ app.post('/api/settings', (req, res) => {
 app.get('/api/scans', (req, res) => {
   if (!existsSync(WORKSPACES)) return res.json([]);
   const scans = readdirSync(WORKSPACES)
-    .filter(d => { const p = join(WORKSPACES, d); return statSync(p).isDirectory() && existsSync(join(p, 'session.json')); })
-    .map(d => {
+    .filter((d) => {
+      const p = join(WORKSPACES, d);
+      return statSync(p).isDirectory() && existsSync(join(p, 'session.json'));
+    })
+    .map((d) => {
       const session = JSON.parse(readFileSync(join(WORKSPACES, d, 'session.json'), 'utf-8'));
       return {
         id: d,
@@ -1054,12 +1264,21 @@ app.get('/api/scans', (req, res) => {
 app.get('/api/scans/:id', (req, res) => {
   const wsDir = join(WORKSPACES, req.params.id);
   if (!existsSync(wsDir)) return res.status(404).json({ error: 'Scan not found' });
-  const session = existsSync(join(wsDir, 'session.json')) ? JSON.parse(readFileSync(join(wsDir, 'session.json'), 'utf-8')) : {};
-  const rd = rel => { const p = join(wsDir, rel); return existsSync(p) ? readFileSync(p, 'utf-8') : null; };
+  const session = existsSync(join(wsDir, 'session.json'))
+    ? JSON.parse(readFileSync(join(wsDir, 'session.json'), 'utf-8'))
+    : {};
+  const rd = (rel) => {
+    const p = join(wsDir, rel);
+    return existsSync(p) ? readFileSync(p, 'utf-8') : null;
+  };
   const files = {
-    report: rd('report.md'), preRecon: rd('pre-recon/analysis.md'), recon: rd('recon/exploration.md'),
-    httpProbe: rd('pre-recon/http-probe.txt'), chainAnalysis: rd('chain-analysis/analysis.md'),
-    warRoom: rd('war-room/transcript.md'), forensicManifest: rd('forensic-package/manifest.json'),
+    report: rd('report.md'),
+    preRecon: rd('pre-recon/analysis.md'),
+    recon: rd('recon/exploration.md'),
+    httpProbe: rd('pre-recon/http-probe.txt'),
+    chainAnalysis: rd('chain-analysis/analysis.md'),
+    warRoom: rd('war-room/transcript.md'),
+    forensicManifest: rd('forensic-package/manifest.json'),
     custody: rd('forensic-package/chain-of-custody.md'),
     redTeamSummary: rd('red-team/summary.md'),
     blueTeam: rd('blue-team/defense-assessment.md'),
@@ -1067,11 +1286,35 @@ app.get('/api/scans/:id', (req, res) => {
     purpleConclusion: rd('purple-team/conclusion.md'),
     exploitVerify: rd('exploit-verify/verification.md'),
     securityHeaders: rd('pre-recon/security-headers.json'),
-    vulns: {}, exploits: {},
+    vulns: {},
+    exploits: {},
+    queues: {},
   };
-  for (const cat of ['sqli', 'xss', 'auth-bypass', 'authz-bypass', 'ssrf', 'business-logic', 'misconfig', 'info-disclosure']) {
+  const rj = (rel) => {
+    const raw = rd(rel);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+  for (const cat of [
+    'sqli',
+    'xss',
+    'auth-bypass',
+    'authz-bypass',
+    'ssrf',
+    'business-logic',
+    'misconfig',
+    'info-disclosure',
+  ]) {
     files.vulns[cat] = rd(`vuln/${cat}/analysis.md`);
     files.exploits[cat] = rd(`exploit/${cat}/exploit-report.md`);
+    // Structured findings (each tagged CONFIRMED/LIKELY/THEORETICAL) are the source of truth
+    // for scoring. The prose analysis.md embeds the severity rubric ("Critical / High / ...")
+    // verbatim, so keyword-scanning it falsely flags every category that ran as critical.
+    files.queues[cat] = rj(`vuln/${cat}/exploitation-queue.json`);
   }
   res.json({ session, files });
 });
@@ -1085,7 +1328,13 @@ app.get('/api/scans/:id', (req, res) => {
 app.get('/api/scans/:id/broker', (req, res) => {
   const brokerDir = join(WORKSPACES, req.params.id, 'broker');
   if (!existsSync(brokerDir)) return res.json({ findings: [], rows: [], owaspCoverage: {}, cweCoverage: {} });
-  const rj = p => { try { return existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : null; } catch { return null; } };
+  const rj = (p) => {
+    try {
+      return existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : null;
+    } catch {
+      return null;
+    }
+  };
 
   const findings = [];
   const rows = [];
@@ -1099,7 +1348,8 @@ app.get('/api/scans/:id/broker', (req, res) => {
     const compliance = rj(join(catDir, 'compliance.json'));
     if (compliance) {
       for (const r of compliance.rows || []) rows.push(r);
-      for (const [k, n] of Object.entries(compliance.owaspCoverage || {})) owaspCoverage[k] = (owaspCoverage[k] || 0) + n;
+      for (const [k, n] of Object.entries(compliance.owaspCoverage || {}))
+        owaspCoverage[k] = (owaspCoverage[k] || 0) + n;
       for (const [k, n] of Object.entries(compliance.cweCoverage || {})) cweCoverage[k] = (cweCoverage[k] || 0) + n;
     }
   }
@@ -1109,17 +1359,42 @@ app.get('/api/scans/:id/broker', (req, res) => {
 
 // ---- API: Start scan ----
 app.post('/api/scans', (req, res) => {
-  const { targetUrl, authType, username, password, retryPreset, focusUrls, avoidUrls, apiKey: bodyKey, warRoom, providerKeys } = req.body;
+  const {
+    targetUrl,
+    authType,
+    username,
+    password,
+    retryPreset,
+    focusUrls,
+    avoidUrls,
+    apiKey: bodyKey,
+    warRoom,
+    providerKeys,
+  } = req.body;
   if (!targetUrl) return res.status(400).json({ error: 'Target URL is required' });
   const settings = loadSettings();
   // Browser-supplied key takes precedence; fall back to env or legacy file for backward compat.
   const apiKey = bodyKey || settings.apiKey || process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(400).json({ error: 'Anthropic API key required. Add it in Settings → API Keys (browser-only storage).' });
+  if (!apiKey)
+    return res
+      .status(400)
+      .json({ error: 'Anthropic API key required. Add it in Settings → API Keys (browser-only storage).' });
 
   const scanId = randomUUID().slice(0, 8);
-  const config = { target: { url: targetUrl, urls: {} }, pipeline: { retryPreset: retryPreset || 'fast', maxConcurrentPipelines: 3 } };
-  if (focusUrls) config.target.urls.focus = focusUrls.split(',').map(s => s.trim()).filter(Boolean);
-  if (avoidUrls) config.target.urls.avoid = avoidUrls.split(',').map(s => s.trim()).filter(Boolean);
+  const config = {
+    target: { url: targetUrl, urls: {} },
+    pipeline: { retryPreset: retryPreset || 'fast', maxConcurrentPipelines: 3 },
+  };
+  if (focusUrls)
+    config.target.urls.focus = focusUrls
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  if (avoidUrls)
+    config.target.urls.avoid = avoidUrls
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
   if (authType && authType !== 'none') {
     config.authentication = { type: authType };
     if (username) config.authentication.username = username;
@@ -1136,10 +1411,14 @@ app.post('/api/scans', (req, res) => {
     env.SHANNON_WAR_ROOM = '1';
     if (providerKeys?.openai) env.OPENAI_API_KEY = providerKeys.openai;
     if (providerKeys?.gemini) env.GOOGLE_API_KEY = providerKeys.gemini;
-    if (providerKeys?.glm)    env.ZHIPU_API_KEY  = providerKeys.glm;
+    if (providerKeys?.glm) env.ZHIPU_API_KEY = providerKeys.glm;
   }
 
-  const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], {
+    cwd: ROOT,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 
   const phasePatterns = [
     { re: /\[Phase 0\]/, id: 'http-recon', name: 'HTTP Recon' },
@@ -1154,7 +1433,15 @@ app.post('/api/scans', (req, res) => {
     { re: /\[Phase 9\]/, id: 'forensic', name: 'Forensic' },
   ];
 
-  const scan = { child, output: '', startedAt: new Date().toISOString(), target: targetUrl, phases: [], currentPhase: null, sseClients: [] };
+  const scan = {
+    child,
+    output: '',
+    startedAt: new Date().toISOString(),
+    target: targetUrl,
+    phases: [],
+    currentPhase: null,
+    sseClients: [],
+  };
   runningScans.set(scanId, scan);
 
   function process_(chunk) {
@@ -1162,7 +1449,10 @@ app.post('/api/scans', (req, res) => {
     const line = chunk.toString();
     for (const p of phasePatterns) {
       if (p.re.test(line)) {
-        if (scan.currentPhase) { scan.currentPhase.status = 'done'; scan.currentPhase.endedAt = Date.now(); }
+        if (scan.currentPhase) {
+          scan.currentPhase.status = 'done';
+          scan.currentPhase.endedAt = Date.now();
+        }
         scan.currentPhase = { id: p.id, name: p.name, status: 'running', startedAt: Date.now() };
         scan.phases.push(scan.currentPhase);
         bc(scan, { type: 'phase', phase: p.id, name: p.name, status: 'running' });
@@ -1171,9 +1461,16 @@ app.post('/api/scans', (req, res) => {
     if (/Done \(/.test(line) && scan.currentPhase?.status === 'running') {
       scan.currentPhase.status = 'done';
       scan.currentPhase.endedAt = Date.now();
-      const cm = line.match(/\$([0-9.]+)/); if (cm) scan.currentPhase.cost = parseFloat(cm[1]);
-      const tm = line.match(/(\d+\.?\d*)s/); if (tm) scan.currentPhase.duration = parseFloat(tm[1]);
-      bc(scan, { type: 'phase-done', phase: scan.currentPhase.id, cost: scan.currentPhase.cost, duration: scan.currentPhase.duration });
+      const cm = line.match(/\$([0-9.]+)/);
+      if (cm) scan.currentPhase.cost = parseFloat(cm[1]);
+      const tm = line.match(/(\d+\.?\d*)s/);
+      if (tm) scan.currentPhase.duration = parseFloat(tm[1]);
+      bc(scan, {
+        type: 'phase-done',
+        phase: scan.currentPhase.id,
+        cost: scan.currentPhase.cost,
+        duration: scan.currentPhase.duration,
+      });
     }
     if (/Scan Complete/.test(line)) bc(scan, { type: 'complete' });
     bc(scan, { type: 'output', line: line.trim() });
@@ -1181,12 +1478,19 @@ app.post('/api/scans', (req, res) => {
 
   function bc(scan, data) {
     const msg = `data: ${JSON.stringify(data)}\n\n`;
-    scan.sseClients = scan.sseClients.filter(c => { try { c.write(msg); return true; } catch { return false; } });
+    scan.sseClients = scan.sseClients.filter((c) => {
+      try {
+        c.write(msg);
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
 
-  child.stdout.on('data', d => process_(d));
-  child.stderr.on('data', d => process_(d));
-  child.on('close', code => {
+  child.stdout.on('data', (d) => process_(d));
+  child.stderr.on('data', (d) => process_(d));
+  child.on('close', (code) => {
     scan.status = code === 0 ? 'completed' : 'failed';
     bc(scan, { type: code === 0 ? 'complete' : 'failed' });
   });
@@ -1200,7 +1504,11 @@ app.post('/api/scans/:id/stop', (req, res) => {
   if (!scan) return res.status(404).json({ error: 'Scan not found or already finished' });
   try {
     scan.child.kill('SIGTERM');
-    setTimeout(() => { try { scan.child.kill('SIGKILL'); } catch {} }, 3000);
+    setTimeout(() => {
+      try {
+        scan.child.kill('SIGKILL');
+      } catch {}
+    }, 3000);
     scan.status = 'stopped';
     bc_ext(scan, { type: 'stopped' });
     res.json({ ok: true, message: 'Scan stopped' });
@@ -1232,13 +1540,26 @@ app.post('/api/scans/:id/mark-failed', (req, res) => {
 
 function bc_ext(scan, data) {
   const msg = `data: ${JSON.stringify(data)}\n\n`;
-  scan.sseClients = scan.sseClients.filter(c => { try { c.write(msg); return true; } catch { return false; } });
+  scan.sseClients = scan.sseClients.filter((c) => {
+    try {
+      c.write(msg);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 // ---- API: Live status ----
 app.get('/api/scans/:id/live', (req, res) => {
   const scan = runningScans.get(req.params.id);
-  if (scan) return res.json({ status: scan.status || 'running', output: scan.output, target: scan.target, phases: scan.phases });
+  if (scan)
+    return res.json({
+      status: scan.status || 'running',
+      output: scan.output,
+      target: scan.target,
+      phases: scan.phases,
+    });
   const wsDir = join(WORKSPACES, req.params.id);
   if (existsSync(join(wsDir, 'session.json'))) {
     const session = JSON.parse(readFileSync(join(wsDir, 'session.json'), 'utf-8'));
@@ -1253,11 +1574,18 @@ app.get('/api/scans/:id/events', (req, res) => {
   if (!scan) return res.status(404).json({ error: 'Not found' });
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   for (const phase of scan.phases) {
-    res.write(`data: ${JSON.stringify({ type: 'phase', phase: phase.id, name: phase.name, status: phase.status })}\n\n`);
-    if (phase.status === 'done') res.write(`data: ${JSON.stringify({ type: 'phase-done', phase: phase.id, cost: phase.cost, duration: phase.duration })}\n\n`);
+    res.write(
+      `data: ${JSON.stringify({ type: 'phase', phase: phase.id, name: phase.name, status: phase.status })}\n\n`,
+    );
+    if (phase.status === 'done')
+      res.write(
+        `data: ${JSON.stringify({ type: 'phase-done', phase: phase.id, cost: phase.cost, duration: phase.duration })}\n\n`,
+      );
   }
   scan.sseClients.push(res);
-  req.on('close', () => { scan.sseClients = scan.sseClients.filter(c => c !== res); });
+  req.on('close', () => {
+    scan.sseClients = scan.sseClients.filter((c) => c !== res);
+  });
 });
 
 // ---- API: Available models ----
@@ -1265,21 +1593,41 @@ app.get('/api/models', (req, res) => {
   // Latest available models as of May 2026.
   res.json([
     // Anthropic
-    { id: 'claude-opus-4-7',         name: 'Claude Opus 4.7',     tier: 'flagship', desc: 'Most capable Anthropic model — best for deep red-team reasoning' },
-    { id: 'claude-sonnet-4-6',       name: 'Claude Sonnet 4.6',   tier: 'large',    desc: 'Fast + capable — strong balance for either side' },
-    { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5',  tier: 'small',    desc: 'Fastest, lowest cost — ideal for high-volume scans' },
+    {
+      id: 'claude-opus-4-7',
+      name: 'Claude Opus 4.7',
+      tier: 'flagship',
+      desc: 'Most capable Anthropic model — best for deep red-team reasoning',
+    },
+    {
+      id: 'claude-sonnet-4-6',
+      name: 'Claude Sonnet 4.6',
+      tier: 'large',
+      desc: 'Fast + capable — strong balance for either side',
+    },
+    {
+      id: 'claude-haiku-4-5-20251001',
+      name: 'Claude Haiku 4.5',
+      tier: 'small',
+      desc: 'Fastest, lowest cost — ideal for high-volume scans',
+    },
     // OpenAI
-    { id: 'gpt-5',                   name: 'GPT-5',               tier: 'flagship', desc: 'OpenAI flagship — broad knowledge, fast all-rounder' },
-    { id: 'gpt-5-mini',              name: 'GPT-5 Mini',          tier: 'small',    desc: 'OpenAI cost-efficient tier' },
-    { id: 'o3',                      name: 'OpenAI o3',           tier: 'reason',   desc: 'Deep reasoning model — best for chain analysis' },
-    { id: 'gpt-4o',                  name: 'GPT-4o (legacy)',     tier: 'large',    desc: 'Previous-gen OpenAI flagship' },
+    { id: 'gpt-5', name: 'GPT-5', tier: 'flagship', desc: 'OpenAI flagship — broad knowledge, fast all-rounder' },
+    { id: 'gpt-5-mini', name: 'GPT-5 Mini', tier: 'small', desc: 'OpenAI cost-efficient tier' },
+    { id: 'o3', name: 'OpenAI o3', tier: 'reason', desc: 'Deep reasoning model — best for chain analysis' },
+    { id: 'gpt-4o', name: 'GPT-4o (legacy)', tier: 'large', desc: 'Previous-gen OpenAI flagship' },
     // Google
-    { id: 'gemini-2.5-pro',          name: 'Gemini 2.5 Pro',      tier: 'flagship', desc: 'Huge context window — great for recon + chain analysis' },
-    { id: 'gemini-2.5-flash',        name: 'Gemini 2.5 Flash',    tier: 'small',    desc: 'Fast Google tier' },
+    {
+      id: 'gemini-2.5-pro',
+      name: 'Gemini 2.5 Pro',
+      tier: 'flagship',
+      desc: 'Huge context window — great for recon + chain analysis',
+    },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tier: 'small', desc: 'Fast Google tier' },
     // Zhipu
-    { id: 'glm-4-plus',              name: 'GLM-4-Plus',          tier: 'large',    desc: 'Zhipu — cost-efficient blue-team workhorse' },
+    { id: 'glm-4-plus', name: 'GLM-4-Plus', tier: 'large', desc: 'Zhipu — cost-efficient blue-team workhorse' },
     // Custom
-    { id: 'custom',                  name: 'Custom Model',        tier: 'custom',   desc: 'Any model via custom base URL' },
+    { id: 'custom', name: 'Custom Model', tier: 'custom', desc: 'Any model via custom base URL' },
   ]);
 });
 
@@ -1289,14 +1637,18 @@ function yamlDump(obj, indent = 0) {
   for (const [k, v] of Object.entries(obj)) {
     if (v == null) continue;
     if (typeof v === 'object' && !Array.isArray(v)) out += `${pad}${k}:\n${yamlDump(v, indent + 1)}`;
-    else if (Array.isArray(v)) { out += `${pad}${k}:\n`; for (const i of v) out += `${pad}  - ${i}\n`; }
-    else out += `${pad}${k}: ${v}\n`;
+    else if (Array.isArray(v)) {
+      out += `${pad}${k}:\n`;
+      for (const i of v) out += `${pad}  - ${i}\n`;
+    } else out += `${pad}${k}: ${v}\n`;
   }
   return out;
 }
 
 // Health-check endpoint — Railway will hit this to confirm the container is alive.
-app.get('/healthz', (_req, res) => res.json({ ok: true, db: isSupabase() ? 'supabase' : 'fs', uptime: process.uptime() }));
+app.get('/healthz', (_req, res) =>
+  res.json({ ok: true, db: isSupabase() ? 'supabase' : 'fs', uptime: process.uptime() }),
+);
 
 (async () => {
   try {
