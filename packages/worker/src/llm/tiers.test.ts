@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { AGENT_TIERS, validateAgentTiers } from './tiers.js';
+import { describe, expect, it } from 'vitest';
 import { ACTIVE_VULN_CATEGORIES } from '../workflows/categories.js';
+import { AGENT_TIERS, validateAgentTiers } from './tiers.js';
 
 describe('validateAgentTiers', () => {
   it('passes: every active category has vuln- and exploit- tiers', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { VulnCategory } from './types.js';
 
 // Compile-time assertion: each new category is assignable to VulnCategory.

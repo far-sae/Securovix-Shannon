@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { classifyError } from './validation.js';
 
 describe('classifyError — broker/scope/budget', () => {

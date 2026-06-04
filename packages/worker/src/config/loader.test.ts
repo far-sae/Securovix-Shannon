@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { isErr, isOk } from '../result.js';
 import { validateConfig } from './loader.js';
 import type { ShannonConfig } from './schema.js';

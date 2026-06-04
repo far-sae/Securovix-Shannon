@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { matchesPath, isValidCidr } from './scope-rules.js';
+import { describe, expect, it } from 'vitest';
+import { isValidCidr, matchesPath } from './scope-rules.js';
 
 describe('matchesPath', () => {
   it('treats a bare path as a prefix (back-compat)', () => {

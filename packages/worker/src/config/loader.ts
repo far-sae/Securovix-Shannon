@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { type Result, err, ok } from '../result.js';
-import { isValidCidr } from './scope-rules.js';
 import type { ShannonConfig } from './schema.js';
+import { isValidCidr } from './scope-rules.js';
 
 export function validateConfig(config: ShannonConfig): Result<ShannonConfig> {
   if (!config.target?.url) {
