@@ -1,14 +1,14 @@
-import { describe, it, expect } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { authorizeRequest } from './authorize.js';
-import { ScopeEnforcer } from '../scope/enforcer.js';
-import { ToolRegistry } from '../registry/registry.js';
-import { DESCRIPTORS } from '../registry/descriptors.js';
+import { describe, expect, it } from 'vitest';
 import { BudgetLedger } from '../budget/ledger.js';
+import { DESCRIPTORS } from '../registry/descriptors.js';
+import { ToolRegistry } from '../registry/registry.js';
+import { ScopeEnforcer } from '../scope/enforcer.js';
 import { signScopeToken } from '../scope/lock.js';
 import type { ScopeConfig, ToolRequest } from '../types.js';
+import { authorizeRequest } from './authorize.js';
 
 const KEY = 'scan-key';
 const scope: ScopeConfig = {

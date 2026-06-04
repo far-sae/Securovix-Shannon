@@ -17,9 +17,7 @@ export interface ResolvedTarget {
   path: string;
 }
 
-export type AuthorizeResult =
-  | { authorized: true; argv: string[] }
-  | { authorized: false; result: ToolResult };
+export type AuthorizeResult = { authorized: true; argv: string[] } | { authorized: false; result: ToolResult };
 
 function denied(tool: string, status: ToolResult['status'], detail: string): AuthorizeResult {
   return { authorized: false, result: { tool, status, stderr: detail } };

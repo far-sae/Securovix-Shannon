@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { normalizeSqlmapCsv, normalizeNucleiJsonl, normalizeFfufJson } from './normalizer.js';
+import { describe, expect, it } from 'vitest';
+import { normalizeFfufJson, normalizeNucleiJsonl, normalizeSqlmapCsv } from './normalizer.js';
 
 describe('normalizeSqlmapCsv', () => {
   it('parses the results CSV into findings', () => {
