@@ -454,7 +454,6 @@ try {
     target: targetUrl,
     classes: ['rce-ssti', 'prompt-injection', 'graphql-idor', 'authz-bypass', 'token-forgery', 'rce-deser'],
     label: 'scan',
-    network: 'bridge',
     workspaceDir: wsDir,
   });
   const confirmed = purple.exploits.reduce((s, e) => s + e.confirmed, 0);
