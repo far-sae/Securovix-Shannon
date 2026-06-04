@@ -1,3 +1,5 @@
+import { ACTIVE_VULN_CATEGORIES } from '../workflows/categories.js';
+
 export type ModelTier = 'small' | 'medium' | 'large';
 
 const DEFAULT_MODELS: Record<ModelTier, string> = {
@@ -60,3 +62,16 @@ export const AGENT_TIERS: Record<string, ModelTier> = {
   // Module 5: Forensic
   'forensic-summary': 'small',
 };
+
+// Fail loud at startup if an active category is missing a tier (avoids the silent
+// 'medium' fallback in client.ts). Call once during worker bootstrap.
+export function validateAgentTiers(): void {
+  const missing: string[] = [];
+  for (const c of ACTIVE_VULN_CATEGORIES) {
+    if (!AGENT_TIERS[`vuln-${c}`]) missing.push(`vuln-${c}`);
+    if (!AGENT_TIERS[`exploit-${c}`]) missing.push(`exploit-${c}`);
+  }
+  if (missing.length > 0) {
+    throw new Error(`Missing model tier for agents: ${missing.join(', ')}. Add them to AGENT_TIERS in tiers.ts.`);
+  }
+}
