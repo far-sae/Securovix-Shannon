@@ -8,20 +8,63 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { randomUUID, createHash } from 'node:crypto';
+import { runExploitDefend } from './purple-engine.mjs';
 
 // ---- Live HTTP recon ----
 async function httpRecon(targetUrl) {
   const paths = [
-    '/', '/robots.txt', '/sitemap.xml', '/.env', '/.git/config', '/.git/HEAD',
-    '/api', '/api/v1', '/api/v2', '/graphql', '/admin', '/login', '/signup', '/register',
-    '/wp-admin', '/wp-login.php', '/.well-known/security.txt', '/.well-known/openid-configuration',
-    '/swagger.json', '/openapi.json', '/api-docs', '/health', '/healthz', '/status', '/metrics',
-    '/favicon.ico', '/.DS_Store', '/server-status', '/server-info', '/phpinfo.php',
-    '/debug', '/trace', '/actuator', '/actuator/health', '/actuator/env',
-    '/config', '/config.json', '/config.yaml', '/package.json', '/composer.json',
-    '/backup.sql', '/dump.sql', '/database.sql', '/.htaccess', '/web.config',
-    '/crossdomain.xml', '/clientaccesspolicy.xml', '/security.txt',
-    '/wp-json/wp/v2/users', '/xmlrpc.php', '/feed', '/rss',
+    '/',
+    '/robots.txt',
+    '/sitemap.xml',
+    '/.env',
+    '/.git/config',
+    '/.git/HEAD',
+    '/api',
+    '/api/v1',
+    '/api/v2',
+    '/graphql',
+    '/admin',
+    '/login',
+    '/signup',
+    '/register',
+    '/wp-admin',
+    '/wp-login.php',
+    '/.well-known/security.txt',
+    '/.well-known/openid-configuration',
+    '/swagger.json',
+    '/openapi.json',
+    '/api-docs',
+    '/health',
+    '/healthz',
+    '/status',
+    '/metrics',
+    '/favicon.ico',
+    '/.DS_Store',
+    '/server-status',
+    '/server-info',
+    '/phpinfo.php',
+    '/debug',
+    '/trace',
+    '/actuator',
+    '/actuator/health',
+    '/actuator/env',
+    '/config',
+    '/config.json',
+    '/config.yaml',
+    '/package.json',
+    '/composer.json',
+    '/backup.sql',
+    '/dump.sql',
+    '/database.sql',
+    '/.htaccess',
+    '/web.config',
+    '/crossdomain.xml',
+    '/clientaccesspolicy.xml',
+    '/security.txt',
+    '/wp-json/wp/v2/users',
+    '/xmlrpc.php',
+    '/feed',
+    '/rss',
   ];
   console.log(`           Probing ${paths.length} endpoints...`);
   const results = [];
@@ -30,15 +73,30 @@ async function httpRecon(targetUrl) {
       const url = targetUrl.replace(/\/$/, '') + path;
       const c = new AbortController();
       const t = setTimeout(() => c.abort(), 8000);
-      const r = await fetch(url, { method: 'GET', redirect: 'follow', signal: c.signal, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36' } });
+      const r = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: c.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        },
+      });
       clearTimeout(t);
       const body = await r.text().catch(() => '');
-      results.push({ path, status: r.status, headers: Object.fromEntries(r.headers.entries()), bodyPreview: body.slice(0, 4000), size: body.length });
-    } catch (e) { results.push({ path, status: 'error', error: e.message?.slice(0, 200) }); }
+      results.push({
+        path,
+        status: r.status,
+        headers: Object.fromEntries(r.headers.entries()),
+        bodyPreview: body.slice(0, 4000),
+        size: body.length,
+      });
+    } catch (e) {
+      results.push({ path, status: 'error', error: e.message?.slice(0, 200) });
+    }
   }
 
   // Security header check
-  const mainPage = results.find(r => r.path === '/');
+  const mainPage = results.find((r) => r.path === '/');
   const headers = mainPage?.headers ?? {};
   const securityHeaders = {
     'strict-transport-security': headers['strict-transport-security'] || null,
@@ -49,20 +107,36 @@ async function httpRecon(targetUrl) {
     'referrer-policy': headers['referrer-policy'] || null,
     'permissions-policy': headers['permissions-policy'] || null,
     'access-control-allow-origin': headers['access-control-allow-origin'] || null,
-    'server': headers['server'] || null,
+    server: headers['server'] || null,
     'x-powered-by': headers['x-powered-by'] || null,
   };
 
-  const summary = results.map(r => r.status === 'error' ? `  ${r.path} -> ERROR` : `  ${r.path} -> ${r.status} (${r.size}b)`).join('\n');
-  const headerAnalysis = Object.entries(headers).map(([k, v]) => `  ${k}: ${v}`).join('\n');
+  const summary = results
+    .map((r) => (r.status === 'error' ? `  ${r.path} -> ERROR` : `  ${r.path} -> ${r.status} (${r.size}b)`))
+    .join('\n');
+  const headerAnalysis = Object.entries(headers)
+    .map(([k, v]) => `  ${k}: ${v}`)
+    .join('\n');
 
   // Unique response fingerprinting (detect SPA catch-all)
   const sizeCounts = {};
-  for (const r of results) { if (r.size) { sizeCounts[r.size] = (sizeCounts[r.size] || 0) + 1; } }
+  for (const r of results) {
+    if (r.size) {
+      sizeCounts[r.size] = (sizeCounts[r.size] || 0) + 1;
+    }
+  }
   const catchAllSize = Object.entries(sizeCounts).sort((a, b) => b[1] - a[1])[0];
-  const realEndpoints = results.filter(r => r.status !== 'error' && r.size && r.size !== parseInt(catchAllSize?.[0]));
+  const realEndpoints = results.filter((r) => r.status !== 'error' && r.size && r.size !== parseInt(catchAllSize?.[0]));
 
-  return { results, summary, headerAnalysis, mainBody: mainPage?.bodyPreview ?? '', securityHeaders, realEndpoints, catchAllSize: catchAllSize?.[0] };
+  return {
+    results,
+    summary,
+    headerAnalysis,
+    mainBody: mainPage?.bodyPreview ?? '',
+    securityHeaders,
+    realEndpoints,
+    catchAllSize: catchAllSize?.[0],
+  };
 }
 
 // ---- Config ----
@@ -70,11 +144,19 @@ const configArg = process.argv.find((a, i) => process.argv[i - 1] === '--config'
 const config = parseYaml(readFileSync(configArg, 'utf-8'));
 const targetUrl = config.target.url;
 const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) { console.error('ERROR: Set ANTHROPIC_API_KEY'); process.exit(1); }
+if (!apiKey) {
+  console.error('ERROR: Set ANTHROPIC_API_KEY');
+  process.exit(1);
+}
 
 let Anthropic;
-try { Anthropic = (await import('@anthropic-ai/sdk')).default; }
-catch { const { execSync } = await import('node:child_process'); execSync('pnpm add -w @anthropic-ai/sdk', { stdio: 'inherit', cwd: import.meta.dirname }); Anthropic = (await import('@anthropic-ai/sdk')).default; }
+try {
+  Anthropic = (await import('@anthropic-ai/sdk')).default;
+} catch {
+  const { execSync } = await import('node:child_process');
+  execSync('pnpm add -w @anthropic-ai/sdk', { stdio: 'inherit', cwd: import.meta.dirname });
+  Anthropic = (await import('@anthropic-ai/sdk')).default;
+}
 
 // maxRetries=5 with the SDK's built-in exponential backoff handles 429s on Tier 1 keys.
 // timeout=10min keeps long deliverables (report, war-room) from being killed mid-stream.
@@ -82,11 +164,32 @@ const client = new Anthropic({ apiKey, maxRetries: 5, timeout: 600_000 });
 const MODEL = process.env.SHANNON_MODEL ?? 'claude-opus-4-7';
 const scanId = randomUUID().slice(0, 8);
 const wsDir = join(import.meta.dirname, 'workspaces', scanId);
-const dirs = ['', 'pre-recon', 'recon', 'red-team', 'blue-team', 'purple-team', 'exploit-verify', 'chain-analysis', 'war-room', 'forensic-package', 'audit',
-  ...['sqli', 'xss', 'auth-bypass', 'authz-bypass', 'ssrf', 'business-logic', 'misconfig', 'info-disclosure'].flatMap(c => [`vuln/${c}`, `exploit/${c}`])];
+const dirs = [
+  '',
+  'pre-recon',
+  'recon',
+  'red-team',
+  'blue-team',
+  'purple-team',
+  'exploit-verify',
+  'chain-analysis',
+  'war-room',
+  'forensic-package',
+  'audit',
+  ...['sqli', 'xss', 'auth-bypass', 'authz-bypass', 'ssrf', 'business-logic', 'misconfig', 'info-disclosure'].flatMap(
+    (c) => [`vuln/${c}`, `exploit/${c}`],
+  ),
+];
 for (const d of dirs) mkdirSync(join(wsDir, d), { recursive: true });
 
-const session = { scanId, target: targetUrl, startedAt: new Date().toISOString(), completedAgents: [], metrics: {}, status: 'running' };
+const session = {
+  scanId,
+  target: targetUrl,
+  startedAt: new Date().toISOString(),
+  completedAgents: [],
+  metrics: {},
+  status: 'running',
+};
 
 console.log(`\n  Shannon Penetration Testing Framework`);
 console.log(`  =====================================`);
@@ -94,17 +197,32 @@ console.log(`  Target:    ${targetUrl}`);
 console.log(`  Scan ID:   ${scanId}`);
 console.log(`  Model:     ${MODEL}\n`);
 
-function save(p, c) { writeFileSync(join(wsDir, p), c); }
-function elapsed(s) { return ((Date.now() - s) / 1000).toFixed(1); }
+function save(p, c) {
+  writeFileSync(join(wsDir, p), c);
+}
+function elapsed(s) {
+  return ((Date.now() - s) / 1000).toFixed(1);
+}
 // Default max_tokens lowered from 8192 → 4000. Anthropic reserves the FULL max_tokens
 // against your OTPM (output-tokens-per-minute) quota for the duration of the request,
 // even if the model emits less. The old 8192 default was the main reason scans tripped
 // rate limits on Tier 1 / Tier 2 keys. Long deliverables (war-room, report) still pass
 // 8192 explicitly — they run sequentially and don't burst.
 async function llm(sys, usr, max = 4000) {
-  const r = await client.messages.create({ model: MODEL, max_tokens: max, messages: [{ role: 'user', content: `${sys}\n\n${usr}` }] });
-  const text = r.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-  return { text, cost: parseFloat((r.usage.input_tokens * 0.000003 + r.usage.output_tokens * 0.000015).toFixed(6)), tokens: r.usage };
+  const r = await client.messages.create({
+    model: MODEL,
+    max_tokens: max,
+    messages: [{ role: 'user', content: `${sys}\n\n${usr}` }],
+  });
+  const text = r.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n');
+  return {
+    text,
+    cost: parseFloat((r.usage.input_tokens * 0.000003 + r.usage.output_tokens * 0.000015).toFixed(6)),
+    tokens: r.usage,
+  };
 }
 
 // Concurrency-limited Promise.all. Used by Phase 3 to cap simultaneous Red Team
@@ -124,7 +242,11 @@ async function pMap(items, limit, fn) {
   return results;
 }
 
-function done(agent, metrics) { session.completedAgents.push(agent); session.metrics[agent] = metrics; save('session.json', JSON.stringify(session, null, 2)); }
+function done(agent, metrics) {
+  session.completedAgents.push(agent);
+  session.metrics[agent] = metrics;
+  save('session.json', JSON.stringify(session, null, 2));
+}
 
 // ================================================================
 //  PHASE 0: Live HTTP Reconnaissance
@@ -136,9 +258,18 @@ save('pre-recon/http-probe.txt', recon.summary);
 save('pre-recon/main-page.html', recon.mainBody);
 save('pre-recon/headers.txt', recon.headerAnalysis);
 save('pre-recon/security-headers.json', JSON.stringify(recon.securityHeaders, null, 2));
-save('pre-recon/real-endpoints.json', JSON.stringify(recon.realEndpoints.map(r => ({ path: r.path, status: r.status, size: r.size })), null, 2));
-const liveCount = recon.results.filter(r => r.status !== 'error' && r.status < 400).length;
-console.log(`           Done (${elapsed(t)}s) — ${liveCount} live, ${recon.realEndpoints.length} real endpoints, catch-all size: ${recon.catchAllSize || 'none'}`);
+save(
+  'pre-recon/real-endpoints.json',
+  JSON.stringify(
+    recon.realEndpoints.map((r) => ({ path: r.path, status: r.status, size: r.size })),
+    null,
+    2,
+  ),
+);
+const liveCount = recon.results.filter((r) => r.status !== 'error' && r.status < 400).length;
+console.log(
+  `           Done (${elapsed(t)}s) — ${liveCount} live, ${recon.realEndpoints.length} real endpoints, catch-all size: ${recon.catchAllSize || 'none'}`,
+);
 
 // ================================================================
 //  PHASE 1: Pre-Recon + Threat Modeling
@@ -156,7 +287,7 @@ SECURITY HEADERS:
 ${JSON.stringify(recon.securityHeaders, null, 2)}
 
 REAL ENDPOINTS (not SPA catch-all):
-${recon.realEndpoints.map(r => `${r.path} -> ${r.status} (${r.size}b)`).join('\n')}
+${recon.realEndpoints.map((r) => `${r.path} -> ${r.status} (${r.size}b)`).join('\n')}
 
 HTML:
 ${recon.mainBody.slice(0, 3000)}
@@ -169,7 +300,7 @@ Perform:
 5. CORS policy analysis — is access-control-allow-origin set? To what?
 6. Server information disclosure — what does the server header reveal?
 7. Cookie analysis — HttpOnly, Secure, SameSite flags
-8. SSL/TLS observations from headers`
+8. SSL/TLS observations from headers`,
 );
 save('pre-recon/analysis.md', preReconResult.text);
 done('pre-recon', { cost: preReconResult.cost, turns: 1, duration: Date.now() - t });
@@ -188,7 +319,7 @@ LIVE PROBE DATA:
 ${recon.summary}
 
 SECURITY HEADERS: ${JSON.stringify(recon.securityHeaders)}
-REAL ENDPOINTS: ${JSON.stringify(recon.realEndpoints.map(r => r.path))}
+REAL ENDPOINTS: ${JSON.stringify(recon.realEndpoints.map((r) => r.path))}
 PREVIOUS ANALYSIS: ${preReconResult.text.slice(0, 2000)}
 HTML: ${recon.mainBody.slice(0, 2000)}
 
@@ -200,7 +331,7 @@ Perform deep recon:
 5. Third-party service detection (analytics, CDNs, payment processors)
 6. Subdomain and related infrastructure inference
 7. Input vectors — forms, query params, headers that accept user input
-8. File upload and download endpoints`
+8. File upload and download endpoints`,
 );
 save('recon/exploration.md', reconResult.text);
 done('recon', { cost: reconResult.cost, turns: 1, duration: Date.now() - t });
@@ -240,7 +371,7 @@ YOUR SPECIALTY: ${cat.name}
 INTELLIGENCE GATHERED:
 ${recon.summary}
 Security Headers: ${JSON.stringify(recon.securityHeaders)}
-Real Endpoints: ${JSON.stringify(recon.realEndpoints.map(r => r.path))}
+Real Endpoints: ${JSON.stringify(recon.realEndpoints.map((r) => r.path))}
 Recon: ${reconResult.text.slice(0, 1500)}
 HTML: ${recon.mainBody.slice(0, 1000)}
 
@@ -276,7 +407,7 @@ OUTPUT FORMAT:
 \`\`\`
 **Expected Result**: [what proves exploitation worked]
 **Impact**: [what attacker gains]`,
-    4096
+    4096,
   );
   save(`vuln/${cat.id}/analysis.md`, `# RED TEAM: ${cat.name}\n\n${r.text}`);
   const hasFindings = /##\s+ATTACK/i.test(r.text);
@@ -284,7 +415,13 @@ OUTPUT FORMAT:
   const matches = r.text.matchAll(/##\s+ATTACK[:\s]+(.*?)(?=##\s+ATTACK|$)/gs);
   for (const m of matches) {
     const conf = /CONFIRMED/i.test(m[1]) ? 'confirmed' : /LIKELY/i.test(m[1]) ? 'likely' : 'theoretical';
-    findings.push({ id: `${cat.id}-${findings.length + 1}`, type: conf, description: m[1]?.trim().slice(0, 500) ?? '', severity: 'medium', endpoint: targetUrl });
+    findings.push({
+      id: `${cat.id}-${findings.length + 1}`,
+      type: conf,
+      description: m[1]?.trim().slice(0, 500) ?? '',
+      severity: 'medium',
+      endpoint: targetUrl,
+    });
   }
   save(`vuln/${cat.id}/exploitation-queue.json`, JSON.stringify({ category: cat.id, findings }, null, 2));
   done(`red-${cat.id}`, { cost: r.cost, turns: 1, duration: Date.now() - t });
@@ -292,7 +429,42 @@ OUTPUT FORMAT:
 });
 
 console.log(`           Done (${elapsed(t)}s, $${redResults.reduce((s, r) => s + r.result.cost, 0).toFixed(6)})`);
-save('red-team/summary.md', redResults.map(r => `## ${r.cat.icon} ${r.cat.name}\nFindings: ${r.findings.length} (${r.findings.filter(f => f.type === 'confirmed').length} confirmed, ${r.findings.filter(f => f.type === 'likely').length} likely)\n`).join('\n'));
+save(
+  'red-team/summary.md',
+  redResults
+    .map(
+      (r) =>
+        `## ${r.cat.icon} ${r.cat.name}\nFindings: ${r.findings.length} (${r.findings.filter((f) => f.type === 'confirmed').length} confirmed, ${r.findings.filter((f) => f.type === 'likely').length} likely)\n`,
+    )
+    .join('\n'),
+);
+
+// ================================================================
+//  PHASE 3.5: REAL Exploit + Defend (Purple Engine)
+//  In-house probers exploit the target in HARDENED docker sandboxes; each CONFIRMED
+//  finding (proven by a benign marker — zero false positives) gets a detection rule +
+//  LLM remediation, and payload-based classes are re-tested through a LIVE inline WAF
+//  proxy to prove the block. Best-effort: skips cleanly if Docker / prober images are
+//  unavailable (e.g. a host without the broker probers built).
+// ================================================================
+console.log(`  [Phase 3.5] Real Exploit + Defend (broker probers)...`);
+t = Date.now();
+try {
+  const purple = await runExploitDefend({
+    target: targetUrl,
+    classes: ['rce-ssti', 'prompt-injection', 'graphql-idor', 'authz-bypass', 'token-forgery', 'rce-deser'],
+    label: 'scan',
+    network: 'bridge',
+    workspaceDir: wsDir,
+  });
+  const confirmed = purple.exploits.reduce((s, e) => s + e.confirmed, 0);
+  console.log(
+    `           Done (${elapsed(t)}s) — ${confirmed} CONFIRMED exploit(s), ${purple.defenses.length} defense(s) generated`,
+  );
+  done('purple-engine', { cost: 0, turns: 1, duration: Date.now() - t, confirmed });
+} catch (e) {
+  console.log(`           Skipped — ${e.message?.slice(0, 160)}`);
+}
 
 // ================================================================
 //  PHASE 4: PURPLE TEAM — 2 Red agents + 2 Blue agents, dialog
@@ -304,7 +476,9 @@ save('red-team/summary.md', redResults.map(r => `## ${r.cat.icon} ${r.cat.name}\
 // ================================================================
 console.log(`  [Phase 4] PURPLE TEAM — 2 Red + 2 Blue Agents in Dialog...`);
 t = Date.now();
-const allRedFindings = redResults.map(r => `### ${r.cat.icon} ${r.cat.name}\n${r.result.text.slice(0, 800)}`).join('\n\n');
+const allRedFindings = redResults
+  .map((r) => `### ${r.cat.icon} ${r.cat.name}\n${r.result.text.slice(0, 800)}`)
+  .join('\n\n');
 
 const ptCosts = [];
 async function ptTurn(label, sys, usr, max = 2048) {
@@ -336,7 +510,7 @@ Talk to your teammate like a partner, not a report. Cite the findings explicitly
 2. PRIORITY TARGETS — which 3 findings matter most and why
 3. ATTACK PLAN — ordered steps the Red Attacker should run
 4. CHAINING — how to combine findings for higher impact
-5. ASK FOR ATTACKER — what you need them to refine on the wire`
+5. ASK FOR ATTACKER — what you need them to refine on the wire`,
 );
 
 console.log(`           Red Attacker executing plan...`);
@@ -353,7 +527,7 @@ ${redStrategist}
 1. EXECUTION — concrete steps with payloads / requests
 2. OBSERVED OBSTACLES — what the network/app actually does back
 3. REPLY TO STRATEGIST — what you need them to adjust
-4. PROOF OF IMPACT — what evidence proves this works`
+4. PROOF OF IMPACT — what evidence proves this works`,
 );
 
 console.log(`           Blue Defender designing mitigations...`);
@@ -371,7 +545,7 @@ Be honest about cost and label fail-open vs fail-closed controls. Talk to Blue I
 
 Also include the legacy DEFENSE SCORECARD (each category A-F):
 - Perimeter Defense, Transport Security, Authentication, Authorization,
-  Input Validation, Output Encoding, Data Protection, Security Headers, Error Handling, Dependency Security`
+  Input Validation, Output Encoding, Data Protection, Security Headers, Error Handling, Dependency Security`,
 );
 
 console.log(`           Blue IR designing detections...`);
@@ -387,7 +561,7 @@ ${blueDefender}
 ## Your Output
 1. DETECTIONS — list, each: \`- NAME | SOURCE: <log/source> | SIGNAL: <what to look for> | QUERY: <pseudo SQL/Sigma>\`
 2. PLAYBOOK — short ordered steps for an analyst when this fires
-3. REPLY TO DEFENDER — gaps in their controls and where detection must cover`
+3. REPLY TO DEFENDER — gaps in their controls and where detection must cover`,
 );
 
 console.log(`           Cross-team: Red Strategist replying to Blue Defender...`);
@@ -402,7 +576,7 @@ ${blueDefender}
 ## Your Output
 1. WHAT THE DEFENSE BREAKS — be specific about which steps stop working
 2. BYPASS IDEAS — concrete ways your Attacker could route around it
-3. CONCESSION — if a control truly closes the issue, say "CONCEDE: <which control>". Otherwise omit.`
+3. CONCESSION — if a control truly closes the issue, say "CONCEDE: <which control>". Otherwise omit.`,
 );
 
 console.log(`           Cross-team: Blue Defender countering Red Strategist...`);
@@ -417,7 +591,7 @@ ${redVsBlueDefender}
 ## Your Output
 1. ACKNOWLEDGED BYPASSES — which red claims are valid
 2. ADDITIONAL CONTROLS — concrete additions to close those
-3. DISPUTED — which red claims do not actually bypass your controls, with reasoning`
+3. DISPUTED — which red claims do not actually bypass your controls, with reasoning`,
 );
 
 console.log(`           Cross-team: Red Attacker replying to Blue IR...`);
@@ -432,7 +606,7 @@ ${blueIR}
 ## Your Output
 1. CAUGHT — which detections fire on your real steps
 2. MISSED — which steps slip through, and how
-3. EVASION — small tweaks that defeat the proposed detection`
+3. EVASION — small tweaks that defeat the proposed detection`,
 );
 
 console.log(`           Cross-team: Blue IR countering Red Attacker...`);
@@ -447,7 +621,7 @@ ${redVsBlueIR}
 ## Your Output
 1. CONFIRMED EVASIONS — which evasions you accept as valid
 2. NEW DETECTIONS — concrete additions to catch the bypass
-3. DISPUTED — which evasions would still trip alarms you have, with reasoning`
+3. DISPUTED — which evasions would still trip alarms you have, with reasoning`,
 );
 
 console.log(`           Moderator synthesizing conclusion...`);
@@ -507,7 +681,7 @@ Bullets.
 
 ## Top 3 Action Items
 Ordered, concrete, owner-tagged.`,
-  4096
+  4096,
 );
 
 // Save artifacts. Keep blue-team/defense-assessment.md for backwards-compat with the existing dashboard tab.
@@ -516,51 +690,65 @@ save('purple-team/red-strategist.md', redStrategist);
 save('purple-team/red-attacker.md', redAttacker);
 save('purple-team/blue-defender.md', blueDefender);
 save('purple-team/blue-ir.md', blueIR);
-save('purple-team/cross-team.md', [
-  '## 🔴 Red Strategist → 🔵 Blue Defender', redVsBlueDefender,
-  '## 🔵 Blue Defender → 🔴 Red Strategist', blueVsRedStrategist,
-  '## 🔴 Red Attacker → 🔵 Blue IR', redVsBlueIR,
-  '## 🔵 Blue IR → 🔴 Red Attacker', blueVsRedAttacker,
-].join('\n\n---\n\n'));
+save(
+  'purple-team/cross-team.md',
+  [
+    '## 🔴 Red Strategist → 🔵 Blue Defender',
+    redVsBlueDefender,
+    '## 🔵 Blue Defender → 🔴 Red Strategist',
+    blueVsRedStrategist,
+    '## 🔴 Red Attacker → 🔵 Blue IR',
+    redVsBlueIR,
+    '## 🔵 Blue IR → 🔴 Red Attacker',
+    blueVsRedAttacker,
+  ].join('\n\n---\n\n'),
+);
 save('purple-team/conclusion.md', moderatorConclusion);
-save('purple-team/transcript.md', [
-  '# Purple Team Transcript',
-  '',
-  '## 🔴 Red Strategist — Plan',
-  redStrategist,
-  '',
-  '## 🔴 Red Attacker — Execution',
-  redAttacker,
-  '',
-  '## 🔵 Blue Defender — Mitigations',
-  blueDefender,
-  '',
-  '## 🔵 Blue IR — Detections',
-  blueIR,
-  '',
-  '---',
-  '',
-  '# Cross-Team Exchange',
-  '',
-  '## 🔴 → 🔵 Red Strategist rebuttal',
-  redVsBlueDefender,
-  '',
-  '## 🔵 → 🔴 Blue Defender counter',
-  blueVsRedStrategist,
-  '',
-  '## 🔴 → 🔵 Red Attacker rebuttal',
-  redVsBlueIR,
-  '',
-  '## 🔵 → 🔴 Blue IR counter',
-  blueVsRedAttacker,
-  '',
-  '---',
-  '',
-  moderatorConclusion,
-].join('\n'));
+save(
+  'purple-team/transcript.md',
+  [
+    '# Purple Team Transcript',
+    '',
+    '## 🔴 Red Strategist — Plan',
+    redStrategist,
+    '',
+    '## 🔴 Red Attacker — Execution',
+    redAttacker,
+    '',
+    '## 🔵 Blue Defender — Mitigations',
+    blueDefender,
+    '',
+    '## 🔵 Blue IR — Detections',
+    blueIR,
+    '',
+    '---',
+    '',
+    '# Cross-Team Exchange',
+    '',
+    '## 🔴 → 🔵 Red Strategist rebuttal',
+    redVsBlueDefender,
+    '',
+    '## 🔵 → 🔴 Blue Defender counter',
+    blueVsRedStrategist,
+    '',
+    '## 🔴 → 🔵 Red Attacker rebuttal',
+    redVsBlueIR,
+    '',
+    '## 🔵 → 🔴 Blue IR counter',
+    blueVsRedAttacker,
+    '',
+    '---',
+    '',
+    moderatorConclusion,
+  ].join('\n'),
+);
 
 const ptTotalCost = ptCosts.reduce((a, b) => a + b.cost, 0);
-done('blue-team', { cost: ptCosts.find(c => c.label === 'blue-defender')?.cost ?? 0, turns: 1, duration: Date.now() - t });
+done('blue-team', {
+  cost: ptCosts.find((c) => c.label === 'blue-defender')?.cost ?? 0,
+  turns: 1,
+  duration: Date.now() - t,
+});
 done('purple-team', { cost: ptTotalCost, turns: ptCosts.length, duration: Date.now() - t });
 const blueResult = { text: blueDefender, cost: ptTotalCost };
 console.log(`           Done (${elapsed(t)}s, $${ptTotalCost.toFixed(6)} across ${ptCosts.length} agent turns)`);
@@ -571,7 +759,9 @@ console.log(`           Done (${elapsed(t)}s, $${ptTotalCost.toFixed(6)} across 
 console.log(`  [Phase 5] Exploit Verification — Proving attacks work...`);
 t = Date.now();
 
-const confirmedAttacks = redResults.flatMap(r => r.findings.filter(f => f.type === 'confirmed' || f.type === 'likely'));
+const confirmedAttacks = redResults.flatMap((r) =>
+  r.findings.filter((f) => f.type === 'confirmed' || f.type === 'likely'),
+);
 
 const exploitResult = await llm(
   `You are an EXPLOIT DEVELOPER. Your job is to take Red Team findings and create WORKING, VERIFIED proof-of-concept exploits.
@@ -604,7 +794,7 @@ FOR EACH RED TEAM FINDING:
 [EXACT exploit command]
 \`\`\`
 **Evidence**: [what the response proves]
-**Business Impact**: [real-world consequences]`
+**Business Impact**: [real-world consequences]`,
 );
 save('exploit-verify/verification.md', exploitResult.text);
 done('exploit-verify', { cost: exploitResult.cost, turns: 1, duration: Date.now() - t });
@@ -629,7 +819,7 @@ Build attack chains:
 3. Map to MITRE ATT&CK tactics
 4. Tell the attack as a STORY — "An attacker would first... then they could... finally gaining..."
 5. For each chain, note which Blue Team defenses would block which steps
-6. Identify the WEAKEST LINK in each chain — the one fix that breaks the entire attack`
+6. Identify the WEAKEST LINK in each chain — the one fix that breaks the entire attack`,
 );
 save('chain-analysis/analysis.md', chainResult.text);
 done('chain-analysis', { cost: chainResult.cost, turns: 1, duration: Date.now() - t });
@@ -693,7 +883,7 @@ END WITH:
 - Mitigated (defense in place): X
 - Needs investigation: X
 - Severity adjustments made: X`,
-  8192
+  8192,
 );
 save('war-room/transcript.md', warRoomResult.text);
 done('war-room', { cost: warRoomResult.cost, turns: 1, duration: Date.now() - t });
@@ -785,7 +975,7 @@ RULES:
 - Show Red vs Blue perspective for each finding
 - Zero false positives
 - Every finding has a POC and a fix`,
-  8192
+  8192,
 );
 save('report.md', reportResult.text);
 done('report', { cost: reportResult.cost, turns: 1, duration: Date.now() - t });
@@ -798,22 +988,37 @@ console.log(`  [Phase 9] Forensic Evidence Package...`);
 const totalCost = Object.values(session.metrics).reduce((s, m) => s + m.cost, 0);
 const totalDuration = Date.now() - new Date(session.startedAt).getTime();
 const manifest = {
-  scanId, target: targetUrl, timestamp: new Date().toISOString(), shannonVersion: '0.2.0',
+  scanId,
+  target: targetUrl,
+  timestamp: new Date().toISOString(),
+  shannonVersion: '0.2.0',
   configHash: createHash('sha256').update(readFileSync(configArg)).digest('hex'),
-  totalCost: totalCost.toFixed(6), totalDurationMs: totalDuration,
-  agentsRun: session.completedAgents.length, chainIntegrity: true,
-  redTeamAgents: categories.length, blueTeamActive: true,
+  totalCost: totalCost.toFixed(6),
+  totalDurationMs: totalDuration,
+  agentsRun: session.completedAgents.length,
+  chainIntegrity: true,
+  redTeamAgents: categories.length,
+  blueTeamActive: true,
 };
 manifest.manifestHash = createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
 save('forensic-package/manifest.json', JSON.stringify(manifest, null, 2));
-save('forensic-package/chain-of-custody.md', [
-  '# Chain of Custody', '',
-  `- **Scan ID**: ${scanId}`, `- **Target**: ${targetUrl}`,
-  `- **Started**: ${session.startedAt}`, `- **Completed**: ${new Date().toISOString()}`,
-  `- **Config Hash**: \`${manifest.configHash}\``, `- **Manifest Hash**: \`${manifest.manifestHash}\``,
-  `- **Model**: ${MODEL}`, `- **Red Team Agents**: ${categories.length}`,
-  `- **Blue Team**: Active`, `- **Total Cost**: $${totalCost.toFixed(6)}`,
-].join('\n'));
+save(
+  'forensic-package/chain-of-custody.md',
+  [
+    '# Chain of Custody',
+    '',
+    `- **Scan ID**: ${scanId}`,
+    `- **Target**: ${targetUrl}`,
+    `- **Started**: ${session.startedAt}`,
+    `- **Completed**: ${new Date().toISOString()}`,
+    `- **Config Hash**: \`${manifest.configHash}\``,
+    `- **Manifest Hash**: \`${manifest.manifestHash}\``,
+    `- **Model**: ${MODEL}`,
+    `- **Red Team Agents**: ${categories.length}`,
+    `- **Blue Team**: Active`,
+    `- **Total Cost**: $${totalCost.toFixed(6)}`,
+  ].join('\n'),
+);
 
 session.status = 'completed';
 session.completedAt = new Date().toISOString();
@@ -824,6 +1029,8 @@ console.log(`  Scan Complete!`);
 console.log(`  =====================================`);
 console.log(`  Duration:  ${(totalDuration / 1000).toFixed(1)}s`);
 console.log(`  Cost:      $${totalCost.toFixed(6)}`);
-console.log(`  Agents:    ${session.completedAgents.length} (${categories.length} Red + 1 Blue + 1 Exploit + 1 Chain + 1 War Room + 1 Report)`);
+console.log(
+  `  Agents:    ${session.completedAgents.length} (${categories.length} Red + 1 Blue + 1 Exploit + 1 Chain + 1 War Room + 1 Report)`,
+);
 console.log(`  Temporal:  http://localhost:8080`);
 console.log('');
