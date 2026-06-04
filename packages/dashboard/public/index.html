@@ -2917,6 +2917,9 @@ function renderOverview(){
           <span class="sev sev-low">${ico('info',{cls:'ico-sm'})}<span>${rb.low} Low</span></span>
           <span class="sev sev-info">${ico('circle-check',{cls:'ico-sm'})}<span>${rb.info} Info</span></span>
         </div>
+        <p style="color:var(--t3);margin-top:10px;font-size:11.5px">
+          <strong style="color:var(--t1)">${rb.confirmed||0} confirmed</strong> (reproduced) &middot; ${rb.potential||0} potential (analysis-only, unverified). The grade weights confirmed findings fully and unverified ones partially.
+        </p>
       </div>
     </div>
 
@@ -3117,8 +3120,20 @@ function renderAnalytics(){
 }
 
 // ===== Risk extraction from artifacts =====
+const SEV_MAP={critical:'crit',high:'high',medium:'med',low:'low',informational:'info',info:'info'};
+// Read the severity verdict from a SINGLE finding's text — and ONLY if it states one value.
+// The agent's output rubric ("**Severity**: Critical / High / Medium / Low") appears verbatim
+// in the prose; a multi-value match means we're looking at the rubric, not a verdict, so we
+// fall back instead of falsely picking 'critical'.
+function severityFromText(text,fallback){
+  const line=/severity[\s:*]*([^\n\r]+)/i.exec(text||'');
+  if(!line)return fallback;
+  const words=line[1].match(/\b(critical|high|medium|low|informational|info)\b/ig)||[];
+  if(words.length!==1)return fallback;
+  return SEV_MAP[words[0].toLowerCase()]||fallback;
+}
 function computeRiskBreakdown(f){
-  const out={crit:0,high:0,med:0,low:0,info:0,total:0,list:[],byCat:{}};
+  const out={crit:0,high:0,med:0,low:0,info:0,total:0,confirmed:0,potential:0,list:[],byCat:{}};
   const cats=[
     {key:'sqli',name:'SQL Injection'},
     {key:'xss',name:'Cross-Site Scripting'},
@@ -3129,19 +3144,38 @@ function computeRiskBreakdown(f){
     {key:'misconfig',name:'Security Misconfiguration'},
     {key:'info-disclosure',name:'Information Disclosure'},
   ];
-  const sevPriority={crit:'crit',high:'high',med:'med',low:'low',info:'info'};
+  const add=(cat,name,sev,conf)=>{
+    out[sev]++;out.total++;out[conf==='confirmed'?'confirmed':'potential']++;
+    out.byCat[cat]=(out.byCat[cat]||0)+1;
+    out.list.push({cat,name,sev,conf,
+      kind:conf==='confirmed'?'confirmed exploit':conf==='likely'?'likely':'theoretical',
+      evidence:conf==='confirmed'?'reproduced':conf==='likely'?'high confidence':'unverified'});
+  };
   cats.forEach(c=>{
-    const vuln=f.vulns?.[c.key],expl=f.exploits?.[c.key];
+    const expl=f.exploits?.[c.key];
+    const explConfirmed=!!expl&&/reproduc|confirmed|verified|success/i.test(expl);
+    const queue=f.queues?.[c.key];
+    const findings=Array.isArray(queue?.findings)?queue.findings:null;
+    if(findings){
+      // STRUCTURED path: count the agent's actual findings, honoring each one's stated
+      // confidence (CONFIRMED/LIKELY/THEORETICAL) and per-finding severity.
+      findings.forEach(fd=>{
+        const conf=explConfirmed?'confirmed':(fd.type||'theoretical').toLowerCase();
+        const sev=severityFromText(fd.description,SEV_MAP[(fd.severity||'').toLowerCase()]||'med');
+        add(c.key,c.name,sev,conf==='confirmed'?'confirmed':conf==='likely'?'likely':'potential');
+      });
+      return;
+    }
+    // FALLBACK (no structured queue): infer from prose, but skip clear no-finding results and
+    // parse severity from a stated verdict rather than any 'critical' substring.
+    const vuln=f.vulns?.[c.key];
     if(!vuln&&!expl)return;
-    let sev='med';
-    if(expl)sev=/critical|severe|verified|confirmed/i.test(expl)?'crit':'high';
-    else if(vuln)sev=/critical/i.test(vuln)?'crit':/high/i.test(vuln)?'high':/medium/i.test(vuln)?'med':/low/i.test(vuln)?'low':'med';
-    out[sevPriority[sev]]++;out.total++;
-    out.byCat[c.key]=(out.byCat[c.key]||0)+1;
-    out.list.push({cat:c.key,name:c.name,sev,kind:expl?'verified exploit':'analysis only',evidence:expl?'reproduced':'observed'});
+    if(vuln&&!/##\s+(attack|finding)/i.test(vuln)&&/\b(no |not |none|no evidence|not vulnerable|not exploitable|appears secure|no findings?)\b/i.test(vuln.slice(0,500)))return;
+    const sev=explConfirmed?'high':severityFromText(vuln,'med');
+    add(c.key,c.name,sev,explConfirmed?'confirmed':'potential');
   });
   if(f.securityHeaders){
-    try{const h=JSON.parse(f.securityHeaders);if(h.missing&&h.missing.length){h.missing.forEach(m=>{out.low++;out.total++;out.list.push({cat:'misconfig',name:'Missing '+m,sev:'low',kind:'header policy',evidence:'absent'})})}}catch{}
+    try{const h=JSON.parse(f.securityHeaders);if(h.missing&&h.missing.length){h.missing.forEach(m=>{out.low++;out.total++;out.confirmed++;out.byCat.misconfig=(out.byCat.misconfig||0)+1;out.list.push({cat:'misconfig',name:'Missing '+m,sev:'low',conf:'confirmed',kind:'header policy',evidence:'absent'})})}}catch{}
   }
   // Sort by severity
   const order={crit:0,high:1,med:2,low:3,info:4};
@@ -3149,8 +3183,14 @@ function computeRiskBreakdown(f){
   return out;
 }
 function computePostureScore(rb){
+  // Confidence-weighted: a CONFIRMED finding hits full severity weight; LIKELY/THEORETICAL
+  // findings count partially — a white-box analysis flags risk but isn't proof of exploitation.
+  const W={crit:22,high:12,med:5,low:1,info:0};
   let score=100;
-  score-=rb.crit*22;score-=rb.high*12;score-=rb.med*5;score-=rb.low*1;
+  for(const item of rb.list){
+    const factor=item.conf==='confirmed'?1:item.conf==='likely'?0.6:0.35;
+    score-=(W[item.sev]||0)*factor;
+  }
   return Math.max(0,Math.min(100,Math.round(score)));
 }
 function scoreToGrade(s){if(s>=92)return'A';if(s>=84)return'A-';if(s>=76)return'B+';if(s>=68)return'B';if(s>=60)return'C';if(s>=50)return'D';return'F'}
