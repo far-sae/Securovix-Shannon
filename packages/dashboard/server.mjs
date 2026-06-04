@@ -988,12 +988,10 @@ app.post('/api/code-scan/multi/start', (req, res) => {
     glm: bodyKeys?.glm || legacy.glmKey || '',
   };
   if (!keys.claude) {
-    return res
-      .status(400)
-      .json({
-        ok: false,
-        error: 'Anthropic key required. Add it in Settings → War-Room Provider Keys (stored only in your browser).',
-      });
+    return res.status(400).json({
+      ok: false,
+      error: 'Anthropic key required. Add it in Settings → War-Room Provider Keys (stored only in your browser).',
+    });
   }
 
   const runId = randomUUID().slice(0, 8);
@@ -1326,8 +1324,8 @@ app.get('/api/scans/:id', (req, res) => {
 // We aggregate them across whatever classes ran into one verified-findings view +
 // a merged OWASP/CWE coverage roll-up. Tool-confirmed only → these are real, not noise.
 app.get('/api/scans/:id/broker', (req, res) => {
-  const brokerDir = join(WORKSPACES, req.params.id, 'broker');
-  if (!existsSync(brokerDir)) return res.json({ findings: [], rows: [], owaspCoverage: {}, cweCoverage: {} });
+  const scanDir = join(WORKSPACES, req.params.id);
+  const brokerDir = join(scanDir, 'broker');
   const rj = (p) => {
     try {
       return existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : null;
@@ -1341,20 +1339,33 @@ app.get('/api/scans/:id/broker', (req, res) => {
   const owaspCoverage = {};
   const cweCoverage = {};
 
-  for (const category of readdirSync(brokerDir)) {
-    const catDir = join(brokerDir, category);
-    if (!statSync(catDir).isDirectory()) continue;
-    for (const f of rj(join(catDir, 'findings.json')) || []) findings.push({ category, ...f });
-    const compliance = rj(join(catDir, 'compliance.json'));
-    if (compliance) {
-      for (const r of compliance.rows || []) rows.push(r);
-      for (const [k, n] of Object.entries(compliance.owaspCoverage || {}))
-        owaspCoverage[k] = (owaspCoverage[k] || 0) + n;
-      for (const [k, n] of Object.entries(compliance.cweCoverage || {})) cweCoverage[k] = (cweCoverage[k] || 0) + n;
+  if (existsSync(brokerDir)) {
+    for (const category of readdirSync(brokerDir)) {
+      const catDir = join(brokerDir, category);
+      if (!statSync(catDir).isDirectory()) continue;
+      for (const f of rj(join(catDir, 'findings.json')) || []) findings.push({ category, ...f });
+      const compliance = rj(join(catDir, 'compliance.json'));
+      if (compliance) {
+        for (const r of compliance.rows || []) rows.push(r);
+        for (const [k, n] of Object.entries(compliance.owaspCoverage || {}))
+          owaspCoverage[k] = (owaspCoverage[k] || 0) + n;
+        for (const [k, n] of Object.entries(compliance.cweCoverage || {})) cweCoverage[k] = (cweCoverage[k] || 0) + n;
+      }
     }
   }
 
-  res.json({ findings, rows, owaspCoverage, cweCoverage });
+  // Paired defenses from the Purple Engine: per confirmed exploit, a detection rule,
+  // an inline-block proof, and LLM remediation (defense/<category>/defense.json).
+  const defenses = [];
+  const defenseDir = join(scanDir, 'defense');
+  if (existsSync(defenseDir)) {
+    for (const category of readdirSync(defenseDir)) {
+      const d = rj(join(defenseDir, category, 'defense.json'));
+      if (d) defenses.push(d);
+    }
+  }
+
+  res.json({ findings, rows, owaspCoverage, cweCoverage, defenses });
 });
 
 // ---- API: Start scan ----
