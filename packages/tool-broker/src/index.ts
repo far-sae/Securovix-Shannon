@@ -8,3 +8,7 @@ export { DESCRIPTORS } from './registry/descriptors.js';
 export { BudgetLedger } from './budget/ledger.js';
 export { buildInvocationRecord, verifyInvocationRecord } from './forensic/invocation-record.js';
 export { redact } from './secrets/redact.js';
+export { authorizeRequest } from './core/authorize.js';
+export type { AuthorizeDeps, AuthorizeResult, ResolvedTarget } from './core/authorize.js';
+export { normalizeSqlmapCsv, normalizeNucleiJsonl, normalizeFfufJson } from './normalize/normalizer.js';
+export type { NormalizedToolFinding } from './normalize/normalizer.js';
