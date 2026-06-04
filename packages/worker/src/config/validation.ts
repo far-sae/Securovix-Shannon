@@ -25,8 +25,17 @@ export function classifyError(error: unknown): ShannonError {
   if (isOOMError(message)) {
     return new ShannonError(truncated, false, 'OUT_OF_MEMORY');
   }
+  if (isScopeError(message)) {
+    return new ShannonError(truncated, false, 'SCOPE_DENIED');
+  }
+  if (isBudgetError(message)) {
+    return new ShannonError(truncated, false, 'BUDGET_EXHAUSTED');
+  }
 
   // Retryable errors
+  if (isBrokerUnavailable(message)) {
+    return new ShannonError(truncated, true, 'BROKER_UNAVAILABLE');
+  }
   if (isRateLimitError(message)) {
     return new ShannonError(truncated, true, 'RATE_LIMIT');
   }
@@ -55,4 +64,16 @@ function isRateLimitError(msg: string): boolean {
 
 function isNetworkError(msg: string): boolean {
   return /ECONNREFUSED|ECONNRESET|ETIMEDOUT|socket hang up|network/i.test(msg);
+}
+
+function isScopeError(msg: string): boolean {
+  return /out.?of.?scope|scope.*(denied|block)|blocked.*scope|not in scope/i.test(msg);
+}
+
+function isBudgetError(msg: string): boolean {
+  return /budget.*(exceed|exhaust)|max.*(tool.*invocation|http.*request|cost)|cost.*limit/i.test(msg);
+}
+
+function isBrokerUnavailable(msg: string): boolean {
+  return /broker.*(unavailable|unreachable|down)|tool-broker.*(refused|unavailable)/i.test(msg);
 }
