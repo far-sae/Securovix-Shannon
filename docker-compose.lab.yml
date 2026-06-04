@@ -23,6 +23,26 @@ services:
     image: shannon-idor-probe:local
     profiles: [tools]
     command: ["true"]
+  jwt-lab:
+    build: ./lab/jwt-app
+    image: shannon-lab-jwt:local
+    container_name: shannon-lab-jwt
+    networks: [shannon-lab]
+  jwt-probe:
+    build: ./lab/jwt-probe
+    image: shannon-jwt-probe:local
+    profiles: [tools]
+    command: ["true"]
+  graphql-lab:
+    build: ./lab/graphql-app
+    image: shannon-lab-graphql:local
+    container_name: shannon-lab-graphql
+    networks: [shannon-lab]
+  graphql-probe:
+    build: ./lab/graphql-probe
+    image: shannon-graphql-probe:local
+    profiles: [tools]
+    command: ["true"]
 networks:
   shannon-lab:
     name: shannon-lab
