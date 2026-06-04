@@ -97,6 +97,26 @@ const SPECS: ClassSpec[] = [
       'You are a GraphQL testing agent. You have one tool. Call it now with the target URL, then report whether introspection is exposed.',
     assert: /graphql|introspection|schema/i,
   },
+  {
+    name: 'Insecure deserialization',
+    labImage: 'shannon-lab-deser:local',
+    probeImage: 'shannon-deser-probe:local',
+    tool: 'deser-probe',
+    path: '/load',
+    system:
+      'You are an insecure-deserialization testing agent. You have one tool. Call it now with the target URL, then report whether deserialization RCE was confirmed.',
+    assert: /deserial|pickle|rce|221/i,
+  },
+  {
+    name: 'Prompt injection',
+    labImage: 'shannon-lab-pi:local',
+    probeImage: 'shannon-pi-probe:local',
+    tool: 'pi-probe',
+    path: '/chat',
+    system:
+      'You are a prompt-injection testing agent. You have one tool. Call it now with the target URL, then report whether the system prompt or canary leaked.',
+    assert: /prompt.?inject|canary|system.?prompt|exfil/i,
+  },
 ];
 
 function scopeFor(host: string, ip: string): ScopeConfig {

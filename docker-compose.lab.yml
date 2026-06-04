@@ -43,6 +43,26 @@ services:
     image: shannon-graphql-probe:local
     profiles: [tools]
     command: ["true"]
+  deser-lab:
+    build: ./lab/deser-app
+    image: shannon-lab-deser:local
+    container_name: shannon-lab-deser
+    networks: [shannon-lab]
+  deser-probe:
+    build: ./lab/deser-probe
+    image: shannon-deser-probe:local
+    profiles: [tools]
+    command: ["true"]
+  pi-lab:
+    build: ./lab/pi-app
+    image: shannon-lab-pi:local
+    container_name: shannon-lab-pi
+    networks: [shannon-lab]
+  pi-probe:
+    build: ./lab/pi-probe
+    image: shannon-pi-probe:local
+    profiles: [tools]
+    command: ["true"]
 networks:
   shannon-lab:
     name: shannon-lab

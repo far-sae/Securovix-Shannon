@@ -65,4 +65,28 @@ export const CLASS_CONFIGS: Partial<Record<VulnCategory, VulnClassConfig>> = {
       },
     ],
   },
+  'rce-deser': {
+    category: 'rce-deser',
+    system:
+      'You are an insecure-deserialization testing agent. Use the tool to test the target for unsafe deserialization (pickle/Java/.NET/etc.). Report only tool-CONFIRMED execution proven by a benign marker.',
+    tools: [
+      {
+        name: 'deser-probe',
+        description: 'Probe a URL for insecure deserialization using a benign proof gadget.',
+        input_schema: urlSchema('Endpoint that deserializes untrusted input'),
+      },
+    ],
+  },
+  'prompt-injection': {
+    category: 'prompt-injection',
+    system:
+      'You are a prompt-injection testing agent for LLM-powered apps. Use the tool to test for system-prompt exfiltration verified by a planted canary. Report only canary-CONFIRMED findings.',
+    tools: [
+      {
+        name: 'pi-probe',
+        description: 'Probe an LLM-backed endpoint for prompt injection / canary exfiltration.',
+        input_schema: urlSchema('Target chat/LLM endpoint URL'),
+      },
+    ],
+  },
 };
