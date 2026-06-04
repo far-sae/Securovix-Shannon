@@ -1,1 +1,10 @@
-export {};
+export * from './types.js';
+export { ScopeEnforcer } from './scope/enforcer.js';
+export { matchesPath } from './scope/path-match.js';
+export { ipInCidr, ipv4ToInt, isPrivateOrSpecial } from './scope/ip.js';
+export { signScopeToken, verifyScopeToken } from './scope/lock.js';
+export { ToolRegistry } from './registry/registry.js';
+export { DESCRIPTORS } from './registry/descriptors.js';
+export { BudgetLedger } from './budget/ledger.js';
+export { buildInvocationRecord, verifyInvocationRecord } from './forensic/invocation-record.js';
+export { redact } from './secrets/redact.js';
