@@ -2981,11 +2981,11 @@ function renderPosture(){
 // ===== RED VS BLUE TAB =====
 function renderRedBlue(){
   const f=window._f,rb=window._rb;
-  // Compute battle stats from artifacts
-  const exploitCount=Object.values(f.exploits||{}).filter(x=>x).length;
-  const vulnCount=Object.values(f.vulns||{}).filter(x=>x).length;
-  const blueAcked=rb.crit+rb.high; // assume blue team scored on each known finding
-  const verdict=exploitCount>blueAcked?'breach':blueAcked>=exploitCount?'safe':'stalemate';
+  // Battle stats from the STRUCTURED breakdown, not file presence: red scores on CONFIRMED
+  // (reproduced) exploits; blue on the remaining findings triaged but not proven exploited.
+  const exploitCount=rb.confirmed||0;
+  const blueAcked=Math.max(0,(rb.total||0)-(rb.confirmed||0));
+  const verdict=exploitCount>0?'breach':(rb.total>0?'stalemate':'safe');
   const verdictMap={safe:{c:'var(--grn)',l:'Defended',d:'Blue Team held the line on critical surfaces.'},breach:{c:'var(--red)',l:'Breached',d:'Red Team produced verified exploits — see exploits tab.'},stalemate:{c:'var(--ylw)',l:'Stalemate',d:'Mixed outcome; manual review advised.'}};
   const v=verdictMap[verdict];
 
@@ -3037,17 +3037,27 @@ function renderRedBlue(){
 // ===== ATTACK CHAIN GRAPH =====
 function renderChainGraph(){
   // Build a simple DAG from chain analysis or vuln categories
-  const f=window._f;
+  const rb=window._rb;
+  // Per-category worst severity + whether any finding there is CONFIRMED, from the breakdown
+  // (not file presence — every category writes an analysis doc even when it finds nothing).
+  const order={crit:0,high:1,med:2,low:3,info:4};
+  const sevMap={};
+  for(const it of rb.list){
+    const cur=sevMap[it.cat];
+    if(!cur||order[it.sev]<order[cur.sev])sevMap[it.cat]={sev:it.sev,confirmed:cur?cur.confirmed:false};
+    if(it.conf==='confirmed')sevMap[it.cat]={...(sevMap[it.cat]||{sev:it.sev}),confirmed:true};
+  }
+  const conf=c=>!!(sevMap[c]&&sevMap[c].confirmed);
   const cats=['sqli','xss','auth-bypass','authz-bypass','ssrf','business-logic','misconfig','info-disclosure'];
-  const present=cats.filter(c=>f.vulns?.[c]||f.exploits?.[c]);
+  const present=cats.filter(c=>sevMap[c]); // only categories with ACTUAL findings
 
   // Layout nodes in 3 columns: Recon → Vulns → Impact
   const reconNodes=[{id:'recon',label:'Recon',col:0,row:0}];
-  const vulnNodes=present.map((c,i)=>({id:'v-'+c,label:c,col:1,row:i,sev:f.exploits?.[c]?'crit':f.vulns?.[c]?'high':'med'}));
+  const vulnNodes=present.map((c,i)=>({id:'v-'+c,label:c,col:1,row:i,sev:sevMap[c].sev}));
   const impactNodes=[
-    {id:'data',label:'Data Loss',col:2,row:0,sev:f.exploits?.['sqli']||f.exploits?.['ssrf']?'crit':'low'},
-    {id:'auth',label:'Account Takeover',col:2,row:1,sev:f.exploits?.['auth-bypass']||f.exploits?.['xss']?'crit':'low'},
-    {id:'priv',label:'Privilege Escalation',col:2,row:2,sev:f.exploits?.['authz-bypass']?'high':'low'},
+    {id:'data',label:'Data Loss',col:2,row:0,sev:conf('sqli')||conf('ssrf')?'crit':(sevMap['sqli']||sevMap['ssrf'])?'med':'low'},
+    {id:'auth',label:'Account Takeover',col:2,row:1,sev:conf('auth-bypass')||conf('xss')?'crit':(sevMap['auth-bypass']||sevMap['xss'])?'med':'low'},
+    {id:'priv',label:'Privilege Escalation',col:2,row:2,sev:conf('authz-bypass')?'high':sevMap['authz-bypass']?'med':'low'},
   ];
   const nodes=[...reconNodes,...vulnNodes,...impactNodes];
 
