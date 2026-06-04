@@ -30,6 +30,23 @@ services:
     depends_on:
       - temporal
 
+  # Track B tool-broker sidecar. Mounts the host Docker socket so its Sandbox can launch
+  # hardened per-tool containers. Egress controls + scope enforcement live in the broker;
+  # the worker reaches it at http://tool-broker:8443. Opt-in via the `broker` profile.
+  tool-broker:
+    build:
+      context: .
+      dockerfile: packages/tool-broker/Dockerfile
+    image: shannon-tool-broker:local
+    profiles: [broker]
+    expose:
+      - "8443"
+    environment:
+      - BROKER_PORT=8443
+      # SHANNON_BROKER_SCOPE / _SCOPE_KEY / _RECORD_KEY / SHANNON_SCAN_NET injected per scan.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   temporal-data:
     driver: local

@@ -15,6 +15,9 @@ services:
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - SHANNON_LOCAL=1
+      # Reach the broker by service name on the shared bridge network. (network_mode:host
+      # was removed — it broke Docker DNS to the broker AND disabled packet-level egress
+      # filtering; the app-layer ScopeEnforcer is the primary control regardless.)
+      - BROKER_URL=http://tool-broker:8443
     depends_on:
       - temporal
-    network_mode: "host"
