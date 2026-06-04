@@ -7,10 +7,20 @@ const acts = proxyActivities<ScanActivities>({
   heartbeatTimeout: '60m',
 });
 
+// Broker-backed exploitation runs on a tighter clock than the 2h LLM-agent activities.
+const brokerActs = proxyActivities<ScanActivities>({
+  startToCloseTimeout: '10m',
+  heartbeatTimeout: '2m',
+});
+
 export interface ScanInput {
   configPath: string;
   workspaceDir: string;
   resume: boolean;
+  // Track B (opt-in): vuln classes to run through the tool-broker, plus the scope-lock
+  // token the CLI signed at scan start. Omitted → broker phase is skipped entirely.
+  brokerCategories?: string[];
+  scopeToken?: string;
 }
 
 export async function scanWorkflow(input: ScanInput): Promise<string> {
@@ -60,6 +70,24 @@ export async function scanWorkflow(input: ScanInput): Promise<string> {
   });
 
   await Promise.all(pairPromises);
+
+  // Phase 3.4: Broker-backed exploitation (Track B) — opt-in. Each class runs the
+  // recall → LLM-agent-via-broker → record + compliance loop. Skipped unless the CLI
+  // supplied brokerCategories + a signed scopeToken.
+  const scopeToken = input.scopeToken;
+  if (scopeToken && input.brokerCategories && input.brokerCategories.length > 0) {
+    await Promise.all(
+      input.brokerCategories.map((category) =>
+        brokerActs.runBrokerExploit({
+          category,
+          scopeToken,
+          configPath: input.configPath,
+          workspaceDir: input.workspaceDir,
+          scanId: input.workspaceDir,
+        }),
+      ),
+    );
+  }
 
   // Phase 3.5: Attack Chain Graph Analysis
   // Build directed graph from all findings, discover multi-step kill chains
