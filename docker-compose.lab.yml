@@ -13,6 +13,16 @@ services:
     image: shannon-ssti-probe:local
     profiles: [tools]
     command: ["true"]
+  idor-lab:
+    build: ./lab/idor-app
+    image: shannon-lab-idor:local
+    container_name: shannon-lab-idor
+    networks: [shannon-lab]
+  idor-probe:
+    build: ./lab/idor-probe
+    image: shannon-idor-probe:local
+    profiles: [tools]
+    command: ["true"]
 networks:
   shannon-lab:
     name: shannon-lab
