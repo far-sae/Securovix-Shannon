@@ -8,8 +8,7 @@ import { AttackGraph } from '../../attack-graph/graph.js';
 import { ChainScorer } from '../../attack-graph/chain-scorer.js';
 import type { VulnNode, VulnCategory } from '../../attack-graph/types.js';
 import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
-
-const CATEGORIES = ['sqli', 'xss', 'auth-bypass', 'authz-bypass', 'ssrf', 'business-logic'] as const;
+import { ACTIVE_VULN_CATEGORIES } from '../categories.js';
 
 export async function chainAnalysisActivity(
   container: Container,
@@ -26,7 +25,7 @@ export async function chainAnalysisActivity(
     let nodeCounter = 0;
 
     // Load all vuln findings and convert to graph nodes
-    for (const category of CATEGORIES) {
+    for (const category of ACTIVE_VULN_CATEGORIES) {
       const queuePath = join(input.workspaceDir, 'vuln', category, 'exploitation-queue.json');
       if (!existsSync(queuePath)) continue;
 

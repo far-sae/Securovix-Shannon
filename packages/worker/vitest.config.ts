@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   plugins: [
@@ -16,6 +17,16 @@ export default defineConfig({
       },
     },
   ],
+  resolve: {
+    alias: {
+      // @temporalio/common is a peer dep not directly installed in worker —
+      // point vitest at the copy hoisted under @temporalio/activity.
+      '@temporalio/common': resolve(
+        __dirname,
+        '../../node_modules/.pnpm/@temporalio+activity@1.17.2/node_modules/@temporalio/common',
+      ),
+    },
+  },
   test: {
     include: ['src/**/*.test.ts'],
     environment: 'node',

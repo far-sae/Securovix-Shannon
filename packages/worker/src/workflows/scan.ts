@@ -1,5 +1,6 @@
 import { proxyActivities } from '@temporalio/workflow';
 import type { ScanActivities } from './activities/index.js';
+import { ACTIVE_VULN_CATEGORIES } from './categories.js';
 
 const acts = proxyActivities<ScanActivities>({
   startToCloseTimeout: '2h',
@@ -33,18 +34,9 @@ export async function scanWorkflow(input: ScanInput): Promise<string> {
     workspaceDir: input.workspaceDir,
   });
 
-  // Phase 3 & 4: Vuln + Exploit agents (paired, parallel across categories)
-  // Each exploit agent starts as soon as its corresponding vuln agent finishes.
-  // No global sync barrier between phase 3 and 4.
-  // Includes business-logic as a 6th category.
-  const vulnExploitPairs = [
-    { vuln: 'sqli', exploit: 'sqli' },
-    { vuln: 'xss', exploit: 'xss' },
-    { vuln: 'auth-bypass', exploit: 'auth-bypass' },
-    { vuln: 'authz-bypass', exploit: 'authz-bypass' },
-    { vuln: 'ssrf', exploit: 'ssrf' },
-    { vuln: 'business-logic', exploit: 'business-logic' },
-  ] as const;
+  // Phase 3 & 4: Vuln + Exploit agents (paired, parallel across categories).
+  // Categories come from the single source of truth in categories.ts.
+  const vulnExploitPairs = ACTIVE_VULN_CATEGORIES.map((c) => ({ vuln: c, exploit: c }));
 
   const pairPromises = vulnExploitPairs.map(async (pair) => {
     // Run vuln agent first

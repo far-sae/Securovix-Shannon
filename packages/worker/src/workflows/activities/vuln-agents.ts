@@ -10,8 +10,15 @@ import { AuditSession } from '../../audit/session.js';
 import { GitCheckpoint } from '../../workspace/git-checkpoint.js';
 import { SessionManager } from '../../workspace/session.js';
 import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
+import { ACTIVE_VULN_CATEGORIES } from '../categories.js';
 
-const VULN_CATEGORIES = ['sqli', 'xss', 'auth-bypass', 'authz-bypass', 'ssrf'] as const;
+export function categoryAgentIndex(category: string): number {
+  const idx = ACTIVE_VULN_CATEGORIES.indexOf(category as (typeof ACTIVE_VULN_CATEGORIES)[number]);
+  if (idx < 0) {
+    throw new Error(`Unknown vuln category: ${category}. Add it to workflows/categories.ts.`);
+  }
+  return idx + 1;
+}
 
 export async function vulnAgentActivity(container: Container, input: VulnAgentInput): Promise<VulnAgentOutput> {
   const config = unwrap(container.configLoader.load(input.configPath));
@@ -30,7 +37,7 @@ export async function vulnAgentActivity(container: Container, input: VulnAgentIn
     return { hasFindings: true, queuePath, analysisPath };
   }
 
-  const agentIndex = VULN_CATEGORIES.indexOf(input.category as typeof VULN_CATEGORIES[number]) + 1;
+  const agentIndex = categoryAgentIndex(input.category);
   const browserPool = new BrowserPool(1);
 
   try {
