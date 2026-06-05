@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { randomUUID, createHash } from 'node:crypto';
-import { runExploitDefend } from './purple-engine.mjs';
+import { ALL_CLASSES, runExploitDefend } from './purple-engine.mjs';
 
 // ---- Live HTTP recon ----
 async function httpRecon(targetUrl) {
@@ -452,7 +452,7 @@ t = Date.now();
 try {
   const purple = await runExploitDefend({
     target: targetUrl,
-    classes: ['rce-ssti', 'prompt-injection', 'graphql-idor', 'authz-bypass', 'token-forgery', 'rce-deser'],
+    classes: ALL_CLASSES,
     label: 'scan',
     workspaceDir: wsDir,
   });
