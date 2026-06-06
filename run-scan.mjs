@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { randomUUID, createHash } from 'node:crypto';
-import { ALL_CLASSES, runExploitDefend } from './purple-engine.mjs';
+import { runWholeApp } from './purple-engine.mjs';
 
 // ---- Live HTTP recon ----
 async function httpRecon(targetUrl) {
@@ -450,11 +450,11 @@ save(
 console.log(`  [Phase 3.5] Real Exploit + Defend (broker probers)...`);
 t = Date.now();
 try {
-  const purple = await runExploitDefend({
+  const purple = await runWholeApp({
     target: targetUrl,
-    classes: ALL_CLASSES,
     label: 'scan',
     workspaceDir: wsDir,
+    maxPages: 40,
   });
   const confirmed = purple.exploits.reduce((s, e) => s + e.confirmed, 0);
   console.log(
