@@ -1368,6 +1368,142 @@ app.get('/api/scans/:id/broker', (req, res) => {
   res.json({ findings, rows, owaspCoverage, cweCoverage, defenses });
 });
 
+// ============================================================
+//  Domain-ownership authorization — clients may only scan
+//  targets whose domain they have PROVEN they control.
+// ============================================================
+const VERIFIED_PATH = join(SHANNON_HOME, 'verified-domains.json');
+function loadVerified() {
+  try {
+    return JSON.parse(readFileSync(VERIFIED_PATH, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+function saveVerified(v) {
+  try {
+    mkdirSync(SHANNON_HOME, { recursive: true });
+    writeFileSync(VERIFIED_PATH, JSON.stringify(v, null, 2));
+  } catch {}
+}
+// Registrable-ish domain (eTLD+1 heuristic) so verifying example.com also covers www/app.example.com.
+function registrable(host) {
+  return String(host || '')
+    .toLowerCase()
+    .split('.')
+    .slice(-2)
+    .join('.');
+}
+function hostOf(u) {
+  try {
+    return new URL(/^https?:\/\//.test(u) ? u : `https://${u}`).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+function isLocalHost(h) {
+  return h === 'localhost' || h === '::1' || /^127\./.test(h) || h.endsWith('.local');
+}
+// Deterministic per-(user,domain) token — recomputable, so we don't need to store the token itself.
+function domainToken(userId, domain) {
+  return _crypto.createHmac('sha256', SESSION_SECRET).update(`verify:${userId}:${domain}`).digest('hex').slice(0, 40);
+}
+function isVerified(userId, host) {
+  if (!userId) return false;
+  const v = loadVerified()[userId] || {};
+  return !!(v[host] || v[registrable(host)]);
+}
+
+// Step 1: get the token + instructions for proving ownership of a domain.
+app.post('/api/verify/request', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Log in first.' });
+  const domain = registrable(hostOf(req.body?.domain || ''));
+  if (!domain || !domain.includes('.')) return res.status(400).json({ error: 'Provide a valid domain.' });
+  const token = domainToken(user.id, domain);
+  res.json({
+    ok: true,
+    domain,
+    token,
+    methods: {
+      dns: { record: `_shannon.${domain}`, type: 'TXT', value: `shannon-site-verification=${token}` },
+      file: { url: `https://${domain}/.well-known/shannon-verify.txt`, content: token },
+      meta: { tag: `<meta name="shannon-site-verification" content="${token}">` },
+    },
+    instructions: 'Add ANY one of the above to the domain, then call /api/verify/check.',
+  });
+});
+
+// Step 2: verify ownership via DNS TXT, a well-known file, or a homepage meta tag.
+app.post('/api/verify/check', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Log in first.' });
+  const domain = registrable(hostOf(req.body?.domain || ''));
+  if (!domain || !domain.includes('.')) return res.status(400).json({ error: 'Provide a valid domain.' });
+  const token = domainToken(user.id, domain);
+  const tryFetch = async (url) => {
+    try {
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 8000);
+      const r = await fetch(url, { redirect: 'follow', signal: c.signal });
+      const body = await r.text().catch(() => '');
+      clearTimeout(t);
+      return r.status === 200 ? body : '';
+    } catch {
+      return '';
+    }
+  };
+  let method = null;
+  // (a) DNS TXT on _shannon.<domain> or the apex.
+  try {
+    const { resolveTxt } = await import('node:dns/promises');
+    for (const name of [`_shannon.${domain}`, domain]) {
+      try {
+        const recs = (await resolveTxt(name)).map((r) => r.join(''));
+        if (recs.some((v) => v.includes(token))) {
+          method = 'dns';
+          break;
+        }
+      } catch {}
+    }
+  } catch {}
+  // (b) Well-known file.
+  if (!method) {
+    for (const u of [
+      `https://${domain}/.well-known/shannon-verify.txt`,
+      `http://${domain}/.well-known/shannon-verify.txt`,
+    ]) {
+      if ((await tryFetch(u)).includes(token)) {
+        method = 'file';
+        break;
+      }
+    }
+  }
+  // (c) Homepage meta tag.
+  if (!method) {
+    const html = (await tryFetch(`https://${domain}/`)) || (await tryFetch(`http://${domain}/`));
+    if (html.includes(`shannon-site-verification`) && html.includes(token)) method = 'meta';
+  }
+  if (!method)
+    return res.json({
+      ok: false,
+      verified: false,
+      error: 'Token not found yet. Add it and retry (DNS can take a few minutes).',
+    });
+  const all = loadVerified();
+  all[user.id] = all[user.id] || {};
+  all[user.id][domain] = { verifiedAt: new Date().toISOString(), method };
+  saveVerified(all);
+  res.json({ ok: true, verified: true, domain, method });
+});
+
+// List the caller's verified domains.
+app.get('/api/verify/list', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Log in first.' });
+  res.json({ ok: true, domains: loadVerified()[user.id] || {} });
+});
+
 // ---- API: Start scan ----
 app.post('/api/scans', (req, res) => {
   const {
@@ -1383,6 +1519,26 @@ app.post('/api/scans', (req, res) => {
     providerKeys,
   } = req.body;
   if (!targetUrl) return res.status(400).json({ error: 'Target URL is required' });
+
+  // ---- AUTHORIZATION GATE ----
+  // Active scanning of a system you don't control is illegal. External targets require a logged-in
+  // user, an explicit authorization attestation, AND proven domain ownership. Localhost is exempt
+  // (built-in labs / self-demo). This is the safety boundary for multi-tenant / client use.
+  const targetHost = hostOf(targetUrl);
+  if (!isLocalHost(targetHost)) {
+    const user = getUser(req);
+    if (!user) return res.status(401).json({ error: 'Sign in to scan an external target.' });
+    if (req.body.authorized !== true)
+      return res
+        .status(403)
+        .json({ error: 'You must confirm you are authorized to test this target.', needsAuthorization: true });
+    if (!isVerified(user.id, targetHost))
+      return res.status(403).json({
+        error: `You have not verified ownership of ${registrable(targetHost)}. Verify it first (prove control via DNS, a /.well-known file, or a meta tag).`,
+        needsVerification: registrable(targetHost),
+      });
+  }
+
   const settings = loadSettings();
   // Browser-supplied key takes precedence; fall back to env or legacy file for backward compat.
   const apiKey = bodyKey || settings.apiKey || process.env.ANTHROPIC_API_KEY;
