@@ -845,7 +845,18 @@ async function defendAndReport(report, ws, log) {
       : '_No confirmed findings to defend._',
   ].join('\n');
   writeFileSync(join(ws, 'purple', 'exploit-defend-report.md'), md);
-  log(`\n=== REPORT written to ${join(ws, 'purple', 'exploit-defend-report.md')} ===`);
+
+  // Certification-grade report: CVSS 3.1 + OWASP WSTG/ASVS + compliance mapping + sign-off block
+  // (Markdown + self-contained HTML) — the deliverable a certified tester reviews and signs.
+  try {
+    const { buildCertReport } = await import('./cert-report.mjs');
+    const cert = buildCertReport(report, { compliance: COMPLIANCE, classesTested: report.exploits.map((e) => e.cls) });
+    writeFileSync(join(ws, 'purple', 'certification-report.md'), cert.md);
+    writeFileSync(join(ws, 'purple', 'certification-report.html'), cert.html);
+    log(`=== CERT REPORT written to ${join(ws, 'purple', 'certification-report.html')} (risk: ${cert.risk}) ===`);
+  } catch (err) {
+    log(`  (cert report error: ${err.message})`);
+  }
   return report;
 }
 

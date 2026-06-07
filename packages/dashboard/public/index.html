@@ -2937,9 +2937,12 @@ function renderVerified(){
   const owasp=Object.entries(b.owaspCoverage||{}).sort((a,c)=>c[1]-a[1]);
   const sevCls=s=>['critical','high','medium','low','info'].includes((s||'').toLowerCase())?(s||'').toLowerCase():'medium';
   $('TP').innerHTML=`<div style="animation:rvIn .3s var(--med)">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
       <h3 class="h-display" style="font-size:22px;color:var(--t0)">Tool-Verified Exploits</h3>
       <span class="bx bx-g" style="font-size:11px">${findings.length} confirmed</span>
+      <span style="flex:1"></span>
+      <a class="btn btn-p" style="padding:6px 12px;font-size:12px;display:inline-flex;align-items:center;gap:6px" href="/api/scans/${window._sid}/report?format=html" target="_blank" rel="noopener" title="CVSS 3.1 + OWASP WSTG/ASVS + compliance report — open and Print → Save as PDF">${ico('file-text',{cls:'ico-sm'})} Certification report</a>
+      <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${window._sid}/report?format=md" target="_blank" rel="noopener">Markdown</a>
     </div>
     <p style="color:var(--t2);margin-bottom:18px;line-height:1.6;max-width:760px">Findings here were exploited through the scope-locked tool broker and confirmed by a benign proof marker (arithmetic eval, planted canary, or cross-identity read). Unlike inferred findings, these carry <strong style="color:var(--t1)">zero false positives by construction</strong>${classes.length?` — across ${classes.length} vuln class${classes.length>1?'es':''}: ${classes.map(H).join(', ')}.`:'.'}</p>
 
