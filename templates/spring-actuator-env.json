@@ -1,0 +1,12 @@
+{
+  "id": "spring-actuator-env",
+  "name": "Spring Boot Actuator /env exposed (config + secrets disclosure)",
+  "severity": "high",
+  "requests": [{ "path": "/actuator/env" }, { "path": "/env" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "words": ["propertySources"], "condition": "and" }
+  ],
+  "remediation": "Restrict or disable Spring Boot Actuator endpoints in production; require auth and bind to a management port."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "exposed-git-head",
+  "name": "Exposed .git repository (/.git/HEAD)",
+  "severity": "medium",
+  "requests": [{ "path": "/.git/HEAD" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "regex": "^ref:\\s+refs/" }
+  ],
+  "remediation": "Block access to the .git directory at the web server; never deploy the VCS metadata to the web root."
+}

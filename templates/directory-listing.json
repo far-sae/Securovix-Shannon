@@ -1,0 +1,12 @@
+{
+  "id": "directory-listing",
+  "name": "Directory listing enabled (autoindex)",
+  "severity": "low",
+  "requests": [{ "path": "/uploads/" }, { "path": "/files/" }, { "path": "/backup/" }, { "path": "/images/" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "words": ["Index of /"], "condition": "and" }
+  ],
+  "remediation": "Disable directory autoindex (Apache: Options -Indexes; nginx: autoindex off) so listings aren't exposed."
+}

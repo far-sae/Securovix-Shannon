@@ -88,7 +88,7 @@ const sameOrigin = (u, origin) => {
   }
 };
 
-function parseForms(html, base) {
+export function parseForms(html, base) {
   const forms = [];
   for (const fm of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
     const attrs = fm[1];
@@ -118,14 +118,17 @@ export async function crawl({
   maxRequests = 300,
 } = {}) {
   // Resolve the SEED's own canonical redirect (apex->www, http->https) and adopt that origin as
-  // the scope — so a site that 308s its apex to www is still crawled. Only the seed's own chain
-  // is followed; per-page redirects to other hosts are still dropped.
+  // the scope — so a site that 308s its apex to www is still crawled. SECURITY: only follow the
+  // chain to the SAME SITE (registrable domain), so a seed that redirects to an attacker host is
+  // NOT chased and the auth/session headers are never sent off-site.
+  const seedSite = new URL(target).hostname.toLowerCase().split('.').slice(-2).join('.');
+  const sameSite = (h) => h.toLowerCase().split('.').slice(-2).join('.') === seedSite;
   let startUrl = target;
   for (let i = 0; i < 5; i++) {
     const r = await get(startUrl, headers, timeoutMs, new URL(startUrl).hostname.toLowerCase());
     if (r.location) {
       const d = abs(r.location, startUrl);
-      if (d && d !== startUrl) {
+      if (d && d !== startUrl && sameSite(new URL(d).hostname)) {
         startUrl = d;
         continue;
       }
