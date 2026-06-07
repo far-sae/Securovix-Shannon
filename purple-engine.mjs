@@ -188,7 +188,7 @@ function injectParam(url, payload) {
 const targetUrlOf = (t) => (typeof t === 'string' ? t : t.url);
 function injReq(target, payload) {
   if (typeof target === 'string') return { url: injectParam(target, payload), opts: {} };
-  const keys = target.params && target.params.length ? target.params : ['q'];
+  const keys = target.params?.length ? target.params : ['q'];
   if ((target.method || 'get').toLowerCase() === 'post') {
     const body = new URLSearchParams();
     for (const k of keys) body.set(k, payload);
@@ -268,9 +268,9 @@ const PROBERS = {
     blockable: true,
     filter: (u, b) => /\{\{.*\}\}|\$\{.*\}|#\{.*\}|<%.*%>|\*\{.*\}/.test(dec(u) + (b || '')),
     async probe(target) {
-      const A = 9931,
-        B = 9817,
-        P = String(A * B); // high-entropy product — cannot match by chance
+      const A = 9931;
+      const B = 9817;
+      const P = String(A * B); // high-entropy product — cannot match by chance
       const oracles = [`{{${A}*${B}}}`, `\${${A}*${B}}`, `#{${A}*${B}}`, `<%= ${A}*${B} %>`, `*{${A}*${B}}`];
       const bl = injReq(target, `zz${A}zz`);
       const baseline = (await fetchT(bl.url, bl.opts)).body; // non-evaluating control
@@ -721,9 +721,7 @@ async function llmRemediation(target, cls, finding) {
     messages: [
       {
         role: 'user',
-        content:
-          `A ${cls} issue was CONFIRMED on ${target}.\nEvidence: ${finding.detail}\nRaw: ${finding.raw}\n\n` +
-          `Write a concise blue-team defense for THIS specific confirmed finding:\n1. Root cause (1-2 sentences).\n2. Concrete remediation with a short code snippet.\n3. A detection signature (WAF or SIEM rule).\nUnder 200 words. Markdown.`,
+        content: `A ${cls} issue was CONFIRMED on ${target}.\nEvidence: ${finding.detail}\nRaw: ${finding.raw}\n\nWrite a concise blue-team defense for THIS specific confirmed finding:\n1. Root cause (1-2 sentences).\n2. Concrete remediation with a short code snippet.\n3. A detection signature (WAF or SIEM rule).\nUnder 200 words. Markdown.`,
       },
     ],
   });
@@ -741,8 +739,8 @@ function recordClass(report, ws, cls, findings, log) {
   writeFileSync(join(ws, 'broker', cls, 'findings.json'), JSON.stringify(findings, null, 2));
   if (findings.length) {
     const rows = findings.map((f) => ({ ...COMPLIANCE[cls], category: cls, severity: f.severity, endpoint: f.target }));
-    const owaspCoverage = {},
-      cweCoverage = {};
+    const owaspCoverage = {};
+    const cweCoverage = {};
     for (const r of rows) {
       owaspCoverage[r.owasp] = (owaspCoverage[r.owasp] || 0) + 1;
       cweCoverage[r.cwe] = (cweCoverage[r.cwe] || 0) + 1;
@@ -821,22 +819,22 @@ async function defendAndReport(report, ws, log) {
   mkdirSync(join(ws, 'purple'), { recursive: true });
   writeFileSync(join(ws, 'purple', 'exploit-defend.json'), JSON.stringify(report, null, 2));
   const md = [
-    `# Purple Engine — Exploit + Defend`,
-    ``,
+    '# Purple Engine — Exploit + Defend',
+    '',
     `**Target:** ${report.target}`,
     `**Run:** ${report.startedAt}`,
     report.crawl
       ? `**Crawl:** ${report.crawl.pages} pages · ${report.crawl.params} params · ${report.crawl.forms} forms · ${report.crawl.apiPaths} api paths`
       : '',
-    ``,
+    '',
     `## Confirmed findings (${confirmed.reduce((s, e) => s + e.confirmed, 0)})`,
     confirmed.length
       ? confirmed
           .flatMap((e) => e.findings.map((f) => `- **${e.cls}** (${f.severity}) — ${f.detail} @ ${f.target}`))
           .join('\n')
       : '_None confirmed (zero false positives)._',
-    ``,
-    `## Defenses`,
+    '',
+    '## Defenses',
     report.defenses.length
       ? report.defenses
           .map(
@@ -1070,7 +1068,7 @@ export async function runWholeApp({
 }
 
 // ---- CLI ----
-const isMain = process.argv[1] && process.argv[1].endsWith('purple-engine.mjs');
+const isMain = process.argv[1]?.endsWith('purple-engine.mjs');
 if (isMain) {
   const arg = (n) => {
     const i = process.argv.indexOf(n);
@@ -1229,7 +1227,7 @@ if (isMain) {
         });
         Object.assign(headers, sess);
         console.error(
-          sess.Cookie ? `  [auth] logged in; session cookie acquired` : '  [auth] login produced no session cookie',
+          sess.Cookie ? '  [auth] logged in; session cookie acquired' : '  [auth] login produced no session cookie',
         );
       }
       if (process.argv.includes('--no-crawl')) {

@@ -64,8 +64,7 @@ export async function runTemplates(origin, templates, fetchFn) {
         body: req.body,
       });
       if (!status) continue;
-      const headersText =
-        headers && headers[Symbol.iterator] ? [...headers].map(([k, v]) => `${k}: ${v}`).join('\n') : '';
+      const headersText = headers?.[Symbol.iterator] ? [...headers].map(([k, v]) => `${k}: ${v}`).join('\n') : '';
       const results = matchers.map((m) => matchOne(m, { status, body: body || '', headersText }));
       const matched = cond === 'or' ? results.some(Boolean) : results.every(Boolean);
       if (matched) {

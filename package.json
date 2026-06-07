@@ -12,7 +12,8 @@
     "format": "biome format --write .",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
-    "web": "node web/server.mjs"
+    "web": "node web/server.mjs",
+    "test": "node --test ./engine.test.mjs ./templates.test.mjs ./crawler.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
@@ -23,5 +24,8 @@
     "@anthropic-ai/sdk": "^0.92.0",
     "undici": "^8.2.0",
     "yaml": "^2.4.0"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.48.0"
   }
 }

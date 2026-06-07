@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # --- Gating steps (verified green locally) ---
+      - name: Typecheck (worker + tool-broker + cli)
+        run: pnpm typecheck
+
+      - name: Root unit tests (engine + crawler + templates)
+        run: pnpm test
+
+      # --- Informational steps (surfaced, not yet gating) ---
+      # Worker uses better-sqlite3 (native) — promote to gating once confirmed green on CI runners.
+      - name: Package tests (worker + tool-broker, vitest)
+        run: pnpm --filter @shannon/worker --filter @shannon/tool-broker test
+        continue-on-error: true
+
+      # Repo has pre-existing lint debt; lint is reported but does not block until cleaned up.
+      - name: Lint (biome)
+        run: pnpm lint
+        continue-on-error: true
