@@ -2030,7 +2030,14 @@ async function doScan(){
     if(!k)return;
     keys=csLoadKeys();
   }
+  // Authorization gate: active scanning of a system you don't control is illegal. For external
+  // targets, require an explicit attestation before launching (the server also enforces this).
+  const tgtHost=(()=>{try{return new URL(WIZ.targetUrl).hostname.toLowerCase()}catch{return ''}})();
+  const isLocal=tgtHost==='localhost'||/^127\./.test(tgtHost)||tgtHost==='::1'||tgtHost.endsWith('.local');
+  let authorized=true;
+  if(!isLocal){ authorized=await authorizeModal(WIZ.targetUrl); if(!authorized) return; }
   const b=$('gobtn');if(b){b.disabled=true;b.innerHTML='<span class="sp"></span> Starting…'}
+  const reenable=()=>{if(b){b.disabled=false;b.textContent='▶ Launch Scan'}};
   try{
     const r=await api('/scans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       targetUrl:WIZ.targetUrl,
@@ -2041,10 +2048,86 @@ async function doScan(){
       apiKey:keys.claude,
       warRoom:WIZ.warRoom!==false,
       providerKeys:keys,
+      authorized,
     })});
-    if(r.error){alert(r.error);if(b){b.disabled=false;b.textContent='▶ Launch Scan'}return}
+    if(r.error){
+      // Server says we must prove we own the domain → open the verification flow, then let them retry.
+      if(r.needsVerification){ reenable(); await verifyModal(r.needsVerification); return; }
+      alert(r.error); reenable(); return;
+    }
     WIZ={};go('live',r.scanId);
-  }catch(e){alert(e.message);if(b){b.disabled=false;b.textContent='▶ Launch Scan'}}
+  }catch(e){alert(e.message);reenable();}
+}
+
+// Authorization attestation — shown before scanning any external target. Active testing of a
+// system you don't control is illegal; the user must affirm authorization (server also enforces).
+function authorizeModal(target){
+  return new Promise(resolve=>{
+    const ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px';
+    ov.innerHTML=`
+      <div style="background:linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid var(--brd);border-radius:18px;padding:26px;max-width:480px;width:100%;box-shadow:0 24px 60px rgba(0,0,0,.5)">
+        <h3 class="h-display" style="font-size:18px;color:var(--t0);margin-bottom:8px">Authorization required</h3>
+        <p style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:6px">You are about to run an <strong style="color:var(--t1)">active security test</strong> against:</p>
+        <code style="display:block;background:var(--s2);padding:8px 10px;border-radius:8px;color:var(--acc3);font-size:12px;margin-bottom:14px;word-break:break-all">${H(target)}</code>
+        <p style="font-size:12px;color:var(--t3);line-height:1.6;margin-bottom:14px">Testing a system you don't own or aren't authorized to test is illegal. By proceeding you take full responsibility.</p>
+        <label style="display:flex;gap:10px;align-items:flex-start;font-size:12.5px;color:var(--t1);cursor:pointer;margin-bottom:18px">
+          <input id="az-chk" type="checkbox" style="margin-top:3px"> <span>I own this system, or I have explicit written authorization to security-test it.</span>
+        </label>
+        <div style="display:flex;gap:10px">
+          <button id="az-cancel" class="btn btn-g" style="flex:1">Cancel</button>
+          <button id="az-go" class="btn btn-p" style="flex:1" disabled>Authorize &amp; launch</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    const chk=ov.querySelector('#az-chk'),go=ov.querySelector('#az-go');
+    chk.onchange=()=>{go.disabled=!chk.checked};
+    const close=v=>{ov.remove();resolve(v)};
+    ov.querySelector('#az-cancel').onclick=()=>close(false);
+    go.onclick=()=>close(true);
+  });
+}
+
+// Domain-ownership verification flow — proves the user controls the domain before scans are allowed.
+async function verifyModal(domain){
+  let info;
+  try{ info=await api('/verify/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain})}); }
+  catch(e){ alert('Could not start verification: '+e.message); return; }
+  if(info.error){ alert(info.error); return; }
+  return new Promise(resolve=>{
+    const m=info.methods;
+    const ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto';
+    ov.innerHTML=`
+      <div style="background:linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid var(--brd);border-radius:18px;padding:26px;max-width:560px;width:100%;box-shadow:0 24px 60px rgba(0,0,0,.5)">
+        <h3 class="h-display" style="font-size:18px;color:var(--t0);margin-bottom:6px">Verify ownership of ${H(info.domain)}</h3>
+        <p style="font-size:12.5px;color:var(--t2);line-height:1.6;margin-bottom:14px">Prove you control this domain using <strong>any one</strong> method, then click Verify.</p>
+        <div style="font-size:12px;color:var(--t1);font-weight:700;margin-bottom:4px">Option A — DNS TXT record</div>
+        <code style="display:block;background:var(--s2);padding:8px 10px;border-radius:8px;color:var(--acc3);font-size:11px;margin-bottom:12px;word-break:break-all">${H(m.dns.record)}  TXT  ${H(m.dns.value)}</code>
+        <div style="font-size:12px;color:var(--t1);font-weight:700;margin-bottom:4px">Option B — file at your web root</div>
+        <code style="display:block;background:var(--s2);padding:8px 10px;border-radius:8px;color:var(--acc3);font-size:11px;margin-bottom:2px;word-break:break-all">${H(m.file.url)}</code>
+        <code style="display:block;background:var(--s2);padding:8px 10px;border-radius:8px;color:var(--t2);font-size:11px;margin-bottom:12px;word-break:break-all">contents: ${H(m.file.content)}</code>
+        <div style="font-size:12px;color:var(--t1);font-weight:700;margin-bottom:4px">Option C — homepage meta tag</div>
+        <code style="display:block;background:var(--s2);padding:8px 10px;border-radius:8px;color:var(--acc3);font-size:11px;margin-bottom:14px;word-break:break-all">${H(m.meta.tag)}</code>
+        <div id="vf-status" style="font-size:12px;min-height:16px;margin-bottom:10px"></div>
+        <div style="display:flex;gap:10px">
+          <button id="vf-close" class="btn btn-g" style="flex:1">Close</button>
+          <button id="vf-check" class="btn btn-p" style="flex:1">Verify now</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    const st=ov.querySelector('#vf-status');
+    const close=()=>{ov.remove();resolve()};
+    ov.querySelector('#vf-close').onclick=close;
+    ov.querySelector('#vf-check').onclick=async()=>{
+      st.style.color='var(--t3)';st.textContent='Checking DNS / file / meta…';
+      try{
+        const r=await api('/verify/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain:info.domain})});
+        if(r.verified){st.style.color='var(--grn)';st.textContent='✅ Verified via '+r.method+'. You can launch the scan now.';setTimeout(close,1600);}
+        else{st.style.color='var(--ylw)';st.textContent='⚠ '+(r.error||'Not found yet — add the record and retry (DNS can take a few minutes).');}
+      }catch(e){st.style.color='var(--red)';st.textContent='Error: '+e.message;}
+    };
+  });
 }
 
 // Inline modal — lets a user paste their Anthropic key without navigating to Settings.
