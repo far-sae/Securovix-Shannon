@@ -1323,6 +1323,17 @@ app.get('/api/scans/:id', (req, res) => {
 //   workspaces/<id>/broker/<category>/compliance.json (ComplianceReport)
 // We aggregate them across whatever classes ran into one verified-findings view +
 // a merged OWASP/CWE coverage roll-up. Tool-confirmed only → these are real, not noise.
+// Certification-grade pentest report (CVSS 3.1 + OWASP WSTG/ASVS + compliance + sign-off).
+// Open the HTML in a browser and Print → Save as PDF for a deliverable. ?format=md for Markdown.
+app.get('/api/scans/:id/report', (req, res) => {
+  const fmt = req.query.format === 'md' ? 'md' : 'html';
+  const p = join(WORKSPACES, req.params.id, 'purple', `certification-report.${fmt}`);
+  if (!existsSync(p)) return res.status(404).json({ error: 'No certification report for this scan yet.' });
+  res.setHeader('content-type', fmt === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
+  res.setHeader('content-disposition', `inline; filename="shannon-pentest-${req.params.id}.${fmt}"`);
+  res.end(readFileSync(p, 'utf-8'));
+});
+
 app.get('/api/scans/:id/broker', (req, res) => {
   const scanDir = join(WORKSPACES, req.params.id);
   const brokerDir = join(scanDir, 'broker');
