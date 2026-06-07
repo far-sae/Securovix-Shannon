@@ -1,0 +1,12 @@
+{
+  "id": "exposed-phpinfo",
+  "name": "phpinfo() page exposed (server config disclosure)",
+  "severity": "high",
+  "requests": [{ "path": "/phpinfo.php" }, { "path": "/info.php" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "words": ["PHP Version", "Configuration"], "condition": "and" }
+  ],
+  "remediation": "Remove phpinfo()/info.php from production — it discloses PHP version, modules, paths, and environment."
+}

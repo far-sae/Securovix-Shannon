@@ -89,6 +89,7 @@ const COMPLIANCE = {
   'cors-misconfig': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-942', mitre: ['TA0001'] },
   'secrets-exposure': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-200', mitre: ['TA0007'] },
   'security-headers': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-693', mitre: [] },
+  templates: { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-200', mitre: ['TA0007'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -180,6 +181,26 @@ function injectParam(url, payload) {
   else u.searchParams.set('q', payload);
   return u.toString();
 }
+
+// A probe target is either a GET URL string, or a form descriptor {url, method, params}.
+// injReq injects `payload` into the right place (query for GET, body for POST) and returns the
+// (url, fetch-opts) pair — so every injection prober tests POST-body vectors, not just the query.
+const targetUrlOf = (t) => (typeof t === 'string' ? t : t.url);
+function injReq(target, payload) {
+  if (typeof target === 'string') return { url: injectParam(target, payload), opts: {} };
+  const keys = target.params && target.params.length ? target.params : ['q'];
+  if ((target.method || 'get').toLowerCase() === 'post') {
+    const body = new URLSearchParams();
+    for (const k of keys) body.set(k, payload);
+    return {
+      url: target.url,
+      opts: { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() },
+    };
+  }
+  const u = new URL(target.url);
+  for (const k of keys) u.searchParams.set(k, payload);
+  return { url: u.toString(), opts: {} };
+}
 const dec = (s) => {
   try {
     return decodeURIComponent(s);
@@ -251,13 +272,15 @@ const PROBERS = {
         B = 9817,
         P = String(A * B); // high-entropy product — cannot match by chance
       const oracles = [`{{${A}*${B}}}`, `\${${A}*${B}}`, `#{${A}*${B}}`, `<%= ${A}*${B} %>`, `*{${A}*${B}}`];
-      const baseline = (await fetchT(injectParam(target, `zz${A}zz`))).body; // non-evaluating control
+      const bl = injReq(target, `zz${A}zz`);
+      const baseline = (await fetchT(bl.url, bl.opts)).body; // non-evaluating control
       for (const p of oracles) {
-        const { body } = await fetchT(injectParam(target, p));
+        const { url, opts } = injReq(target, p);
+        const { body } = await fetchT(url, opts);
         // Confirm only if the product appears, the raw payload was NOT reflected, the operand
         // isn't echoed, and the product wasn't already on the page (baseline) — proves evaluation.
         if (body.includes(P) && !body.includes(p) && !body.includes(String(A)) && !baseline.includes(P))
-          return [F('ssti-probe', 'critical', target, `SSTI: ${p} evaluated to ${P}`)];
+          return [F('ssti-probe', 'critical', targetUrlOf(target), `SSTI: ${p} evaluated to ${P}`)];
       }
       return [];
     },
@@ -266,7 +289,8 @@ const PROBERS = {
     blockable: true,
     filter: (u, b) => /<[a-z/!][^>]*>|<\/[a-z]/i.test(dec(u) + dec(b || '')),
     async probe(target) {
-      const { body, headers } = await fetchT(injectParam(target, XSS_PAYLOAD));
+      const { url, opts } = injReq(target, XSS_PAYLOAD);
+      const { body, headers } = await fetchT(url, opts);
       // Reflection != execution (the marker could land in a non-executing context), so this is
       // reported as a verified-reflection candidate at medium severity, not an asserted exploit.
       if (/html/i.test(headers.get('content-type') || '') && body.includes(XSS_PAYLOAD))
@@ -274,7 +298,7 @@ const PROBERS = {
           F(
             'xss-probe',
             'medium',
-            target,
+            targetUrlOf(target),
             'Reflected input (potential XSS): marker tag reflected unescaped in HTML — verify execution context',
           ),
         ];
@@ -285,8 +309,10 @@ const PROBERS = {
     blockable: true,
     filter: (u, b) => /%27|'|(--\s)|(\bunion\b.*\bselect\b)/i.test(dec(u) + dec(b || '')),
     async probe(target) {
-      const baseline = (await fetchT(injectParam(target, 'sxsafe123'))).body; // benign control
-      const { body } = await fetchT(injectParam(target, "'"));
+      const bl = injReq(target, 'sxsafe123');
+      const baseline = (await fetchT(bl.url, bl.opts)).body; // benign control
+      const q = injReq(target, "'");
+      const { body } = await fetchT(q.url, q.opts);
       // Confirm only if the DB error appears with the quote but NOT in the benign baseline
       // (so a page that statically mentions a SQL error, or always errors, doesn't false-positive).
       for (const re of SQL_ERRORS)
@@ -295,7 +321,7 @@ const PROBERS = {
             F(
               'sqli-probe',
               'critical',
-              target,
+              targetUrlOf(target),
               'SQL injection (error-based): a single quote triggered a DB error absent from the baseline',
             ),
           ];
@@ -312,10 +338,16 @@ const PROBERS = {
         '....//....//....//....//etc/passwd',
       ];
       for (const p of payloads) {
-        const { body } = await fetchT(injectParam(target, p));
+        const { url, opts } = injReq(target, p);
+        const { body } = await fetchT(url, opts);
         if (/root:.*:0:0:/.test(body) || /\[fonts\]|\[extensions\]|for 16-bit app support/i.test(body))
           return [
-            F('path-traversal-probe', 'critical', target, 'Path traversal: read a system file via ../ sequences'),
+            F(
+              'path-traversal-probe',
+              'critical',
+              targetUrlOf(target),
+              'Path traversal: read a system file via ../ sequences',
+            ),
           ];
       }
       return [];
@@ -333,13 +365,14 @@ const PROBERS = {
         `\`echo ${tok}$((7*13))\``,
       ];
       for (const p of payloads) {
-        const { body } = await fetchT(injectParam(target, p));
+        const { url, opts } = injReq(target, p);
+        const { body } = await fetchT(url, opts);
         if (body.includes(`${tok}91`))
           return [
             F(
               'cmd-injection-probe',
               'critical',
-              target,
+              targetUrlOf(target),
               'OS command injection: shell evaluated an injected echo (7*13 -> 91)',
             ),
           ];
@@ -381,9 +414,12 @@ const PROBERS = {
       // value that DIFFERS per id (distinct records), AND an invalid id does NOT return that record
       // shape (so the endpoint actually keys on the id and isn't a static page that mentions "secret").
       const SECRET_RE = /(?:secret|token|api[_-]?key|password|email|account)["'\s:=]+([A-Za-z0-9._@-]{4,})/i;
-      const a = await fetchT(injectParam(target, '1'));
-      const b = await fetchT(injectParam(target, '99999'));
-      const bad = await fetchT(injectParam(target, 'sx-noexist-zz'));
+      const r1 = injReq(target, '1');
+      const r2 = injReq(target, '99999');
+      const rbad = injReq(target, 'sx-noexist-zz');
+      const a = await fetchT(r1.url, r1.opts);
+      const b = await fetchT(r2.url, r2.opts);
+      const bad = await fetchT(rbad.url, rbad.opts);
       if (a.status === 200 && b.status === 200 && a.body !== b.body) {
         const ma = a.body.match(SECRET_RE);
         const mb = b.body.match(SECRET_RE);
@@ -392,7 +428,7 @@ const PROBERS = {
             F(
               'idor-probe',
               'high',
-              target,
+              targetUrlOf(target),
               'IDOR/BOLA: distinct per-record secrets returned for different object ids without authorization',
             ),
           ];
@@ -583,6 +619,18 @@ const PROBERS = {
       }
       if (!missing.length) return [];
       return [F('headers-probe', 'low', target, `Missing/weak security headers: ${[...new Set(missing)].join(', ')}`)];
+    },
+  },
+  // Data-driven checks (Nuclei-style) loaded from ./templates/*.json — coverage grows by adding
+  // files, no code. Templates are specific (status + distinctive word) to stay zero-FP.
+  templates: {
+    blockable: false,
+    async probe(target) {
+      const { loadTemplates, runTemplates } = await import('./templates.mjs');
+      const tpls = loadTemplates(join(import.meta.dirname, 'templates'));
+      if (!tpls.length) return [];
+      const hits = await runTemplates(originOf(target), tpls, (url, opts) => fetchT(url, opts));
+      return hits.map((hit) => F(`template:${hit.id}`, hit.severity, hit.target, hit.name));
     },
   },
 };
@@ -803,6 +851,88 @@ async function defendAndReport(report, ws, log) {
   return report;
 }
 
+// Merge Set-Cookie response headers into a single Cookie request header (a tiny cookie jar).
+function mergeCookies(existing, headers) {
+  const jar = new Map();
+  for (const part of (existing || '').split(';')) {
+    const t = part.trim();
+    if (!t) continue;
+    const i = t.indexOf('=');
+    if (i > 0) jar.set(t.slice(0, i), t.slice(i + 1));
+  }
+  const setc = headers.getSetCookie
+    ? headers.getSetCookie()
+    : headers.get('set-cookie')
+      ? [headers.get('set-cookie')]
+      : [];
+  for (const sc of setc) {
+    const first = sc.split(';')[0];
+    const i = first.indexOf('=');
+    if (i > 0) jar.set(first.slice(0, i).trim(), first.slice(i + 1).trim());
+  }
+  return [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+// Authenticate against a form login: GET the login page, capture any CSRF token from a hidden
+// field, POST the credentials (+CSRF), and return the resulting session Cookie header so the whole
+// scan runs authenticated. Returns {} if no session cookie was obtained.
+// login() runs before SCAN_ORIGIN is set, so it gets its own SSRF guard: refuse cloud-metadata
+// and RFC1918 hosts (never legitimate login targets). Loopback stays allowed for local testing.
+function loginHostAllowed(url) {
+  let h;
+  try {
+    h = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (h === '169.254.169.254' || /^169\.254\./.test(h)) return false;
+  if (/^10\./.test(h) || /^192\.168\./.test(h)) return false;
+  const m = h.match(/^172\.(\d+)\./);
+  return !(m && +m[1] >= 16 && +m[1] <= 31);
+}
+
+export async function login({ loginUrl, username, password, usernameField = 'username', passwordField = 'password' }) {
+  if (!loginHostAllowed(loginUrl)) return {}; // don't POST credentials to internal/metadata hosts
+  // Follow redirects on the credential-less page GET so a login form served behind a redirect
+  // (http->https, /login -> /auth/login) is actually fetched and its CSRF token captured.
+  const r0 = await fetch(loginUrl, { redirect: 'follow' }).catch(() => null);
+  let cookie = '';
+  let page = '';
+  if (r0) {
+    cookie = mergeCookies('', r0.headers);
+    page = await r0.text().catch(() => '');
+  }
+  let csrfName;
+  let csrfVal;
+  let m = page.match(
+    /<input[^>]*\bname=["']([^"']*(?:csrf|token|authenticity|xsrf)[^"']*)["'][^>]*\bvalue=["']([^"']*)["']/i,
+  );
+  if (m) {
+    csrfName = m[1];
+    csrfVal = m[2];
+  } else {
+    m = page.match(
+      /<input[^>]*\bvalue=["']([^"']*)["'][^>]*\bname=["']([^"']*(?:csrf|token|authenticity|xsrf)[^"']*)["']/i,
+    );
+    if (m) {
+      csrfName = m[2];
+      csrfVal = m[1];
+    }
+  }
+  const body = new URLSearchParams();
+  body.set(usernameField, username);
+  body.set(passwordField, password);
+  if (csrfName) body.set(csrfName, csrfVal);
+  const r1 = await fetch(loginUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },
+    body: body.toString(),
+    redirect: 'manual',
+  }).catch(() => null);
+  if (r1) cookie = mergeCookies(cookie, r1.headers);
+  return cookie ? { Cookie: cookie } : {};
+}
+
 export async function runExploitDefend({ target, classes, label, workspaceDir }) {
   loadEnv();
   setScanOrigin(target);
@@ -829,19 +959,42 @@ export async function runExploitDefend({ target, classes, label, workspaceDir })
 }
 
 export const ALL_CLASSES = Object.keys(PROBERS);
+// Exported for unit tests (pure helpers).
+export { injectParam, injReq, mergeCookies, setParam };
 
 // WHOLE-APP: crawl the target to discover pages/params/forms/APIs, then run every prober
 // across the discovered surface (auth headers applied to all requests), aggregate, defend, report.
-export async function runWholeApp({ target, classes = ALL_CLASSES, label, workspaceDir, headers = {}, maxPages = 40 }) {
+export async function runWholeApp({
+  target,
+  classes = ALL_CLASSES,
+  label,
+  workspaceDir,
+  headers = {},
+  maxPages = 40,
+  headless = false,
+}) {
   loadEnv();
   setSessionHeaders(headers);
   setScanOrigin(target);
   const ws = workspaceDir;
   const log = (m) => console.log(`  ${m}`);
   const report = { target, label, startedAt: new Date().toISOString(), exploits: [], defenses: [] };
-  const { crawl } = await import('./crawler.mjs');
   log(`\n=== CRAWL phase — mapping the app from ${target} ===`);
-  const s = await crawl({ target, headers, maxPages });
+  // Optional headless/Playwright crawl for SPAs; fail-safe fallback to the pure-HTTP crawler.
+  let s = null;
+  if (headless) {
+    try {
+      const { crawlHeadless } = await import('./crawler-headless.mjs');
+      s = await crawlHeadless({ target, headers, maxPages });
+    } catch {
+      s = null;
+    }
+    log(s ? '  (headless/Playwright crawl active)' : '  (headless unavailable — using HTTP crawl)');
+  }
+  if (!s) {
+    const { crawl } = await import('./crawler.mjs');
+    s = await crawl({ target, headers, maxPages });
+  }
   setScanOrigin(s.origin); // adopt the crawl's canonical origin (e.g. apex -> www) for host-allow + header gating
   log(
     `discovered: ${s.pages.length} pages · ${s.paramNames.length} params · ${s.forms.length} forms · ${s.apiPaths.length} api paths`,
@@ -854,14 +1007,12 @@ export async function runWholeApp({ target, classes = ALL_CLASSES, label, worksp
     for (const u of pageUrls.slice(0, 10))
       if (!new URL(u).search) for (const p of s.paramNames.slice(0, 8)) injectUrls.add(setParam(u, p, 'x'));
   }
-  // NOTE: form params are probed via the query string. POST-body-only vectors are not yet driven
-  // with a request body, so some POST-only injection points are under-covered (known limitation).
-  for (const f of s.forms.slice(0, 12))
-    if (f.params.length) {
-      const u = new URL(f.url);
-      for (const p of f.params) u.searchParams.set(p, 'x');
-      injectUrls.add(u.toString());
-    }
+  // Forms become METHOD-AWARE probe targets: POST forms are driven with a POST body, GET forms via
+  // the query string — so POST-body-only injection points are covered, not just query params.
+  const formTargets = s.forms
+    .slice(0, 12)
+    .filter((f) => f.params.length)
+    .map((f) => ({ url: f.url, method: f.method, params: f.params }));
   const CAP = 40;
   const injectList = [...injectUrls].slice(0, CAP);
   const pageList = pageUrls.slice(0, CAP);
@@ -876,13 +1027,13 @@ export async function runWholeApp({ target, classes = ALL_CLASSES, label, worksp
   ].slice(0, 10);
   const targetsFor = (cls) => {
     if (['rce-ssti', 'xss', 'sqli', 'path-traversal', 'cmd-injection', 'authz-bypass'].includes(cls))
-      return injectList.length ? injectList : pageList.slice(0, 10);
+      return [...(injectList.length ? injectList : pageList.slice(0, 10)), ...formTargets];
     if (['open-redirect', 'ssrf', 'rce-deser', 'prompt-injection'].includes(cls))
       return (injectList.length ? injectList : pageList).slice(0, 15);
     if (cls === 'graphql-idor') return graphqlList;
     if (cls === 'token-forgery') return authList;
     if (cls === 'cors-misconfig') return [origin, ...pageList.slice(0, 3)];
-    return [origin]; // secrets-exposure, security-headers
+    return [origin]; // secrets-exposure, security-headers, templates
   };
 
   log(`\n=== EXPLOIT phase — ${classes.length} class(es) across the discovered surface ===`);
@@ -969,14 +1120,27 @@ if (isMain) {
           } catch {}
         }
         if (req.method === 'POST') {
-          // GraphQL introspection
           let b = '';
           for await (const c of req) b += c;
           if (b.includes('__schema')) {
+            // GraphQL introspection
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(
               JSON.stringify({ data: { __schema: { queryType: { name: 'Query' }, types: [{ name: 'User' }] } } }),
             );
+          }
+          if (p === '/comment') {
+            // POST-BODY injection sink: reflects/evaluates the body param `c` (proves POST probing).
+            const c = new URLSearchParams(b).get('c') || '';
+            if (c.includes("'")) {
+              res.writeHead(200, h);
+              return res.end("<p>You have an error in your SQL syntax near '''</p>");
+            }
+            const out = String(c).replace(/\{\{\s*(\d+)\s*\*\s*(\d+)\s*\}\}/g, (_, a, bb) =>
+              String(Number(a) * Number(bb)),
+            );
+            res.writeHead(200, h);
+            return res.end(`<p>Comment: ${out}</p>`); // SSTI + reflected XSS via POST body
           }
         }
         if (p === '/') {
@@ -986,6 +1150,7 @@ if (isMain) {
             <a href="/search?q=hello">Search</a> <a href="/profile?id=1">Profile</a>
             <a href="/go?url=/home">Go</a> <a href="/.env">env</a>
             <form action="/search" method="get"><input name="q"></form>
+            <form action="/comment" method="post"><input name="c"></form>
             <script>fetch("/api/graphql")</script></body></html>`);
         }
         const urlp = u.searchParams.get('url');
@@ -1044,7 +1209,7 @@ if (isMain) {
       const target = arg('--target');
       if (!target) {
         console.error(
-          'usage: --target <url> [--cookie "k=v"] [--header "K: V"] [--no-crawl] [--max-pages N] | --selftest',
+          'usage: --target <url> [--cookie "k=v"] [--header "K: V"] [--login-url U --username U --password P] [--no-crawl] [--max-pages N] | --selftest',
         );
         process.exit(1);
       }
@@ -1052,11 +1217,33 @@ if (isMain) {
       mkdirSync(ws, { recursive: true });
       const label = arg('--label') || 'target';
       const headers = authHeaders();
+      // Optional form-login: authenticate first, then crawl + probe behind the session.
+      const loginUrl = arg('--login-url');
+      if (loginUrl && arg('--username')) {
+        const sess = await login({
+          loginUrl,
+          username: arg('--username'),
+          password: arg('--password') || '',
+          usernameField: arg('--user-field') || 'username',
+          passwordField: arg('--pass-field') || 'password',
+        });
+        Object.assign(headers, sess);
+        console.error(
+          sess.Cookie ? `  [auth] logged in; session cookie acquired` : '  [auth] login produced no session cookie',
+        );
+      }
       if (process.argv.includes('--no-crawl')) {
         setSessionHeaders(headers);
         await runExploitDefend({ target, classes: ALL_CLASSES, label, workspaceDir: ws });
       } else {
-        await runWholeApp({ target, label, workspaceDir: ws, headers, maxPages: Number(arg('--max-pages')) || 40 });
+        await runWholeApp({
+          target,
+          label,
+          workspaceDir: ws,
+          headers,
+          maxPages: Number(arg('--max-pages')) || 40,
+          headless: process.argv.includes('--headless') || process.env.SHANNON_HEADLESS === '1',
+        });
       }
     }
   })().catch((e) => {

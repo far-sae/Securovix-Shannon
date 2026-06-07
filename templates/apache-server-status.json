@@ -1,0 +1,12 @@
+{
+  "id": "apache-server-status",
+  "name": "Apache mod_status (/server-status) exposed",
+  "severity": "medium",
+  "requests": [{ "path": "/server-status" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "words": ["Apache Server Status"], "condition": "and" }
+  ],
+  "remediation": "Restrict /server-status to localhost/admin IPs; it leaks live request/URL and client data."
+}
