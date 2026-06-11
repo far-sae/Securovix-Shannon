@@ -1515,6 +1515,19 @@ app.get('/api/verify/list', (req, res) => {
   res.json({ ok: true, domains: loadVerified()[user.id] || {} });
 });
 
+// Remove (revoke) a verified domain.
+app.post('/api/verify/remove', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Log in first.' });
+  const domain = registrable(hostOf(req.body?.domain || ''));
+  const all = loadVerified();
+  if (all[user.id]?.[domain]) {
+    delete all[user.id][domain];
+    saveVerified(all);
+  }
+  res.json({ ok: true, domains: all[user.id] || {} });
+});
+
 // ---- API: Start scan ----
 app.post('/api/scans', (req, res) => {
   const {

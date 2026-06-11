@@ -733,6 +733,7 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
   <nav class="nav">
     <button class="on" onclick="go('dash')" id="n-dash" aria-label="Dashboard"><span aria-hidden="true">&#9632;</span> Dashboard</button>
     <button onclick="go('new')" id="n-new" aria-label="New Scan"><span aria-hidden="true">&#9654;</span> New Scan</button>
+    <button onclick="go('domains')" id="n-domains" aria-label="Domains"><span aria-hidden="true">&#9745;</span> Domains</button>
     <button onclick="go('code')" id="n-code" aria-label="Code Scan"><span aria-hidden="true">&#9876;</span> Code Scan</button>
     <button onclick="go('cfg')" id="n-cfg" aria-label="Settings"><span aria-hidden="true">&#9881;</span> Settings</button>
   </nav>
@@ -1685,7 +1686,7 @@ function go(p,d){
   if(POLL){clearInterval(POLL);POLL=null}
   if(EVT){EVT.close();EVT=null}
   closeDrawer();
-  ({dash:pgDash,new:pgNew,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling})[p]?.(d);
+  ({dash:pgDash,new:pgNew,domains:pgDomains,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling})[p]?.(d);
 }
 async function api(u,o){
   const r=await fetch('/api'+u,o);
@@ -1710,6 +1711,52 @@ function sList(){
     </div>`).join('');
 }
 function view(id){CID=id;sList();go('scan',id)}
+
+// ===== DOMAINS (ownership verification) =====
+async function pgDomains(){
+  CID=null;sList();
+  M.innerHTML=`<div class="pg"><div style="display:flex;align-items:center;justify-content:center;padding-top:120px"><span class="sp sp-l"></span></div></div>`;
+  let data;
+  try{ data=await api('/verify/list'); }
+  catch(e){
+    if(e.status===401){ M.innerHTML=`<div class="pg"><h1 class="h-display" style="font-size:30px">Domains</h1><p style="color:var(--t2);margin-top:12px">Please <a href="#" onclick="go('cfg');return false" style="color:var(--acc2)">sign in</a> to verify and manage your domains.</p></div>`; return; }
+    M.innerHTML=`<div class="pg"><p style="color:var(--red)">Could not load domains: ${H(e.message)}</p></div>`; return;
+  }
+  const domains=Object.entries(data.domains||{});
+  M.innerHTML=`<div class="pg">
+    <h1 class="h-display" style="font-size:30px">Domains</h1>
+    <p style="color:var(--t2);margin:8px 0 20px;max-width:700px">Prove you control a domain before scanning it. Verify once — via a DNS record, a file at your web root, or a homepage meta tag — then every scan of that domain (and its subdomains) is authorized. This is a legal safeguard: you may only test sites you own or are authorized to test.</p>
+    <div class="crd" style="padding:18px;margin-bottom:24px">
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t0)">Verify a new domain</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <input id="dm-input" placeholder="example.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')startVerify()" style="flex:1;min-width:240px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
+        <button class="btn btn-p" onclick="startVerify()" style="padding:11px 18px">Verify domain →</button>
+      </div>
+      <div style="font-size:11.5px;color:var(--t3);margin-top:10px">You'll get a one-time token and three ways to prove ownership. DNS changes can take a few minutes to propagate.</div>
+    </div>
+    <h3 class="h-display" style="font-size:18px;margin-bottom:12px">Your verified domains (${domains.length})</h3>
+    ${domains.length?`<div style="display:flex;flex-direction:column;gap:10px">${domains.map(([d,info])=>`
+      <div class="crd" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;gap:12px">
+        <div style="min-width:0"><div style="font-weight:700;color:var(--t0)">${ico('check',{cls:'ico-sm'})} ${H(d)}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">verified via ${H(info.method||'?')} &middot; ${H((info.verifiedAt||'').slice(0,10))}</div></div>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <button class="btn btn-p" style="padding:7px 12px;font-size:12px" onclick="go('new')">Scan</button>
+          <button class="btn btn-g" style="padding:7px 12px;font-size:12px" onclick="removeDomain('${H(d)}')">Remove</button>
+        </div>
+      </div>`).join('')}</div>`:`<div class="empty" style="padding:30px 20px;color:var(--t3);text-align:center">No verified domains yet. Add one above, verify it, then launch a scan.</div>`}
+  </div>`;
+}
+async function startVerify(){
+  const v=($('dm-input')?.value||'').trim();
+  if(!v){return;}
+  await verifyModal(v);
+  pgDomains();
+}
+async function removeDomain(d){
+  if(!confirm('Remove verification for '+d+'? You will need to re-verify before scanning it again.'))return;
+  try{ await api('/verify/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain:d})}); }
+  catch(e){ alert(e.message); }
+  pgDomains();
+}
 
 // ===== DASHBOARD =====
 function pgDash(){
