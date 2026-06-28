@@ -314,7 +314,9 @@ const PROBERS = {
   sqli: {
     blockable: true,
     filter: (u, b) =>
-      /%27|'|(--\s)|(\bunion\b.*\bselect\b)|\b(sleep|pg_sleep|benchmark)\s*\(|waitfor\s+delay/i.test(dec(u) + dec(b || '')),
+      /%27|'|(--\s)|(\bunion\b.*\bselect\b)|\b(sleep|pg_sleep|benchmark)\s*\(|waitfor\s+delay/i.test(
+        dec(u) + dec(b || ''),
+      ),
     async probe(target) {
       const fetchInj = (payload, timeoutMs) => {
         const x = injReq(target, payload);
@@ -1040,6 +1042,37 @@ export { injectParam, injReq, mergeCookies, PROBERS, setParam };
 
 // WHOLE-APP: crawl the target to discover pages/params/forms/APIs, then run every prober
 // across the discovered surface (auth headers applied to all requests), aggregate, defend, report.
+// Upgrade reflected-XSS candidates from "potential" (reflected) to PROVEN (executed) by rendering
+// each in a real browser and confirming a unique-nonce callback fires. Mutates findings in place.
+async function upgradeXssExecution(findings, headers, log) {
+  try {
+    const { proveXss } = await import('./crawler-headless.mjs');
+    const candidates = [...new Set(findings.map((f) => f.target))];
+    const nonce = `${XSS_MARK}${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+    const proven = await proveXss({ targets: candidates, headers, nonce });
+    if (!proven) {
+      log('  xss: headless execution-proof unavailable — keeping reflection-only "potential" findings');
+      return;
+    }
+    const byTarget = new Map(proven.map((p) => [p.target, p]));
+    let upgraded = 0;
+    for (const f of findings) {
+      const p = byTarget.get(f.target);
+      if (!p) continue;
+      f.severity = 'high';
+      f.detail =
+        'Cross-site scripting (reflected): injected JavaScript EXECUTED in a real browser (unique-nonce callback) — confirmed exploit, not just reflection';
+      f.raw = JSON.stringify({ tool: 'xss-probe', detail: f.detail, payload: p.payload, executedAt: p.url });
+      upgraded++;
+    }
+    log(
+      upgraded
+        ? `  xss: ${upgraded}/${candidates.length} reflected candidate(s) PROVEN to execute JS in a real browser ✅`
+        : '  xss: no candidate executed (likely output-encoded or CSP-protected) — left as reflection-only',
+    );
+  } catch {}
+}
+
 export async function runWholeApp({
   target,
   classes = ALL_CLASSES,
@@ -1134,6 +1167,9 @@ export async function runWholeApp({
       }
       if (all.length >= 5) break; // enough proof for this class
     }
+    // XSS: reflection is only a candidate. When headless is on, PROVE execution in a real browser
+    // and relabel proven ones — turning "potential XSS" into a confirmed, executed exploit.
+    if (cls === 'xss' && headless && all.length) await upgradeXssExecution(all, headers, log);
     recordClass(report, ws, cls, all, log);
   }
   report.crawl = {
