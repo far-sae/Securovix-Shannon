@@ -32,6 +32,12 @@ function loadEnv() {
   }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Run an async fn and attach how long it took (ms) — used by time-based blind SQLi detection.
+const timed = async (fn) => {
+  const s = Date.now();
+  const r = await fn();
+  return { ...r, ms: Date.now() - s };
+};
 
 // Auth/session headers (cookie, Authorization, custom). Sent ONLY to the scan origin so they
 // are never leaked to another host on an off-origin redirect. Set by runWholeApp/runExploitDefend.
@@ -307,24 +313,85 @@ const PROBERS = {
   },
   sqli: {
     blockable: true,
-    filter: (u, b) => /%27|'|(--\s)|(\bunion\b.*\bselect\b)/i.test(dec(u) + dec(b || '')),
+    filter: (u, b) =>
+      /%27|'|(--\s)|(\bunion\b.*\bselect\b)|\b(sleep|pg_sleep|benchmark)\s*\(|waitfor\s+delay/i.test(dec(u) + dec(b || '')),
     async probe(target) {
-      const bl = injReq(target, 'sxsafe123');
-      const baseline = (await fetchT(bl.url, bl.opts)).body; // benign control
-      const q = injReq(target, "'");
-      const { body } = await fetchT(q.url, q.opts);
-      // Confirm only if the DB error appears with the quote but NOT in the benign baseline
-      // (so a page that statically mentions a SQL error, or always errors, doesn't false-positive).
+      const fetchInj = (payload, timeoutMs) => {
+        const x = injReq(target, payload);
+        return fetchT(x.url, x.opts, timeoutMs);
+      };
+      // Structural signature of a response: status + body length. Reflection of an equal-length
+      // payload doesn't change it; only a real structural change (rows vs no rows) does.
+      const sig = (r) => `${r.status}:${(r.body || '').length}`;
+
+      // ── 1) ERROR-BASED ───────────────────────────────────────────────────────────────────
+      // A single quote breaks the SQL syntax → the DB leaks its own parser error. Confirm only if
+      // the error appears WITH the quote and is ABSENT from a benign baseline (rules out a page
+      // that always errors or statically prints the words "SQL error").
+      const base = await fetchInj('sxsafe123');
+      const err = await fetchInj("'");
       for (const re of SQL_ERRORS)
-        if (re.test(body) && !re.test(baseline))
+        if (re.test(err.body) && !re.test(base.body))
           return [
             F(
               'sqli-probe',
               'critical',
               targetUrlOf(target),
-              'SQL injection (error-based): a single quote triggered a DB error absent from the baseline',
+              'SQL injection (error-based): a single quote triggered a DB error absent from the benign baseline',
             ),
           ];
+
+      // ── 2) BOOLEAN-BLIND ─────────────────────────────────────────────────────────────────
+      // No error leaks, but the query still evaluates our condition. Send a TRUE tautology
+      // (' OR '1'='1) and a FALSE one (' OR '1'='2). They are the SAME length, so reflection
+      // can't change the signature — only the database deciding TRUE vs FALSE can. Require the
+      // difference to REPRODUCE (rules out volatile content like CSRF tokens / timestamps).
+      const tP = "' OR '1'='1";
+      const fP = "' OR '1'='2";
+      const t1 = await fetchInj(tP);
+      const f1 = await fetchInj(fP);
+      if (sig(t1) !== sig(f1)) {
+        const t2 = await fetchInj(tP);
+        const f2 = await fetchInj(fP);
+        if (sig(t1) === sig(t2) && sig(f1) === sig(f2) && sig(t1) !== sig(f1))
+          return [
+            F(
+              'sqli-probe',
+              'critical',
+              targetUrlOf(target),
+              "SQL injection (boolean-blind): a TRUE condition (' OR '1'='1) and a FALSE one (' OR '1'='2) produced stably different responses",
+            ),
+          ];
+      }
+
+      // ── 3) TIME-BLIND ────────────────────────────────────────────────────────────────────
+      // No error and no visible difference, but we can make the DB sleep. Inject an engine-specific
+      // sleep and confirm the response time SCALES with the requested delay (a 5s sleep adds ≥1.8s
+      // over a 2s sleep, and the 2s sleep is itself elevated). Random network latency can't fake a
+      // delay that tracks the number we chose — that is the zero-false-positive guarantee here.
+      const warm = await timed(() => fetchInj('sxsafe123'));
+      const baseMs = warm.ms;
+      const SLEEPS = [
+        (d) => `' AND SLEEP(${d})-- -`, // MySQL / MariaDB
+        (d) => `' OR SLEEP(${d})-- -`, // MySQL (no preceding clause)
+        (d) => `' AND pg_sleep(${d})-- -`, // PostgreSQL
+        (d) => `'; SELECT pg_sleep(${d})-- -`, // PostgreSQL (stacked)
+        (d) => `'; WAITFOR DELAY '0:0:${d}'-- -`, // SQL Server
+      ];
+      for (const mk of SLEEPS) {
+        const r5 = await timed(() => fetchInj(mk(5), 15000));
+        if (r5.ms < baseMs + 3500) continue; // not delayed → not this engine / not injectable
+        const r2 = await timed(() => fetchInj(mk(2), 15000));
+        if (r2.ms >= baseMs + 1000 && r5.ms - r2.ms >= 1800)
+          return [
+            F(
+              'sqli-probe',
+              'critical',
+              targetUrlOf(target),
+              'SQL injection (time-based blind): an injected SQL sleep delayed the response and the delay scaled with the requested duration',
+            ),
+          ];
+      }
       return [];
     },
   },
@@ -969,7 +1036,7 @@ export async function runExploitDefend({ target, classes, label, workspaceDir })
 
 export const ALL_CLASSES = Object.keys(PROBERS);
 // Exported for unit tests (pure helpers).
-export { injectParam, injReq, mergeCookies, setParam };
+export { injectParam, injReq, mergeCookies, PROBERS, setParam };
 
 // WHOLE-APP: crawl the target to discover pages/params/forms/APIs, then run every prober
 // across the discovered surface (auth headers applied to all requests), aggregate, defend, report.
