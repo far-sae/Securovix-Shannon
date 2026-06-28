@@ -22,6 +22,10 @@ Thumbs.db
 # Local dashboard settings (may contain API keys)
 .shannon-settings.json
 
+# Supabase CLI local state (linked-project ref, pooler URL, versions) — not for the repo
+supabase/.temp/
+supabase/.branches/
+
 # graphify generated knowledge-graph outputs (regenerate with /graphify)
 graphify-out/
 .graphify_*
