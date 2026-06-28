@@ -12,14 +12,15 @@
  * Postgres LISTEN if you ever scale horizontally.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
+import { join } from 'node:path';
 
 // ---- File-system fallback (and where we write secrets locally) ----
-const SHANNON_HOME      = join(os.homedir(), '.shannon');
-const USERS_PATH        = join(SHANNON_HOME, 'users.json');
-const LEADERBOARD_PATH  = join(SHANNON_HOME, 'leaderboard.json');
+const SHANNON_HOME = join(os.homedir(), '.shannon');
+const USERS_PATH = join(SHANNON_HOME, 'users.json');
+const LEADERBOARD_PATH = join(SHANNON_HOME, 'leaderboard.json');
+const VERIFIED_PATH = join(SHANNON_HOME, 'verified-domains.json');
 
 // ---- Supabase config (only used when both env vars are set) ----
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
@@ -28,10 +29,13 @@ const USE_SUPABASE = !!(SUPABASE_URL && SUPABASE_KEY);
 
 // In-memory caches — loaded by initDb()
 let _users = {};
-let _lb    = {};
+let _lb = {};
+let _verified = {}; // { [userId]: { [domain]: { verifiedAt, method } } }
 let _ready = false;
 
-function ensureHome() { if (!existsSync(SHANNON_HOME)) mkdirSync(SHANNON_HOME, { recursive: true }); }
+function ensureHome() {
+  if (!existsSync(SHANNON_HOME)) mkdirSync(SHANNON_HOME, { recursive: true });
+}
 
 // ---- Tiny PostgREST helper. No third-party SDK required. ----
 async function sb(path, opts = {}) {
@@ -91,10 +95,10 @@ export async function initDb() {
     try {
       const userRows = await sb('/shannon_users?select=*');
       _users = {};
-      for (const r of (userRows || [])) _users[r.id] = userFromRow(r);
+      for (const r of userRows || []) _users[r.id] = userFromRow(r);
       const lbRows = await sb('/shannon_leaderboard?select=*');
       _lb = {};
-      for (const r of (lbRows || [])) {
+      for (const r of lbRows || []) {
         _lb[r.provider] = {
           score: Number(r.score),
           runs: r.runs || 0,
@@ -104,24 +108,59 @@ export async function initDb() {
           lastRun: r.last_run ? Number(r.last_run) : null,
         };
       }
-      console.log(`[db] Hydrated ${Object.keys(_users).length} users · ${Object.keys(_lb).length} providers from Supabase`);
+      // Non-fatal: if the table isn't created yet, start with empty verifications instead of
+      // crashing the whole server (the table is created by the verified_domains migration).
+      let vRows = [];
+      try {
+        vRows = await sb('/shannon_verified_domains?select=*');
+      } catch (e) {
+        console.warn('[db] verified_domains hydrate skipped (run the migration?):', e.message);
+        vRows = [];
+      }
+      _verified = {};
+      for (const r of vRows || []) {
+        if (!_verified[r.user_id]) _verified[r.user_id] = {};
+        _verified[r.user_id][r.domain] = { verifiedAt: r.verified_at || null, method: r.method || null };
+      }
+      console.log(
+        `[db] Hydrated ${Object.keys(_users).length} users · ${Object.keys(_lb).length} providers · ${vRows?.length || 0} verified domains from Supabase`,
+      );
     } catch (e) {
       console.error('[db] Supabase hydration FAILED — server cannot start safely:', e.message);
       throw e;
     }
   } else {
     console.log('[db] Using local JSON files in', SHANNON_HOME);
-    try { _users = JSON.parse(readFileSync(USERS_PATH, 'utf-8')); } catch { _users = {}; }
-    try { _lb    = JSON.parse(readFileSync(LEADERBOARD_PATH, 'utf-8')); } catch { _lb    = {}; }
+    try {
+      _users = JSON.parse(readFileSync(USERS_PATH, 'utf-8'));
+    } catch {
+      _users = {};
+    }
+    try {
+      _lb = JSON.parse(readFileSync(LEADERBOARD_PATH, 'utf-8'));
+    } catch {
+      _lb = {};
+    }
+    try {
+      _verified = JSON.parse(readFileSync(VERIFIED_PATH, 'utf-8'));
+    } catch {
+      _verified = {};
+    }
   }
   _ready = true;
 }
 
-export function isReady() { return _ready; }
-export function isSupabase() { return USE_SUPABASE; }
+export function isReady() {
+  return _ready;
+}
+export function isSupabase() {
+  return USE_SUPABASE;
+}
 
 // ---- Users ----
-export function loadUsers() { return _users; }
+export function loadUsers() {
+  return _users;
+}
 
 export function saveUsers(u) {
   _users = u;
@@ -132,7 +171,7 @@ export function saveUsers(u) {
       method: 'POST',
       headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify(rows),
-    }).catch(e => console.error('[db] users upsert failed:', e.message));
+    }).catch((e) => console.error('[db] users upsert failed:', e.message));
   } else {
     ensureHome();
     writeFileSync(USERS_PATH, JSON.stringify(u, null, 2));
@@ -140,7 +179,9 @@ export function saveUsers(u) {
 }
 
 // ---- Leaderboard ----
-export function loadLeaderboard() { return _lb; }
+export function loadLeaderboard() {
+  return _lb;
+}
 
 export function saveLeaderboard(lb) {
   _lb = lb;
@@ -157,17 +198,54 @@ export function saveLeaderboard(lb) {
     }));
     if (rows.length === 0) {
       // Reset case — wipe the table.
-      sb('/shannon_leaderboard?provider=neq.__none__', { method: 'DELETE', headers: { prefer: 'return=minimal' } })
-        .catch(e => console.error('[db] leaderboard wipe failed:', e.message));
+      sb('/shannon_leaderboard?provider=neq.__none__', {
+        method: 'DELETE',
+        headers: { prefer: 'return=minimal' },
+      }).catch((e) => console.error('[db] leaderboard wipe failed:', e.message));
       return;
     }
     sb('/shannon_leaderboard', {
       method: 'POST',
       headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify(rows),
-    }).catch(e => console.error('[db] leaderboard upsert failed:', e.message));
+    }).catch((e) => console.error('[db] leaderboard upsert failed:', e.message));
   } else {
     ensureHome();
     writeFileSync(LEADERBOARD_PATH, JSON.stringify(lb, null, 2));
+  }
+}
+
+// ---- Verified domains (domain-ownership gate; must survive redeploys, unlike the old local file) ----
+export function loadVerified() {
+  return _verified;
+}
+
+export function addVerified(userId, domain, rec = {}) {
+  if (!_verified[userId]) _verified[userId] = {};
+  _verified[userId][domain] = { verifiedAt: rec.verifiedAt || null, method: rec.method || null };
+  if (USE_SUPABASE) {
+    sb('/shannon_verified_domains', {
+      method: 'POST',
+      headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify([
+        { user_id: userId, domain, method: rec.method || null, verified_at: rec.verifiedAt || null },
+      ]),
+    }).catch((e) => console.error('[db] verified-domain upsert failed:', e.message));
+  } else {
+    ensureHome();
+    writeFileSync(VERIFIED_PATH, JSON.stringify(_verified, null, 2));
+  }
+}
+
+export function removeVerified(userId, domain) {
+  if (_verified[userId]) delete _verified[userId][domain];
+  if (USE_SUPABASE) {
+    sb(`/shannon_verified_domains?user_id=eq.${encodeURIComponent(userId)}&domain=eq.${encodeURIComponent(domain)}`, {
+      method: 'DELETE',
+      headers: { prefer: 'return=minimal' },
+    }).catch((e) => console.error('[db] verified-domain delete failed:', e.message));
+  } else {
+    ensureHome();
+    writeFileSync(VERIFIED_PATH, JSON.stringify(_verified, null, 2));
   }
 }

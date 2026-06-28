@@ -1,14 +1,24 @@
-import express from 'express';
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
-import { parse as parseYaml } from 'yaml';
 import { spawn } from 'node:child_process';
-import Anthropic from '@anthropic-ai/sdk';
-import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import _crypto from 'node:crypto';
-import { initDb, loadUsers, saveUsers, loadLeaderboard, saveLeaderboard, isSupabase } from './db.mjs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Anthropic from '@anthropic-ai/sdk';
+import express from 'express';
+import { parse as parseYaml } from 'yaml';
+import {
+  addVerified,
+  initDb,
+  isSupabase,
+  loadLeaderboard,
+  loadUsers,
+  loadVerified,
+  removeVerified,
+  saveLeaderboard,
+  saveUsers,
+} from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -768,7 +778,7 @@ function csExtractStringField(text, fieldName) {
       else if (n === 'f') out += '\f';
       else if (n === 'u' && i + 5 < text.length) {
         try {
-          out += String.fromCharCode(parseInt(text.slice(i + 2, i + 6), 16));
+          out += String.fromCharCode(Number.parseInt(text.slice(i + 2, i + 6), 16));
           i += 4;
         } catch {
           out += n;
@@ -1383,20 +1393,8 @@ app.get('/api/scans/:id/broker', (req, res) => {
 //  Domain-ownership authorization — clients may only scan
 //  targets whose domain they have PROVEN they control.
 // ============================================================
-const VERIFIED_PATH = join(SHANNON_HOME, 'verified-domains.json');
-function loadVerified() {
-  try {
-    return JSON.parse(readFileSync(VERIFIED_PATH, 'utf-8'));
-  } catch {
-    return {};
-  }
-}
-function saveVerified(v) {
-  try {
-    mkdirSync(SHANNON_HOME, { recursive: true });
-    writeFileSync(VERIFIED_PATH, JSON.stringify(v, null, 2));
-  } catch {}
-}
+// loadVerified / addVerified / removeVerified now provided by db.mjs (Supabase-backed, so domain
+// verifications survive Railway redeploys instead of dying with the container's local file).
 // Registrable-ish domain (eTLD+1 heuristic) so verifying example.com also covers www/app.example.com.
 function registrable(host) {
   return String(host || '')
@@ -1501,10 +1499,7 @@ app.post('/api/verify/check', async (req, res) => {
       verified: false,
       error: 'Token not found yet. Add it and retry (DNS can take a few minutes).',
     });
-  const all = loadVerified();
-  all[user.id] = all[user.id] || {};
-  all[user.id][domain] = { verifiedAt: new Date().toISOString(), method };
-  saveVerified(all);
+  addVerified(user.id, domain, { verifiedAt: new Date().toISOString(), method });
   res.json({ ok: true, verified: true, domain, method });
 });
 
@@ -1520,12 +1515,8 @@ app.post('/api/verify/remove', (req, res) => {
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Log in first.' });
   const domain = registrable(hostOf(req.body?.domain || ''));
-  const all = loadVerified();
-  if (all[user.id]?.[domain]) {
-    delete all[user.id][domain];
-    saveVerified(all);
-  }
-  res.json({ ok: true, domains: all[user.id] || {} });
+  removeVerified(user.id, domain);
+  res.json({ ok: true, domains: loadVerified()[user.id] || {} });
 });
 
 // ---- API: Start scan ----
@@ -1653,9 +1644,9 @@ app.post('/api/scans', (req, res) => {
       scan.currentPhase.status = 'done';
       scan.currentPhase.endedAt = Date.now();
       const cm = line.match(/\$([0-9.]+)/);
-      if (cm) scan.currentPhase.cost = parseFloat(cm[1]);
+      if (cm) scan.currentPhase.cost = Number.parseFloat(cm[1]);
       const tm = line.match(/(\d+\.?\d*)s/);
-      if (tm) scan.currentPhase.duration = parseFloat(tm[1]);
+      if (tm) scan.currentPhase.duration = Number.parseFloat(tm[1]);
       bc(scan, {
         type: 'phase-done',
         phase: scan.currentPhase.id,

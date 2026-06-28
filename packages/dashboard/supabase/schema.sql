@@ -34,11 +34,26 @@ create table if not exists public.shannon_leaderboard (
 );
 
 -- ============================================================
--- 3. Row-Level Security
+-- 3. Verified domains (domain-ownership gate for scanning)
+-- One row per (user, domain) the user has proven they control. Persisted here so
+-- verifications survive redeploys (the local file used to be wiped on Railway).
+-- ============================================================
+create table if not exists public.shannon_verified_domains (
+  user_id      text not null,
+  domain       text not null,
+  method       text,                 -- 'dns' | 'file' | 'meta'
+  verified_at  text,
+  primary key (user_id, domain)
+);
+create index if not exists shannon_verified_domains_user_idx on public.shannon_verified_domains (user_id);
+
+-- ============================================================
+-- 4. Row-Level Security
 -- We use the SERVICE_ROLE key from the server, which bypasses RLS, so we just
 -- need the tables to exist. If you ever expose them to the anon key, add
 -- explicit policies — by default deny-all is the safe stance.
 -- ============================================================
-alter table public.shannon_users       enable row level security;
-alter table public.shannon_leaderboard enable row level security;
+alter table public.shannon_users             enable row level security;
+alter table public.shannon_leaderboard        enable row level security;
+alter table public.shannon_verified_domains   enable row level security;
 -- (No policies defined → anon role gets nothing. Service role bypasses RLS.)
