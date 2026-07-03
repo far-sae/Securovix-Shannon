@@ -73,6 +73,10 @@ export const METHODOLOGY = {
     iso: 'A.8.26',
   },
   templates: { name: 'Configuration / Exposure Checks', wstg: 'WSTG-CONF', asvs: 'V14', pci: '2.2', iso: 'A.8.9' },
+  nosql: { name: 'NoSQL Injection', wstg: 'WSTG-INPV-05', asvs: 'V5.3.4', pci: '6.2.4', iso: 'A.8.28' },
+  xxe: { name: 'XML External Entity (XXE)', wstg: 'WSTG-INPV-07', asvs: 'V5.5.2', pci: '6.2.4', iso: 'A.8.28' },
+  'host-header': { name: 'Host Header Injection', wstg: 'WSTG-INPV-17', asvs: 'V5.1.1', pci: '6.2.4', iso: 'A.8.28' },
+  crlf: { name: 'CRLF / HTTP Response Splitting', wstg: 'WSTG-INPV-16', asvs: 'V5.1.5', pci: '6.2.4', iso: 'A.8.28' },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };

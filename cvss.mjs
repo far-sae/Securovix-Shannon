@@ -67,6 +67,10 @@ export const CVSS_VECTORS = {
   'cors-misconfig': 'AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N',
   'open-redirect': 'AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N',
   'security-headers': 'AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N',
+  nosql: 'AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N',
+  xxe: 'AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N',
+  'host-header': 'AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N',
+  crlf: 'AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:N',
 };
 
 export const CVSS_BY_SEVERITY = {

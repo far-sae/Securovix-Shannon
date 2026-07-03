@@ -96,6 +96,10 @@ const COMPLIANCE = {
   'secrets-exposure': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-200', mitre: ['TA0007'] },
   'security-headers': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-693', mitre: [] },
   templates: { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-200', mitre: ['TA0007'] },
+  nosql: { owasp: 'A03:2021-Injection', cwe: 'CWE-943', mitre: ['TA0006', 'TA0009'] },
+  xxe: { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-611', mitre: ['TA0007', 'TA0009'] },
+  'host-header': { owasp: 'A03:2021-Injection', cwe: 'CWE-644', mitre: ['TA0001'] },
+  crlf: { owasp: 'A03:2021-Injection', cwe: 'CWE-113', mitre: ['TA0001'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -251,6 +255,52 @@ async function fetchT(url, opts = {}, timeoutMs = 8000, hop = 0) {
   } finally {
     clearTimeout(t);
   }
+}
+
+// Low-level GET that lets us set an explicit Host header (Node's fetch/undici silently ignores a
+// custom Host). Used by the host-header prober. Honors the same host-block + same-origin session
+// header gating as fetchT.
+function rawGetWithHost(url, hostHeader, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    if (isBlockedHost(url)) return resolve({ status: 0, body: '', headers: {} });
+    let u;
+    try {
+      u = new URL(url);
+    } catch {
+      return resolve({ status: 0, body: '', headers: {} });
+    }
+    let sameOrigin = false;
+    try {
+      sameOrigin = !!SCAN_ORIGIN && u.origin === SCAN_ORIGIN;
+    } catch {}
+    const headers = { ...(sameOrigin ? SESSION_HEADERS : {}) };
+    if (hostHeader) headers.Host = hostHeader;
+    const agent = u.protocol === 'https:' ? https : http;
+    const req = agent.request(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: u.pathname + u.search,
+        method: 'GET',
+        headers,
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (d) => {
+          body += d;
+        });
+        res.on('end', () => resolve({ status: res.statusCode || 0, body, headers: res.headers || {} }));
+      },
+    );
+    req.on('error', () => resolve({ status: 0, body: '', headers: {} }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ status: 0, body: '', headers: {} });
+    });
+    req.end();
+  });
 }
 
 // Out-of-band callback listener for SSRF confirmation (zero-FP: only confirms on a real hit).
@@ -702,6 +752,146 @@ const PROBERS = {
       return hits.map((hit) => F(`template:${hit.id}`, hit.severity, hit.target, hit.name));
     },
   },
+  // ── NoSQL injection (MongoDB-style operator injection) ─────────────────────────────────────
+  // No error leaks, but the query still evaluates our operators. Inject key[$ne]=<nonce> (matches
+  // EVERYTHING) vs key[$eq]=<nonce> (matches NOTHING). A vulnerable query returns structurally
+  // different responses; a same-nonce reproduction rules out volatile content, and a non-vulnerable
+  // app treats both as inert param names → identical responses → not flagged.
+  nosql: {
+    blockable: true,
+    filter: (u, b) =>
+      /\[\$(ne|eq|gt|lt|gte|lte|regex|where|in|nin)\]|\$where|"\$(ne|gt|regex)"/i.test(dec(u) + dec(b || '')),
+    async probe(target) {
+      if (typeof target !== 'string') return [];
+      let base;
+      try {
+        base = new URL(target);
+      } catch {
+        return [];
+      }
+      const key = [...base.searchParams.keys()][0] || 'id';
+      const nonce = `sxnope${randomUUID().slice(0, 6)}`;
+      const mk = (op) => {
+        const x = new URL(target);
+        x.searchParams.delete(key);
+        x.searchParams.set(`${key}[${op}]`, nonce);
+        return x.toString();
+      };
+      const sig = (r) => `${r.status}:${(r.body || '').length}`;
+      const t1 = await fetchT(mk('$ne')); // {key:{$ne:nonce}} → matches all
+      const f1 = await fetchT(mk('$eq')); // {key:{$eq:nonce}} → matches none
+      if (sig(t1) !== sig(f1)) {
+        const t2 = await fetchT(mk('$ne'));
+        const f2 = await fetchT(mk('$eq'));
+        if (sig(t1) === sig(t2) && sig(f1) === sig(f2) && sig(t1) !== sig(f1))
+          return [
+            F(
+              'nosql-probe',
+              'critical',
+              target,
+              'NoSQL injection: operator injection ([$ne] vs [$eq]) changed the query result set (MongoDB-style)',
+            ),
+          ];
+      }
+      return [];
+    },
+  },
+  // ── XXE (XML external entity) ───────────────────────────────────────────────────────────────
+  // POST an XML doc whose external entity points at our out-of-band listener. If the parser resolves
+  // it we receive a callback — undeniable proof the parser fetches attacker URLs (→ file read / SSRF).
+  xxe: {
+    blockable: false,
+    async probe(target) {
+      if (typeof target !== 'string') return [];
+      const token = `sx${randomUUID().slice(0, 10)}`;
+      const oob = await startOOB(token);
+      try {
+        const targetLocal = /^(127\.|::1|localhost$)/.test(new URL(target).hostname);
+        if (oob.local && !targetLocal) return []; // loopback OOB unreachable from a remote target → skip
+        const xml = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "${oob.url}">]><r>&xxe;</r>`;
+        await fetchT(target, { method: 'POST', headers: { 'content-type': 'application/xml' }, body: xml }, 6000);
+        await sleep(2200);
+        if (oob.hits.length)
+          return [
+            F(
+              'xxe-probe',
+              'high',
+              target,
+              'XXE: the XML parser resolved an external entity to an attacker URL (out-of-band callback received)',
+            ),
+          ];
+        return [];
+      } finally {
+        oob.server.close();
+      }
+    },
+  },
+  // ── Host header injection ───────────────────────────────────────────────────────────────────
+  // Send an attacker Host. If it's reflected into an absolute link or a redirect Location (and was
+  // NOT present with the real Host), that's a password-reset / web-cache poisoning primitive.
+  'host-header': {
+    blockable: false,
+    async probe(target) {
+      if (typeof target !== 'string') return [];
+      const evil = `sxhost${randomUUID().slice(0, 8)}.example`;
+      const base = await rawGetWithHost(target, null);
+      const inj = await rawGetWithHost(target, evil);
+      const loc = String(inj.headers.location || '');
+      if ((inj.body.includes(evil) || loc.includes(evil)) && !base.body.includes(evil))
+        return [
+          F(
+            'host-header-probe',
+            'medium',
+            target,
+            'Host header injection: an attacker-controlled Host was reflected into the response (absolute link / redirect) — enables password-reset & cache poisoning',
+          ),
+        ];
+      return [];
+    },
+  },
+  // ── CRLF injection / HTTP response splitting ────────────────────────────────────────────────
+  // Inject a percent-encoded CRLF plus a custom header into a param value. If the server writes the
+  // param into a response header without stripping CRLF, our header materializes in the response.
+  crlf: {
+    blockable: true,
+    filter: (u, b) => /%0d%0a|%0d|%0a/i.test(String(u) + String(b || '')),
+    async probe(target) {
+      if (typeof target !== 'string') return [];
+      const nonce = `sxcrlf${randomUUID().slice(0, 8)}`;
+      const rawPayload = `x%0d%0aX-Shannon-CRLF:%20${nonce}`; // already percent-encoded — keep it raw
+      let u;
+      try {
+        u = new URL(target);
+      } catch {
+        return [];
+      }
+      // Inject the raw CRLF payload into each EXISTING query param (a real CRLF sink is usually a
+      // redirect/echo param), rebuilding the query by hand so %0d%0a isn't double-encoded. Fall back
+      // to a synthetic param if the URL has none.
+      const keys = [...u.searchParams.keys()];
+      const build = (hotKey) => {
+        const parts = keys.map(
+          (k) => `${encodeURIComponent(k)}=${k === hotKey ? rawPayload : encodeURIComponent(u.searchParams.get(k))}`,
+        );
+        return `${u.origin}${u.pathname}?${parts.join('&')}`;
+      };
+      const urls = keys.length ? keys.map(build) : [`${u.origin}${u.pathname}?sxcrlf=${rawPayload}`];
+      for (const iu of urls) {
+        // Do NOT follow redirects — the split header lives on the (often 3xx) response itself.
+        const { headers } = await fetchT(iu, { redirect: 'manual' });
+        if ((headers.get('x-shannon-crlf') || '').includes(nonce))
+          return [
+            F(
+              'crlf-probe',
+              'high',
+              targetUrlOf(target),
+              'CRLF injection / HTTP response splitting: an injected CRLF created an attacker-controlled response header',
+            ),
+          ];
+      }
+      return [];
+    },
+  },
 };
 
 function startProxy(origin, filter, onBlock) {
@@ -774,6 +964,12 @@ function detectionRule(cls) {
       'Remove sensitive files from the web root; deny dotfiles (/.env, /.git); ROTATE any exposed secret immediately.',
     'security-headers':
       'Set HSTS, CSP, X-Content-Type-Options, X-Frame-Options; mark cookies HttpOnly/Secure/SameSite.',
+    nosql:
+      'Cast query params to strings/expected types before building the query; reject object/operator values ($ne/$gt/$where); use a schema/ODM with strict types.',
+    xxe: 'Disable DTDs and external entity resolution in the XML parser (FEATURE_SECURE_PROCESSING / noent=false / disallow-doctype-decl); prefer JSON.',
+    'host-header':
+      'Never trust the Host header; use an allowlist of expected hostnames; build absolute URLs from a configured canonical domain, not the request Host.',
+    crlf: 'Strip/deny CR and LF (\\r \\n, %0d %0a) in any user input written to response headers, redirects, or logs; use a framework header API that rejects control chars.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1135,10 +1331,11 @@ export async function runWholeApp({
     ]),
   ].slice(0, 10);
   const targetsFor = (cls) => {
-    if (['rce-ssti', 'xss', 'sqli', 'path-traversal', 'cmd-injection', 'authz-bypass'].includes(cls))
+    if (['rce-ssti', 'xss', 'sqli', 'nosql', 'crlf', 'path-traversal', 'cmd-injection', 'authz-bypass'].includes(cls))
       return [...(injectList.length ? injectList : pageList.slice(0, 10)), ...formTargets];
-    if (['open-redirect', 'ssrf', 'rce-deser', 'prompt-injection'].includes(cls))
+    if (['open-redirect', 'ssrf', 'xxe', 'rce-deser', 'prompt-injection'].includes(cls))
       return (injectList.length ? injectList : pageList).slice(0, 15);
+    if (cls === 'host-header') return [origin, ...pageList.slice(0, 5)];
     if (cls === 'graphql-idor') return graphqlList;
     if (cls === 'token-forgery') return authList;
     if (cls === 'cors-misconfig') return [origin, ...pageList.slice(0, 3)];
@@ -1256,14 +1453,28 @@ if (isMain) {
           }
         }
         if (p === '/') {
-          // landing page with links so the crawler can map the app
+          // landing page with links so the crawler can map the app. The absolute link is built from
+          // the (untrusted) Host header on purpose → exercises the host-header prober.
           res.writeHead(200, h);
           return res.end(`<html><body><h1>Demo App</h1>
             <a href="/search?q=hello">Search</a> <a href="/profile?id=1">Profile</a>
             <a href="/go?url=/home">Go</a> <a href="/.env">env</a>
+            <a href="/account?user=alice">Account</a>
+            <a href="https://${req.headers.host}/home">Home</a>
             <form action="/search" method="get"><input name="q"></form>
             <form action="/comment" method="post"><input name="c"></form>
             <script>fetch("/api/graphql")</script></body></html>`);
+        }
+        if (p === '/account') {
+          // Simulated MongoDB find({ user: <parsed> }). Operator injection widens the result set:
+          // user[$ne]=x matches ALL users (data leak); user[$eq]=nonce matches none.
+          const ne = u.searchParams.get('user[$ne]');
+          const eq = u.searchParams.get('user[$eq]');
+          const user = u.searchParams.get('user');
+          res.writeHead(200, h);
+          if (ne !== null) return res.end('<ul><li>alice</li><li>bob</li><li>carol</li><li>admin</li></ul>');
+          if (eq !== null) return res.end('<ul></ul>');
+          return res.end(`<ul>${user ? `<li>${user}</li>` : ''}</ul>`);
         }
         const urlp = u.searchParams.get('url');
         if (p === '/go' && urlp) {
