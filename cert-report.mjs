@@ -77,6 +77,13 @@ export const METHODOLOGY = {
   xxe: { name: 'XML External Entity (XXE)', wstg: 'WSTG-INPV-07', asvs: 'V5.5.2', pci: '6.2.4', iso: 'A.8.28' },
   'host-header': { name: 'Host Header Injection', wstg: 'WSTG-INPV-17', asvs: 'V5.1.1', pci: '6.2.4', iso: 'A.8.28' },
   crlf: { name: 'CRLF / HTTP Response Splitting', wstg: 'WSTG-INPV-16', asvs: 'V5.1.5', pci: '6.2.4', iso: 'A.8.28' },
+  'access-control': {
+    name: 'Broken Access Control (BOLA / BFLA)',
+    wstg: 'WSTG-ATHZ-02/04',
+    asvs: 'V4.1.3 / V4.2.1',
+    pci: '7.1',
+    iso: 'A.8.3',
+  },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };

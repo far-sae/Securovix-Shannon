@@ -100,6 +100,7 @@ const COMPLIANCE = {
   xxe: { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-611', mitre: ['TA0007', 'TA0009'] },
   'host-header': { owasp: 'A03:2021-Injection', cwe: 'CWE-644', mitre: ['TA0001'] },
   crlf: { owasp: 'A03:2021-Injection', cwe: 'CWE-113', mitre: ['TA0001'] },
+  'access-control': { owasp: 'A01:2021-Broken Access Control', cwe: 'CWE-284', mitre: ['TA0004', 'TA0005'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -970,6 +971,8 @@ function detectionRule(cls) {
     'host-header':
       'Never trust the Host header; use an allowlist of expected hostnames; build absolute URLs from a configured canonical domain, not the request Host.',
     crlf: 'Strip/deny CR and LF (\\r \\n, %0d %0a) in any user input written to response headers, redirects, or logs; use a framework header API that rejects control chars.',
+    'access-control':
+      'Enforce authorization on EVERY request server-side: verify the session identity OWNS the target object (BOLA) and holds the required ROLE for the function (BFLA); deny by default; never rely on unguessable IDs or client-side checks.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1044,8 +1047,11 @@ async function defendAndReport(report, ws, log) {
         log(`  (remediation LLM error: ${err.message})`);
       }
 
-      const inline = { applicable: !!PROBERS[cls].blockable, blocked: null };
-      if (PROBERS[cls].blockable) {
+      // Some classes (e.g. access-control) are proven by a separate flow, not a PROBER — they get a
+      // config/code-fix defense but no inline WAF re-test.
+      const prober = PROBERS[cls];
+      const inline = { applicable: !!prober?.blockable, blocked: null };
+      if (prober?.blockable) {
         let blockHit = false;
         let tu;
         try {
@@ -1053,12 +1059,12 @@ async function defendAndReport(report, ws, log) {
         } catch {
           tu = new URL(report.target);
         }
-        const { server, port } = await startProxy(`${tu.protocol}//${tu.host}`, PROBERS[cls].filter, () => {
+        const { server, port } = await startProxy(`${tu.protocol}//${tu.host}`, prober.filter, () => {
           blockHit = true;
         });
         INLINE_ALLOW = `127.0.0.1:${port}`; // permit the re-test to reach the local WAF proxy even on remote scans
         try {
-          const after = await PROBERS[cls].probe(`http://127.0.0.1:${port}${tu.pathname}${tu.search}`);
+          const after = await prober.probe(`http://127.0.0.1:${port}${tu.pathname}${tu.search}`);
           inline.blocked = after.length === 0 && blockHit;
           log(`- ${cls}: defense rule built; inline re-test => ${inline.blocked ? 'BLOCKED ✅' : 'still reachable ⚠'}`);
         } finally {
@@ -1277,6 +1283,7 @@ export async function runWholeApp({
   headers = {},
   maxPages = 40,
   headless = false,
+  accessControl = null,
 }) {
   loadEnv();
   setSessionHeaders(headers);
@@ -1369,6 +1376,30 @@ export async function runWholeApp({
     if (cls === 'xss' && headless && all.length) await upgradeXssExecution(all, headers, log);
     recordClass(report, ws, cls, all, log);
   }
+  // Broken Access Control (OWASP A01) needs a SECOND identity — run it when one is supplied so the
+  // 2-session horizontal/vertical proof can execute. An LLM judge (when a key is present) adversarially
+  // vets each deterministically-proven candidate; it can only refute, never invent.
+  const acIds = accessControl?.identities || [];
+  if (acIds.length >= 2 || (acIds.length >= 1 && accessControl?.adminEndpoints?.length)) {
+    log(`\n=== ACCESS-CONTROL phase — ${acIds.length} identities (BOLA/BFLA, deterministic + LLM judge) ===`);
+    try {
+      const { runAccessControl, makeLlmJudge } = await import('./access-control.mjs');
+      // The LLM judge adversarially vets each proven candidate (refute-only). Disable via
+      // useLlmJudge:false (selftest / offline) — the deterministic proof already stands alone.
+      const judge = accessControl?.useLlmJudge === false ? null : makeLlmJudge(process.env.ANTHROPIC_API_KEY);
+      const { findings, cost } = await runAccessControl({
+        origin,
+        identities: acIds,
+        adminEndpoints: accessControl.adminEndpoints || [],
+        judge,
+        log,
+      });
+      report.cost = (report.cost || 0) + (cost || 0);
+      recordClass(report, ws, 'access-control', findings, log);
+    } catch (err) {
+      log(`  (access-control error: ${err.message})`);
+    }
+  }
   report.crawl = {
     pages: s.pages.length,
     params: s.paramNames.length,
@@ -1403,60 +1434,92 @@ if (isMain) {
       // MULTI-PAGE pure-Node vulnerable app — the crawler discovers the sub-pages, then every
       // prober runs across them. Deliberately insecure; no Docker.
       const vuln = http.createServer(async (req, res) => {
-        const u = new URL(req.url, 'http://x');
-        const p = u.pathname;
-        const origin = req.headers.origin;
-        const h = { 'content-type': 'text/html' };
-        if (origin) {
-          h['access-control-allow-origin'] = origin;
-          h['access-control-allow-credentials'] = 'true';
-        } // CORS
-        if (p === '/.env') {
-          res.writeHead(200, { 'content-type': 'text/plain' });
-          return res.end('SECRET_KEY=sk_live_abc123\nDB_PASSWORD=hunter2\n');
-        } // secrets
-        const auth = req.headers.authorization; // JWT: accept HS256 signed with weak secret 'secret'
-        if (auth?.startsWith('Bearer ')) {
-          const [hh, pp, ss] = auth.slice(7).split('.');
-          try {
-            if (ss === b64url(createHmac('sha256', 'secret').update(`${hh}.${pp}`).digest())) {
-              const claims = JSON.parse(Buffer.from(pp.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
-              if (claims.role === 'admin') {
-                res.writeHead(200, h);
-                return res.end('<h1>admin dashboard</h1>');
+        try {
+          const u = new URL(req.url, 'http://x');
+          const p = u.pathname;
+          const origin = req.headers.origin;
+          const h = { 'content-type': 'text/html' };
+          if (origin) {
+            h['access-control-allow-origin'] = origin;
+            h['access-control-allow-credentials'] = 'true';
+          } // CORS
+          if (p === '/.env') {
+            res.writeHead(200, { 'content-type': 'text/plain' });
+            return res.end('SECRET_KEY=sk_live_abc123\nDB_PASSWORD=hunter2\n');
+          } // secrets
+          // Broken Access Control demo (cookie sessions: sid=alice|bob|admin). /order has NO owner
+          // check (BOLA) and /admin-panel has NO role check (BFLA) → both are deliberately vulnerable.
+          {
+            const acUsers = { alice: 1, bob: 1, admin: 1 };
+            const sid = (req.headers.cookie || '').match(/sid=([a-z]+)/)?.[1];
+            const AC_ORDERS = {
+              1001: 'alice-secret-9f3a1 alice@demo.test invoice-alpha-7781 balance-1200usd',
+              1002: 'bob-secret-4c8d2 bob@demo.test invoice-bravo-3391 balance-9310usd',
+            };
+            if (p === '/order') {
+              if (!sid || !acUsers[sid]) {
+                res.writeHead(401, h);
+                return res.end('login required');
               }
-            }
-          } catch {}
-        }
-        if (req.method === 'POST') {
-          let b = '';
-          for await (const c of req) b += c;
-          if (b.includes('__schema')) {
-            // GraphQL introspection
-            res.writeHead(200, { 'content-type': 'application/json' });
-            return res.end(
-              JSON.stringify({ data: { __schema: { queryType: { name: 'Query' }, types: [{ name: 'User' }] } } }),
-            );
-          }
-          if (p === '/comment') {
-            // POST-BODY injection sink: reflects/evaluates the body param `c` (proves POST probing).
-            const c = new URLSearchParams(b).get('c') || '';
-            if (c.includes("'")) {
+              const d = AC_ORDERS[u.searchParams.get('id')];
+              if (!d) {
+                res.writeHead(404, h);
+                return res.end('not found');
+              }
               res.writeHead(200, h);
-              return res.end("<p>You have an error in your SQL syntax near '''</p>");
+              return res.end(`<div>order: ${d}</div>`);
             }
-            const out = String(c).replace(/\{\{\s*(\d+)\s*\*\s*(\d+)\s*\}\}/g, (_, a, bb) =>
-              String(Number(a) * Number(bb)),
-            );
-            res.writeHead(200, h);
-            return res.end(`<p>Comment: ${out}</p>`); // SSTI + reflected XSS via POST body
+            if (p === '/admin-panel') {
+              if (!sid || !acUsers[sid]) {
+                res.writeHead(401, h);
+                return res.end('login required');
+              }
+              res.writeHead(200, h);
+              return res.end('<div>admin-dashboard revenue-report-xk92 all-users-export secret-panel-7731</div>');
+            }
           }
-        }
-        if (p === '/') {
-          // landing page with links so the crawler can map the app. The absolute link is built from
-          // the (untrusted) Host header on purpose → exercises the host-header prober.
-          res.writeHead(200, h);
-          return res.end(`<html><body><h1>Demo App</h1>
+          const auth = req.headers.authorization; // JWT: accept HS256 signed with weak secret 'secret'
+          if (auth?.startsWith('Bearer ')) {
+            const [hh, pp, ss] = auth.slice(7).split('.');
+            try {
+              if (ss === b64url(createHmac('sha256', 'secret').update(`${hh}.${pp}`).digest())) {
+                const claims = JSON.parse(Buffer.from(pp.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
+                if (claims.role === 'admin') {
+                  res.writeHead(200, h);
+                  return res.end('<h1>admin dashboard</h1>');
+                }
+              }
+            } catch {}
+          }
+          if (req.method === 'POST') {
+            let b = '';
+            for await (const c of req) b += c;
+            if (b.includes('__schema')) {
+              // GraphQL introspection
+              res.writeHead(200, { 'content-type': 'application/json' });
+              return res.end(
+                JSON.stringify({ data: { __schema: { queryType: { name: 'Query' }, types: [{ name: 'User' }] } } }),
+              );
+            }
+            if (p === '/comment') {
+              // POST-BODY injection sink: reflects/evaluates the body param `c` (proves POST probing).
+              const c = new URLSearchParams(b).get('c') || '';
+              if (c.includes("'")) {
+                res.writeHead(200, h);
+                return res.end("<p>You have an error in your SQL syntax near '''</p>");
+              }
+              const out = String(c).replace(/\{\{\s*(\d+)\s*\*\s*(\d+)\s*\}\}/g, (_, a, bb) =>
+                String(Number(a) * Number(bb)),
+              );
+              res.writeHead(200, h);
+              return res.end(`<p>Comment: ${out}</p>`); // SSTI + reflected XSS via POST body
+            }
+          }
+          if (p === '/') {
+            // landing page with links so the crawler can map the app. The absolute link is built from
+            // the (untrusted) Host header on purpose → exercises the host-header prober.
+            res.writeHead(200, h);
+            return res.end(`<html><body><h1>Demo App</h1>
             <a href="/search?q=hello">Search</a> <a href="/profile?id=1">Profile</a>
             <a href="/go?url=/home">Go</a> <a href="/.env">env</a>
             <a href="/account?user=alice">Account</a>
@@ -1464,67 +1527,90 @@ if (isMain) {
             <form action="/search" method="get"><input name="q"></form>
             <form action="/comment" method="post"><input name="c"></form>
             <script>fetch("/api/graphql")</script></body></html>`);
-        }
-        if (p === '/account') {
-          // Simulated MongoDB find({ user: <parsed> }). Operator injection widens the result set:
-          // user[$ne]=x matches ALL users (data leak); user[$eq]=nonce matches none.
-          const ne = u.searchParams.get('user[$ne]');
-          const eq = u.searchParams.get('user[$eq]');
-          const user = u.searchParams.get('user');
+          }
+          if (p === '/account') {
+            // Simulated MongoDB find({ user: <parsed> }). Operator injection widens the result set:
+            // user[$ne]=x matches ALL users (data leak); user[$eq]=nonce matches none.
+            const ne = u.searchParams.get('user[$ne]');
+            const eq = u.searchParams.get('user[$eq]');
+            const user = u.searchParams.get('user');
+            res.writeHead(200, h);
+            if (ne !== null) return res.end('<ul><li>alice</li><li>bob</li><li>carol</li><li>admin</li></ul>');
+            if (eq !== null) return res.end('<ul></ul>');
+            return res.end(`<ul>${user ? `<li>${user}</li>` : ''}</ul>`);
+          }
+          const urlp = u.searchParams.get('url');
+          if (p === '/go' && urlp) {
+            try {
+              await fetch(urlp, { signal: AbortSignal.timeout(2000) });
+            } catch {}
+            res.writeHead(302, { location: urlp });
+            return res.end();
+          } // SSRF + open-redirect
+          const id = u.searchParams.get('id');
+          if (p === '/profile' && id && /^\d+$/.test(id)) {
+            res.writeHead(200, h);
+            return res.end(`<p>user ${id} secret=token-${id}</p>`);
+          } // IDOR
+          if (p === '/search') {
+            const q = u.searchParams.get('q') ?? '';
+            if (/ignore.*instructions/i.test(q)) {
+              const m = q.match(/reversed:\s*(\S+)/i);
+              const rev = m ? m[1].split('').reverse().join('') : 'pwned';
+              res.writeHead(200, h);
+              return res.end(`<p>${rev}</p>`);
+            } // simulated jailbroken LLM follows the injected instruction
+            if (q.includes("'")) {
+              res.writeHead(200, h);
+              return res.end("<p>You have an error in your SQL syntax near '''</p>");
+            }
+            if (/etc\/passwd|\.\.[\/\\]/.test(q)) {
+              res.writeHead(200, h);
+              return res.end('root:x:0:0:root:/root:/bin/bash');
+            }
+            const cmd = q.match(/echo\s+sxcmd\$\(\((\d+)\*(\d+)\)\)/);
+            if (cmd) {
+              res.writeHead(200, h);
+              return res.end(`out: sxcmd${Number(cmd[1]) * Number(cmd[2])}`);
+            }
+            const out = String(q).replace(/\{\{\s*(\d+)\s*\*\s*(\d+)\s*\}\}/g, (_, a, b) =>
+              String(Number(a) * Number(b)),
+            );
+            res.writeHead(200, h);
+            return res.end(`<h1>Results for ${out}</h1>`); // SSTI + reflected XSS
+          }
           res.writeHead(200, h);
-          if (ne !== null) return res.end('<ul><li>alice</li><li>bob</li><li>carol</li><li>admin</li></ul>');
-          if (eq !== null) return res.end('<ul></ul>');
-          return res.end(`<ul>${user ? `<li>${user}</li>` : ''}</ul>`);
-        }
-        const urlp = u.searchParams.get('url');
-        if (p === '/go' && urlp) {
+          res.end('<html><body>home</body></html>');
+        } catch {
+          // A real server doesn't crash the process on one malformed request (e.g. a CRLF probe that
+          // Node refuses to put in a header) — return 500 and stay up so the scan continues.
           try {
-            await fetch(urlp, { signal: AbortSignal.timeout(2000) });
+            res.writeHead(500, { 'content-type': 'text/plain' });
+            res.end('error');
           } catch {}
-          res.writeHead(302, { location: urlp });
-          return res.end();
-        } // SSRF + open-redirect
-        const id = u.searchParams.get('id');
-        if (p === '/profile' && id && /^\d+$/.test(id)) {
-          res.writeHead(200, h);
-          return res.end(`<p>user ${id} secret=token-${id}</p>`);
-        } // IDOR
-        if (p === '/search') {
-          const q = u.searchParams.get('q') ?? '';
-          if (/ignore.*instructions/i.test(q)) {
-            const m = q.match(/reversed:\s*(\S+)/i);
-            const rev = m ? m[1].split('').reverse().join('') : 'pwned';
-            res.writeHead(200, h);
-            return res.end(`<p>${rev}</p>`);
-          } // simulated jailbroken LLM follows the injected instruction
-          if (q.includes("'")) {
-            res.writeHead(200, h);
-            return res.end("<p>You have an error in your SQL syntax near '''</p>");
-          }
-          if (/etc\/passwd|\.\.[\/\\]/.test(q)) {
-            res.writeHead(200, h);
-            return res.end('root:x:0:0:root:/root:/bin/bash');
-          }
-          const cmd = q.match(/echo\s+sxcmd\$\(\((\d+)\*(\d+)\)\)/);
-          if (cmd) {
-            res.writeHead(200, h);
-            return res.end(`out: sxcmd${Number(cmd[1]) * Number(cmd[2])}`);
-          }
-          const out = String(q).replace(/\{\{\s*(\d+)\s*\*\s*(\d+)\s*\}\}/g, (_, a, b) =>
-            String(Number(a) * Number(b)),
-          );
-          res.writeHead(200, h);
-          return res.end(`<h1>Results for ${out}</h1>`); // SSTI + reflected XSS
         }
-        res.writeHead(200, h);
-        res.end('<html><body>home</body></html>');
       });
       await new Promise((r) => vuln.listen(0, '127.0.0.1', r));
       const port = vuln.address().port;
       const ws = join(import.meta.dirname, 'workspaces', `purple-selftest-${randomUUID().slice(0, 6)}`);
       mkdirSync(ws, { recursive: true });
       try {
-        await runWholeApp({ target: `http://127.0.0.1:${port}/`, label: 'selftest', workspaceDir: ws, maxPages: 30 });
+        const base = `http://127.0.0.1:${port}`;
+        await runWholeApp({
+          target: `${base}/`,
+          label: 'selftest',
+          workspaceDir: ws,
+          maxPages: 30,
+          accessControl: {
+            useLlmJudge: false, // keep the selftest free/deterministic; the judge gate is tested separately
+            identities: [
+              { label: 'alice', role: 'user', headers: { Cookie: 'sid=alice' }, resources: [`${base}/order?id=1001`] },
+              { label: 'bob', role: 'user', headers: { Cookie: 'sid=bob' }, resources: [`${base}/order?id=1002`] },
+              { label: 'admin', role: 'admin', headers: { Cookie: 'sid=admin' }, resources: [] },
+            ],
+            adminEndpoints: [`${base}/admin-panel`],
+          },
+        });
       } finally {
         vuln.close();
       }
