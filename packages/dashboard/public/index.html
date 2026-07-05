@@ -1996,6 +1996,18 @@ function wizRender(){
         <div class="fg"><label for="aurls">Avoid URLs <span style="color:var(--t3);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label><input class="fi" type="text" id="aurls" placeholder="/docs/, /static/" autocomplete="off" value="${H(WIZ.avoidUrls||'')}"></div>
       </div>
 
+      <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--bd)">
+        <label style="display:block;margin-bottom:2px">Access-control testing (BOLA / BFLA) <span style="color:var(--t3);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <div style="color:var(--t3);font-size:12px;margin-bottom:8px">Paste the session cookie of 2+ logged-in accounts. Shannon proves whether one user can read another's data — resources are discovered automatically.</div>
+        <div class="fr">
+          <div class="fg"><label for="acA">User A cookie</label><input class="fi" type="text" id="acA" placeholder="sid=abc123; ..." autocomplete="off" value="${H(WIZ.acUserA||'')}"></div>
+          <div class="fg"><label for="acB">User B cookie</label><input class="fi" type="text" id="acB" placeholder="sid=def456; ..." autocomplete="off" value="${H(WIZ.acUserB||'')}"></div>
+        </div>
+        <div class="fr">
+          <div class="fg"><label for="acAdm">Admin cookie <span style="color:var(--t3);font-weight:400;text-transform:none;letter-spacing:0">(optional → vertical BFLA)</span></label><input class="fi" type="text" id="acAdm" placeholder="sid=admin789; ..." autocomplete="off" value="${H(WIZ.acAdmin||'')}"></div>
+        </div>
+      </div>
+
       <div style="margin-top:30px;display:flex;gap:12px;justify-content:space-between">
         <button class="btn btn-g" onclick="wizBack()">← Back</button>
         <button class="btn btn-p" onclick="wizNext()">Continue →</button>
@@ -2078,6 +2090,9 @@ function wizCollect(){
     WIZ.password=$('apass')?.value||'';
     WIZ.focusUrls=$('furls')?.value||'';
     WIZ.avoidUrls=$('aurls')?.value||'';
+    WIZ.acUserA=$('acA')?.value||'';
+    WIZ.acUserB=$('acB')?.value||'';
+    WIZ.acAdmin=$('acAdm')?.value||'';
   }else{
     WIZ.warRoom=$('warroom-toggle')?.checked!==false;
   }
@@ -2118,6 +2133,7 @@ async function doScan(){
       warRoom:WIZ.warRoom!==false,
       providerKeys:keys,
       authorized,
+      accessControl:(()=>{const ids=[];if(WIZ.acUserA)ids.push({label:'userA',role:'user',cookie:WIZ.acUserA.trim()});if(WIZ.acUserB)ids.push({label:'userB',role:'user',cookie:WIZ.acUserB.trim()});if(WIZ.acAdmin)ids.push({label:'admin',role:'admin',cookie:WIZ.acAdmin.trim()});return ids.length>=2?{identities:ids}:undefined})(),
     })});
     if(r.error){
       // Server says we must prove we own the domain → open the verification flow, then let them retry.

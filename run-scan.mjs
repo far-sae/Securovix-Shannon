@@ -4,11 +4,48 @@
  * Red attacks. Blue defends. Exploits are verified. Zero false positives.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { randomUUID, createHash } from 'node:crypto';
-import { runWholeApp } from './purple-engine.mjs';
+import { login, runWholeApp } from './purple-engine.mjs';
+
+// Build access-control identities (BOLA/BFLA) from SHANNON_AC (JSON passed by the dashboard). Each
+// identity is a cookie/header or a form login; resources are auto-discovered by runWholeApp.
+async function buildAccessControl() {
+  if (!process.env.SHANNON_AC) return null;
+  try {
+    const spec = JSON.parse(process.env.SHANNON_AC);
+    const identities = [];
+    for (const it of spec.identities || []) {
+      let headers = null;
+      if (it.cookie) headers = { Cookie: it.cookie };
+      else if (it.header) {
+        const j = it.header.indexOf(':');
+        if (j > 0) headers = { [it.header.slice(0, j).trim()]: it.header.slice(j + 1).trim() };
+      } else if (it.loginUrl && it.username) {
+        const sess = await login({
+          loginUrl: it.loginUrl,
+          username: it.username,
+          password: it.password || '',
+          usernameField: it.userField || 'username',
+          passwordField: it.passField || 'password',
+        });
+        if (sess.Cookie) headers = sess;
+      }
+      if (headers)
+        identities.push({ label: it.label || `id${identities.length + 1}`, role: it.role || 'user', headers });
+    }
+    if (identities.length >= 2) {
+      console.log(`  [access-control] ${identities.length} identities ready → BOLA/BFLA enabled`);
+      return { identities };
+    }
+    console.log('  [access-control] fewer than 2 identities resolved — skipping');
+  } catch (e) {
+    console.log(`  [access-control] setup skipped: ${e.message}`);
+  }
+  return null;
+}
 
 // ---- Live HTTP recon ----
 async function httpRecon(targetUrl) {
@@ -126,7 +163,9 @@ async function httpRecon(targetUrl) {
     }
   }
   const catchAllSize = Object.entries(sizeCounts).sort((a, b) => b[1] - a[1])[0];
-  const realEndpoints = results.filter((r) => r.status !== 'error' && r.size && r.size !== parseInt(catchAllSize?.[0]));
+  const realEndpoints = results.filter(
+    (r) => r.status !== 'error' && r.size && r.size !== Number.parseInt(catchAllSize?.[0]),
+  );
 
   return {
     results,
@@ -220,7 +259,7 @@ async function llm(sys, usr, max = 4000) {
     .join('\n');
   return {
     text,
-    cost: parseFloat((r.usage.input_tokens * 0.000003 + r.usage.output_tokens * 0.000015).toFixed(6)),
+    cost: Number.parseFloat((r.usage.input_tokens * 0.000003 + r.usage.output_tokens * 0.000015).toFixed(6)),
     tokens: r.usage,
   };
 }
@@ -450,11 +489,13 @@ save(
 console.log(`  [Phase 3.5] Real Exploit + Defend (broker probers)...`);
 t = Date.now();
 try {
+  const accessControl = await buildAccessControl();
   const purple = await runWholeApp({
     target: targetUrl,
     label: 'scan',
     workspaceDir: wsDir,
     maxPages: 40,
+    accessControl,
   });
   const confirmed = purple.exploits.reduce((s, e) => s + e.confirmed, 0);
   console.log(

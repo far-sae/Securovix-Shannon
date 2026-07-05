@@ -1595,6 +1595,27 @@ app.post('/api/scans', (req, res) => {
     if (providerKeys?.gemini) env.GOOGLE_API_KEY = providerKeys.gemini;
     if (providerKeys?.glm) env.ZHIPU_API_KEY = providerKeys.glm;
   }
+  // Access-control testing (BOLA/BFLA) — the client supplies 2+ authenticated identities (a cookie
+  // or a login form). Passed to run-scan via env (not written to the config file on disk). Bounded
+  // and sanitized; resources are auto-discovered by crawling as each identity.
+  const acIds = Array.isArray(req.body.accessControl?.identities) ? req.body.accessControl.identities : [];
+  const cleanIds = acIds
+    .slice(0, 4)
+    .map((it) => {
+      const o = { label: String(it.label || '').slice(0, 40), role: it.role === 'admin' ? 'admin' : 'user' };
+      if (it.cookie) o.cookie = String(it.cookie).slice(0, 4096);
+      else if (it.header) o.header = String(it.header).slice(0, 4096);
+      else if (it.loginUrl && it.username) {
+        o.loginUrl = String(it.loginUrl).slice(0, 2048);
+        o.username = String(it.username).slice(0, 256);
+        o.password = String(it.password || '').slice(0, 256);
+        if (it.userField) o.userField = String(it.userField).slice(0, 64);
+        if (it.passField) o.passField = String(it.passField).slice(0, 64);
+      }
+      return o;
+    })
+    .filter((o) => o.cookie || o.header || o.loginUrl);
+  if (cleanIds.length >= 2) env.SHANNON_AC = JSON.stringify({ identities: cleanIds });
 
   const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], {
     cwd: ROOT,

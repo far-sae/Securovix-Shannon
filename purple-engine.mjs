@@ -1275,6 +1275,50 @@ async function upgradeXssExecution(findings, headers, log) {
   } catch {}
 }
 
+// A URL that addresses a specific OBJECT (numeric id, uuid, or long hex) in a query param or path
+// segment — the candidates for horizontal BOLA testing.
+function looksLikeObjectUrl(url) {
+  const isId = (v) => /^\d{1,15}$/.test(v) || /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(v) || /^[0-9a-f]{16,}$/i.test(v);
+  try {
+    const u = new URL(url);
+    for (const v of u.searchParams.values()) if (isId(v)) return true;
+    for (const seg of u.pathname.split('/')) if (seg && isId(seg)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Crawl the target AS a given identity and return the object-addressing URLs that identity can reach
+// — i.e. that identity's "own resources" for the access-control differential. No manual URL lists.
+async function discoverResources({ origin, headers, maxPages }) {
+  try {
+    const { crawl } = await import('./crawler.mjs');
+    const s = await crawl({ target: `${origin}/`, headers, maxPages: Math.min(maxPages || 25, 25) });
+    const urls = new Set();
+    for (const pg of s.pages) if (pg.url && looksLikeObjectUrl(pg.url)) urls.add(pg.url);
+    return [...urls].slice(0, 15);
+  } catch {
+    return [];
+  }
+}
+
+// Candidate admin-only endpoints for vertical BFLA: privileged-looking paths the admin identity can
+// reach, plus a small set of conventional admin paths probed directly.
+async function discoverAdminEndpoints({ origin, headers, maxPages }) {
+  const found = new Set();
+  try {
+    const { crawl } = await import('./crawler.mjs');
+    const s = await crawl({ target: `${origin}/`, headers, maxPages: Math.min(maxPages || 25, 25) });
+    for (const pg of s.pages)
+      if (/admin|manage|dashboard|report|settings|internal|config|\/users?\b/i.test(new URL(pg.url).pathname))
+        found.add(pg.url);
+  } catch {}
+  for (const p of ['/admin', '/admin/', '/dashboard', '/api/admin', '/admin/users', '/manage', '/settings'])
+    found.add(origin + p);
+  return [...found].slice(0, 12);
+}
+
 export async function runWholeApp({
   target,
   classes = ALL_CLASSES,
@@ -1384,13 +1428,27 @@ export async function runWholeApp({
     log(`\n=== ACCESS-CONTROL phase — ${acIds.length} identities (BOLA/BFLA, deterministic + LLM judge) ===`);
     try {
       const { runAccessControl, makeLlmJudge } = await import('./access-control.mjs');
+      // AUTO-DISCOVERY: a caller only needs to supply identities (label, role, headers) — Shannon
+      // crawls AS each identity to find its own object URLs, so no manual resource lists are needed.
+      for (const id of acIds) {
+        if (!id.resources || !id.resources.length) {
+          id.resources = await discoverResources({ origin, headers: id.headers, maxPages });
+          log(`  access-control: discovered ${id.resources.length} object URL(s) for "${id.label}"`);
+        }
+      }
+      let adminEndpoints = accessControl.adminEndpoints || [];
+      const adminId = acIds.find((i) => i.role === 'admin');
+      if (!adminEndpoints.length && adminId) {
+        adminEndpoints = await discoverAdminEndpoints({ origin, headers: adminId.headers, maxPages });
+        log(`  access-control: discovered ${adminEndpoints.length} candidate admin endpoint(s)`);
+      }
       // The LLM judge adversarially vets each proven candidate (refute-only). Disable via
       // useLlmJudge:false (selftest / offline) — the deterministic proof already stands alone.
       const judge = accessControl?.useLlmJudge === false ? null : makeLlmJudge(process.env.ANTHROPIC_API_KEY);
       const { findings, cost } = await runAccessControl({
         origin,
         identities: acIds,
-        adminEndpoints: accessControl.adminEndpoints || [],
+        adminEndpoints,
         judge,
         log,
       });
@@ -1618,7 +1676,10 @@ if (isMain) {
       const target = arg('--target');
       if (!target) {
         console.error(
-          'usage: --target <url> [--cookie "k=v"] [--header "K: V"] [--login-url U --username U --password P] [--no-crawl] [--max-pages N] | --selftest',
+          'usage: --target <url> [--cookie "k=v"] [--header "K: V"] [--login-url U --username U --password P]\n' +
+            '       [--user2-cookie "k=v" | --user2-login-url U --user2-username U --user2-password P]  (2nd peer → BOLA)\n' +
+            '       [--admin-cookie "k=v" | --admin-login-url U --admin-username U --admin-password P]   (admin → BFLA)\n' +
+            '       [--no-crawl] [--max-pages N] [--headless] | --selftest',
         );
         process.exit(1);
       }
@@ -1641,6 +1702,38 @@ if (isMain) {
           sess.Cookie ? '  [auth] logged in; session cookie acquired' : '  [auth] login produced no session cookie',
         );
       }
+      // Build an extra access-control identity from either a cookie or a form login (--<prefix>-*).
+      const buildIdentity = async (prefix, labelText, role) => {
+        const ck = arg(`--${prefix}-cookie`);
+        const lurl = arg(`--${prefix}-login-url`);
+        const uname = arg(`--${prefix}-username`);
+        let idHeaders = null;
+        if (ck) idHeaders = { Cookie: ck };
+        else if (lurl && uname) {
+          const sess = await login({
+            loginUrl: lurl,
+            username: uname,
+            password: arg(`--${prefix}-password`) || '',
+            usernameField: arg(`--${prefix}-user-field`) || 'username',
+            passwordField: arg(`--${prefix}-pass-field`) || 'password',
+          });
+          if (sess.Cookie) idHeaders = sess;
+        }
+        if (idHeaders) console.error(`  [auth] access-control identity "${labelText}" ready`);
+        return idHeaders ? { label: labelText, role, headers: idHeaders } : null;
+      };
+      // Access-control (BOLA/BFLA) runs when >=2 identities are available. The primary session is
+      // identity A; add --user2-* for a second peer and/or --admin-* for vertical BFLA. Resources
+      // are auto-discovered by crawling as each identity — no manual URL lists.
+      const identities = [];
+      if (headers.Cookie || headers.Authorization) identities.push({ label: 'primary', role: 'user', headers });
+      const user2 = await buildIdentity('user2', 'user2', 'user');
+      if (user2) identities.push(user2);
+      const adminIdent = await buildIdentity('admin', 'admin', 'admin');
+      if (adminIdent) identities.push(adminIdent);
+      const accessControl = identities.length >= 2 ? { identities } : null;
+      if (accessControl) console.error(`  [access-control] ${identities.length} identities → BOLA/BFLA enabled`);
+
       if (process.argv.includes('--no-crawl')) {
         setSessionHeaders(headers);
         await runExploitDefend({ target, classes: ALL_CLASSES, label, workspaceDir: ws });
@@ -1652,6 +1745,7 @@ if (isMain) {
           headers,
           maxPages: Number(arg('--max-pages')) || 40,
           headless: process.argv.includes('--headless') || process.env.SHANNON_HEADLESS === '1',
+          accessControl,
         });
       }
     }
