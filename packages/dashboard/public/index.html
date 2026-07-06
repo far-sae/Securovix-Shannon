@@ -1998,13 +1998,22 @@ function wizRender(){
 
       <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--bd)">
         <label style="display:block;margin-bottom:2px">Access-control testing (BOLA / BFLA) <span style="color:var(--t3);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
-        <div style="color:var(--t3);font-size:12px;margin-bottom:8px">Paste the session cookie of 2+ logged-in accounts. Shannon proves whether one user can read another's data — resources are discovered automatically.</div>
+        <div style="color:var(--t3);font-size:12px;margin-bottom:8px">Give Shannon 2+ accounts and it proves whether one user can read another's data. Enter a login URL + usernames/passwords, or paste session cookies. Each account's data is discovered automatically.</div>
+        <div class="fg" style="margin-bottom:8px"><label for="acLoginUrl">Login URL <span style="color:var(--t3);font-weight:400;text-transform:none;letter-spacing:0">(same site as target — leave blank to use cookies)</span></label><input class="fi" type="text" id="acLoginUrl" placeholder="https://app.example.com/login" autocomplete="off" value="${H(WIZ.acLoginUrl||'')}"></div>
         <div class="fr">
-          <div class="fg"><label for="acA">User A cookie</label><input class="fi" type="text" id="acA" placeholder="sid=abc123; ..." autocomplete="off" value="${H(WIZ.acUserA||'')}"></div>
-          <div class="fg"><label for="acB">User B cookie</label><input class="fi" type="text" id="acB" placeholder="sid=def456; ..." autocomplete="off" value="${H(WIZ.acUserB||'')}"></div>
+          <div class="fg"><label for="acAuser">User A username</label><input class="fi" type="text" id="acAuser" autocomplete="off" value="${H(WIZ.acAuser||'')}"></div>
+          <div class="fg"><label for="acApass">User A password</label><input class="fi" type="password" id="acApass" autocomplete="off" value="${H(WIZ.acApass||'')}"></div>
+          <div class="fg"><label for="acAck">…or User A cookie</label><input class="fi" type="text" id="acAck" placeholder="sid=abc123; …" autocomplete="off" value="${H(WIZ.acAck||'')}"></div>
         </div>
         <div class="fr">
-          <div class="fg"><label for="acAdm">Admin cookie <span style="color:var(--t3);font-weight:400;text-transform:none;letter-spacing:0">(optional → vertical BFLA)</span></label><input class="fi" type="text" id="acAdm" placeholder="sid=admin789; ..." autocomplete="off" value="${H(WIZ.acAdmin||'')}"></div>
+          <div class="fg"><label for="acBuser">User B username</label><input class="fi" type="text" id="acBuser" autocomplete="off" value="${H(WIZ.acBuser||'')}"></div>
+          <div class="fg"><label for="acBpass">User B password</label><input class="fi" type="password" id="acBpass" autocomplete="off" value="${H(WIZ.acBpass||'')}"></div>
+          <div class="fg"><label for="acBck">…or User B cookie</label><input class="fi" type="text" id="acBck" placeholder="sid=def456; …" autocomplete="off" value="${H(WIZ.acBck||'')}"></div>
+        </div>
+        <div class="fr">
+          <div class="fg"><label for="acAdmUser">Admin username <span style="color:var(--t3);font-weight:400;text-transform:none;letter-spacing:0">(optional → BFLA)</span></label><input class="fi" type="text" id="acAdmUser" autocomplete="off" value="${H(WIZ.acAdmUser||'')}"></div>
+          <div class="fg"><label for="acAdmPass">Admin password</label><input class="fi" type="password" id="acAdmPass" autocomplete="off" value="${H(WIZ.acAdmPass||'')}"></div>
+          <div class="fg"><label for="acAdmCk">…or Admin cookie</label><input class="fi" type="text" id="acAdmCk" placeholder="sid=admin789; …" autocomplete="off" value="${H(WIZ.acAdmCk||'')}"></div>
         </div>
       </div>
 
@@ -2090,9 +2099,10 @@ function wizCollect(){
     WIZ.password=$('apass')?.value||'';
     WIZ.focusUrls=$('furls')?.value||'';
     WIZ.avoidUrls=$('aurls')?.value||'';
-    WIZ.acUserA=$('acA')?.value||'';
-    WIZ.acUserB=$('acB')?.value||'';
-    WIZ.acAdmin=$('acAdm')?.value||'';
+    WIZ.acLoginUrl=$('acLoginUrl')?.value||'';
+    WIZ.acAuser=$('acAuser')?.value||'';WIZ.acApass=$('acApass')?.value||'';WIZ.acAck=$('acAck')?.value||'';
+    WIZ.acBuser=$('acBuser')?.value||'';WIZ.acBpass=$('acBpass')?.value||'';WIZ.acBck=$('acBck')?.value||'';
+    WIZ.acAdmUser=$('acAdmUser')?.value||'';WIZ.acAdmPass=$('acAdmPass')?.value||'';WIZ.acAdmCk=$('acAdmCk')?.value||'';
   }else{
     WIZ.warRoom=$('warroom-toggle')?.checked!==false;
   }
@@ -2133,7 +2143,7 @@ async function doScan(){
       warRoom:WIZ.warRoom!==false,
       providerKeys:keys,
       authorized,
-      accessControl:(()=>{const ids=[];if(WIZ.acUserA)ids.push({label:'userA',role:'user',cookie:WIZ.acUserA.trim()});if(WIZ.acUserB)ids.push({label:'userB',role:'user',cookie:WIZ.acUserB.trim()});if(WIZ.acAdmin)ids.push({label:'admin',role:'admin',cookie:WIZ.acAdmin.trim()});return ids.length>=2?{identities:ids}:undefined})(),
+      accessControl:(()=>{const lu=(WIZ.acLoginUrl||'').trim();const mk=(label,role,user,pass,ck)=>{user=(user||'').trim();ck=(ck||'').trim();if(lu&&user)return{label,role,loginUrl:lu,username:user,password:(pass||'').trim()};if(ck)return{label,role,cookie:ck};return null;};const ids=[mk('userA','user',WIZ.acAuser,WIZ.acApass,WIZ.acAck),mk('userB','user',WIZ.acBuser,WIZ.acBpass,WIZ.acBck),mk('admin','admin',WIZ.acAdmUser,WIZ.acAdmPass,WIZ.acAdmCk)].filter(Boolean);return ids.length>=2?{identities:ids}:undefined})(),
     })});
     if(r.error){
       // Server says we must prove we own the domain → open the verification flow, then let them retry.
