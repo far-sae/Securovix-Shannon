@@ -105,6 +105,21 @@ export const METHODOLOGY = {
     pci: '6.2.4',
     iso: 'A.8.28',
   },
+  csrf: { name: 'Cross-Site Request Forgery', wstg: 'WSTG-SESS-05', asvs: 'V4.2.2', pci: '6.2.4', iso: 'A.8.28' },
+  'mass-assignment': {
+    name: 'Mass Assignment / Over-posting',
+    wstg: 'WSTG-INPV-(Mass Assignment)',
+    asvs: 'V5.1.2',
+    pci: '6.2.4',
+    iso: 'A.8.28',
+  },
+  'verbose-errors': {
+    name: 'Information Disclosure via Verbose Errors',
+    wstg: 'WSTG-ERRH-01',
+    asvs: 'V7.4.1',
+    pci: '6.2.4',
+    iso: 'A.8.9',
+  },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };

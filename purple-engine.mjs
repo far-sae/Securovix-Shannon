@@ -108,6 +108,9 @@ const COMPLIANCE = {
     mitre: ['TA0006'],
   },
   'stored-dom-xss': { owasp: 'A03:2021-Injection', cwe: 'CWE-79', mitre: ['TA0001', 'TA0006'] },
+  csrf: { owasp: 'A01:2021-Broken Access Control', cwe: 'CWE-352', mitre: ['TA0001'] },
+  'mass-assignment': { owasp: 'A04:2021-Insecure Design', cwe: 'CWE-915', mitre: ['TA0004'] },
+  'verbose-errors': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-209', mitre: ['TA0007'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -172,6 +175,22 @@ const SQL_ERRORS = [
   /Microsoft OLE DB Provider/i,
   /ODBC SQL Server Driver/i,
   /syntax error at or near/i,
+];
+// Stack-trace / debug signatures for the verbose-errors prober — each paired with a human label.
+// Confirmed only when present on malformed input AND absent from the benign baseline.
+const STACK_SIGNATURES = [
+  [/Traceback \(most recent call last\)/, 'Python traceback'],
+  [/\n\s+File ".*", line \d+/, 'Python traceback'],
+  [/\bat [\w$.<>]+ \(.*:\d+:\d+\)/, 'Node.js stack trace'],
+  [/\bat [\w.$]+\([\w.]+\.java:\d+\)/, 'Java stack trace'],
+  [/(?:Fatal error|Parse error|Warning):.+ in .+ on line \d+/i, 'PHP error'],
+  [/Stack trace:\s*#0\s/, 'PHP stack trace'],
+  [/System\.[\w.]+Exception[\s\S]{0,300}\bat\s+[\w.]+/, '.NET exception'],
+  [/(?:ActionController|ActiveRecord::|\.rb:\d+:in )/, 'Ruby/Rails error'],
+  [/Werkzeug|Whoops\\?Run|Symfony\\Component|Rails\.application\.routes/, 'framework debug page'],
+  [/DEBUG\s*=\s*True|APP_DEBUG\s*=?\s*(?:true|1)\b/i, 'debug mode enabled'],
+  [/[A-Za-z]:\\(?:[\w .-]+\\)+[\w .-]+\.(?:php|py|rb|js|java|cs|aspx?)/, 'server file path'],
+  [/\/(?:var|home|usr|app|opt|srv)\/[\w./-]+\.(?:php|py|rb|js|java)/, 'server file path'],
 ];
 
 // Set (replace) a query param — so probing a URL that already has the param overrides its
@@ -1107,6 +1126,107 @@ const PROBERS = {
       return findings;
     },
   },
+  // ── CSRF ────────────────────────────────────────────────────────────────────────────────────
+  // A state-changing POST form is forgeable cross-site when it has NO anti-CSRF token AND the session
+  // cookie is SameSite=None (explicitly sent on cross-site requests). Conservative on purpose: an
+  // absent SameSite defaults to Lax in modern browsers (which blocks cross-site POST), so we only
+  // flag explicit None — no guessing, no false positives.
+  csrf: {
+    blockable: false,
+    async probe(target) {
+      if (typeof target === 'string' || !Array.isArray(target.params)) return [];
+      if ((target.method || 'get').toLowerCase() !== 'post') return []; // state-changing only
+      if (target.params.some((p) => /csrf|token|authenticity|_token|xsrf|nonce/i.test(p))) return []; // token present
+      const r = await fetchT(target.url);
+      const setC = r.headers.getSetCookie ? r.headers.getSetCookie() : [];
+      const sess = setC.find((c) => SESSION_COOKIE_RE.test(c.split('=')[0]));
+      if (!sess) return []; // no session cookie observed → can't assess (avoid FP)
+      if (/samesite\s*=\s*(lax|strict)/i.test(sess)) return []; // SameSite protects cross-site POST
+      if (!/samesite\s*=\s*none/i.test(sess)) return []; // absent → browser-default Lax → protected
+      return [
+        F(
+          'csrf-probe',
+          'medium',
+          target.url,
+          'Cross-site request forgery: state-changing POST form has no anti-CSRF token and the session cookie is SameSite=None (sent on cross-site requests)',
+        ),
+      ];
+    },
+  },
+  // ── Mass assignment / over-posting ──────────────────────────────────────────────────────────
+  // Submit an unexpected PRIVILEGED field (role/isAdmin/…) to a POST endpoint. Confirm only when the
+  // server reflects it back (bound it) AND a random control field is NOT reflected — so an app that
+  // simply echoes all input can't false-positive; it must SELECTIVELY bind the privileged field.
+  'mass-assignment': {
+    blockable: false,
+    async probe(target) {
+      if (typeof target === 'string' || !Array.isArray(target.params)) return [];
+      if ((target.method || 'get').toLowerCase() !== 'post') return [];
+      const rnd = randomUUID().slice(0, 8);
+      const base = {};
+      for (const p of target.params) base[p] = `sx${p}`;
+      const post = (extra) =>
+        fetchT(target.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ ...base, ...extra }).toString(),
+          redirect: 'manual',
+        });
+      const resp0 = (await post({})).body || '';
+      const ctrl = `sxctrl${rnd}`;
+      const respC = (await post({ [`sxjunk${rnd}`]: ctrl })).body || '';
+      if (respC.includes(ctrl)) return []; // app echoes arbitrary input → can't distinguish binding
+      for (const field of [
+        'role',
+        'isAdmin',
+        'is_admin',
+        'admin',
+        'is_staff',
+        'verified',
+        'account_type',
+        'is_superuser',
+      ]) {
+        const nonce = `sxma${rnd}${field}`;
+        const respT = (await post({ [field]: nonce })).body || '';
+        if (respT.includes(nonce) && !resp0.includes(nonce))
+          return [
+            F(
+              'mass-assignment',
+              'high',
+              target.url,
+              `Mass assignment: the endpoint accepted and bound an unexpected privileged field "${field}" (over-posting → privilege-escalation risk)`,
+            ),
+          ];
+      }
+      return [];
+    },
+  },
+  // ── Verbose errors / information disclosure ─────────────────────────────────────────────────
+  // Send malformed input and confirm the response leaks a stack trace / debug page / server file
+  // path that is ABSENT from the benign baseline (so the malformed input is what triggered it).
+  'verbose-errors': {
+    blockable: false,
+    async probe(target) {
+      const bl = injReq(target, 'sxnormal123');
+      const baseline = (await fetchT(bl.url, bl.opts)).body || '';
+      const payloads = ['sx\'"\\{}[]<>`;)(', '%c0%af', "sx'::int", '\x00sx'];
+      for (const p of payloads) {
+        const q = injReq(target, p);
+        const body = (await fetchT(q.url, q.opts)).body || '';
+        for (const [re, label] of STACK_SIGNATURES)
+          if (re.test(body) && !re.test(baseline))
+            return [
+              F(
+                'verbose-errors',
+                'medium',
+                targetUrlOf(target),
+                `Verbose error / information disclosure: malformed input leaked a ${label} in the response`,
+              ),
+            ];
+      }
+      return [];
+    },
+  },
 };
 
 function startProxy(origin, filter, onBlock) {
@@ -1193,6 +1313,11 @@ function detectionRule(cls) {
       'Rate-limit and lock accounts after repeated failures (exponential backoff + CAPTCHA); forbid default/weak passwords via a breached-password blocklist; return identical responses and timing for valid vs invalid usernames.',
     'stored-dom-xss':
       'Context-aware output-encode stored data at RENDER time; set a strict CSP; avoid dangerous DOM sinks (innerHTML/document.write/eval) — use textContent/safe DOM APIs and sanitize untrusted HTML with a trusted library.',
+    csrf: 'Require an anti-CSRF token (synchronizer or double-submit) on every state-changing request; set session cookies SameSite=Lax or Strict; require a custom header for state-changing XHR.',
+    'mass-assignment':
+      'Bind only an explicit allowlist of fields (DTO/serializer allowlist); never bind a request body straight to an ORM model; keep privileged attributes out of the create/update schema.',
+    'verbose-errors':
+      'Disable debug mode and stack traces in production; return generic error pages; log details server-side only; strip framework/version banners.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1607,6 +1732,8 @@ export async function runWholeApp({
     if (['open-redirect', 'ssrf', 'xxe', 'rce-deser', 'prompt-injection'].includes(cls))
       return (injectList.length ? injectList : pageList).slice(0, 15);
     if (cls === 'sqli-auth-bypass' || cls === 'auth-testing') return formTargets; // login forms only
+    if (cls === 'csrf' || cls === 'mass-assignment') return formTargets; // state-changing forms
+    if (cls === 'verbose-errors') return [...(injectList.length ? injectList : pageList.slice(0, 10)), ...formTargets];
     if (cls === 'host-header') return [origin, ...pageList.slice(0, 5)];
     if (cls === 'graphql-idor') return graphqlList;
     if (cls === 'token-forgery') return authList;
