@@ -91,6 +91,13 @@ export const METHODOLOGY = {
     pci: '6.2.4',
     iso: 'A.8.28',
   },
+  'auth-testing': {
+    name: 'Authentication Weaknesses (brute-force / default creds / user enumeration)',
+    wstg: 'WSTG-ATHN-02/03',
+    asvs: 'V2.2.1',
+    pci: '8.3.6',
+    iso: 'A.8.5',
+  },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };

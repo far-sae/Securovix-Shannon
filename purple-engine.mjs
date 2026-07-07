@@ -102,6 +102,11 @@ const COMPLIANCE = {
   crlf: { owasp: 'A03:2021-Injection', cwe: 'CWE-113', mitre: ['TA0001'] },
   'access-control': { owasp: 'A01:2021-Broken Access Control', cwe: 'CWE-284', mitre: ['TA0004', 'TA0005'] },
   'sqli-auth-bypass': { owasp: 'A03:2021-Injection', cwe: 'CWE-89', mitre: ['TA0001', 'TA0006'] },
+  'auth-testing': {
+    owasp: 'A07:2021-Identification and Authentication Failures',
+    cwe: 'CWE-307',
+    mitre: ['TA0006'],
+  },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -332,6 +337,42 @@ async function loginFormContext(pageUrl) {
     }
   } catch {}
   return ctx;
+}
+
+// Shared login helpers (used by the sqli-auth-bypass and auth-testing probers).
+const SESSION_COOKIE_RE = /(sessionid|session|sid|auth|token|jwt|phpsessid|connect\.sid|_session|remember|logged)/i;
+// Did a login POST response indicate a SUCCESSFUL login? (session-like cookie, redirect away from the
+// login page, or authenticated body markers without an error message).
+function loginSucceeded(r) {
+  const sc = (r.headers?.getSetCookie ? r.headers.getSetCookie() : []).some((c) => SESSION_COOKIE_RE.test(c));
+  const loc = r.headers?.get?.('location') || '';
+  const away =
+    r.status >= 300 && r.status < 400 && loc && !/log[-_ ]?in|sign[-_ ]?in|auth|error|fail|denied/i.test(loc);
+  const body = r.body || '';
+  const authed =
+    /log ?out|sign ?out|my account|dashboard|welcome back|you are (now )?logged in/i.test(body) &&
+    !/invalid|incorrect|failed|try again|wrong|denied|bad cred/i.test(body);
+  return sc || away || authed;
+}
+// Identify the username + password fields of a form (null if it isn't a login form).
+function pickLoginFields(params) {
+  if (!Array.isArray(params)) return null;
+  const passField = params.find((p) => /pass|pwd/i.test(p));
+  if (!passField) return null;
+  const userField =
+    params.find((p) => p !== passField && /user|email|login|account|uname/i.test(p)) ||
+    params.find((p) => p !== passField && !/csrf|token|authenticity|_token|xsrf|state|nonce/i.test(p)) ||
+    params[0];
+  if (!userField || userField === passField) return null;
+  return { userField, passField };
+}
+// Submit a login with a FRESH CSRF token + its session cookie (tokens are often single-use).
+async function submitLogin(url, userField, passField, userVal, passVal) {
+  const ctx = await loginFormContext(url);
+  const form = new URLSearchParams({ ...ctx.hidden, [userField]: userVal, [passField]: passVal });
+  const headers = { 'content-type': 'application/x-www-form-urlencoded' };
+  if (ctx.cookie) headers.Cookie = ctx.cookie;
+  return fetchT(url, { method: 'POST', headers, body: form.toString(), redirect: 'manual' });
 }
 
 // Out-of-band callback listener for SSRF confirmation (zero-FP: only confirms on a real hit).
@@ -934,39 +975,14 @@ const PROBERS = {
     // the real fix is parameterized queries, not a WAF rule — so it gets a code-fix defense.
     blockable: false,
     async probe(target) {
-      if (typeof target === 'string' || !Array.isArray(target.params)) return []; // login forms only
-      const params = target.params;
-      const passField = params.find((p) => /pass|pwd/i.test(p));
-      if (!passField) return []; // no password field → not a login form
-      const userField =
-        params.find((p) => p !== passField && /user|email|login|account|uname/i.test(p)) ||
-        params.find((p) => p !== passField && !/csrf|token|authenticity|_token|xsrf|state|nonce/i.test(p)) ||
-        params[0];
-      if (!userField || userField === passField) return [];
-
+      if (typeof target === 'string') return []; // login forms only
+      const fields = pickLoginFields(target.params);
+      if (!fields) return [];
+      const { userField, passField } = fields;
       const rnd = randomUUID().slice(0, 8);
-      const post = async (userVal) => {
-        // Fresh CSRF/cookie per attempt (tokens are often single-use).
-        const ctx = await loginFormContext(target.url);
-        const form = new URLSearchParams({ ...ctx.hidden, [userField]: userVal, [passField]: `sxwrong${rnd}` });
-        const headers = { 'content-type': 'application/x-www-form-urlencoded' };
-        if (ctx.cookie) headers.Cookie = ctx.cookie;
-        return fetchT(target.url, { method: 'POST', headers, body: form.toString(), redirect: 'manual' });
-      };
-      const sessRe = /(sessionid|session|sid|auth|token|jwt|phpsessid|connect\.sid|_session|remember|logged)/i;
-      const succeeded = (r) => {
-        const sc = (r.headers.getSetCookie ? r.headers.getSetCookie() : []).some((c) => sessRe.test(c));
-        const loc = r.headers.get?.('location') || '';
-        const away =
-          r.status >= 300 && r.status < 400 && loc && !/log[-_ ]?in|sign[-_ ]?in|auth|error|fail|denied/i.test(loc);
-        const body = r.body || '';
-        const authed =
-          /log ?out|sign ?out|my account|dashboard|welcome back|you are (now )?logged in/i.test(body) &&
-          !/invalid|incorrect|failed|try again|wrong|denied|bad cred/i.test(body);
-        return sc || away || authed;
-      };
+      const post = (userVal) => submitLogin(target.url, userField, passField, userVal, `sxwrong${rnd}`);
 
-      if (succeeded(await post(`sxnouser${rnd}`))) return []; // form logs everyone in → no real auth, not a SQLi bypass
+      if (loginSucceeded(await post(`sxnouser${rnd}`))) return []; // logs everyone in → not a SQLi bypass
 
       const PAIRS = [
         ["' OR '1'='1' -- ", "' OR '1'='2' -- "],
@@ -975,8 +991,8 @@ const PROBERS = {
         ["admin'-- -", `zzznouser${rnd}'-- -`],
       ];
       for (const [tPayload, fPayload] of PAIRS) {
-        if (!succeeded(await post(tPayload))) continue; // TRUE must log in
-        if (!succeeded(await post(fPayload)))
+        if (!loginSucceeded(await post(tPayload))) continue; // TRUE must log in
+        if (!loginSucceeded(await post(fPayload)))
           // FALSE must NOT
           return [
             F(
@@ -988,6 +1004,106 @@ const PROBERS = {
           ];
       }
       return [];
+    },
+  },
+  // ── Authentication weaknesses ───────────────────────────────────────────────────────────────
+  // On login forms: (1) default/weak credentials that actually LOG IN, (2) no rate-limiting/lockout
+  // after many rapid failures, (3) username enumeration (login response differs for existing vs
+  // non-existing accounts, gated by a determinism control). Each finding is observed, not guessed.
+  'auth-testing': {
+    blockable: false,
+    async probe(target) {
+      if (typeof target === 'string') return [];
+      const fields = pickLoginFields(target.params);
+      if (!fields) return [];
+      const { userField, passField } = fields;
+      const rnd = randomUUID().slice(0, 8);
+      const badUser = `sxno${rnd}`;
+      const badPass = `sxpw${rnd}`;
+      const findings = [];
+
+      // The form must REJECT bad creds — otherwise it isn't authenticating and these tests are moot.
+      if (loginSucceeded(await submitLogin(target.url, userField, passField, badUser, badPass))) return [];
+
+      // 1) Default / weak credentials that actually log in.
+      const DEFAULTS = [
+        ['admin', 'admin'],
+        ['admin', 'password'],
+        ['admin', 'admin123'],
+        ['administrator', 'password'],
+        ['root', 'root'],
+        ['test', 'test'],
+        ['admin', '123456'],
+        ['user', 'user'],
+        ['guest', 'guest'],
+      ];
+      for (const [uu, pw] of DEFAULTS) {
+        if (loginSucceeded(await submitLogin(target.url, userField, passField, uu, pw))) {
+          findings.push(
+            F(
+              'auth-weak-creds',
+              'critical',
+              target.url,
+              `Default/weak credentials accepted: "${uu}" / "${pw}" logged in`,
+            ),
+          );
+          break;
+        }
+      }
+
+      // 2) No rate-limiting / lockout after many rapid failed logins.
+      let throttled = false;
+      for (let i = 0; i < 12; i++) {
+        const r = await submitLogin(target.url, userField, passField, badUser, `${badPass}${i}`);
+        if (
+          r.status === 429 ||
+          /too many|rate.?limit|locked|try again later|captcha|temporarily blocked|slow down/i.test(r.body || '')
+        ) {
+          throttled = true;
+          break;
+        }
+      }
+      if (!throttled)
+        findings.push(
+          F(
+            'auth-no-ratelimit',
+            'medium',
+            target.url,
+            'No application rate-limiting or account lockout observed after 12 rapid failed logins (credential brute-force is feasible)',
+          ),
+        );
+
+      // 3) Username enumeration — gated by a determinism control (two random users must respond
+      // identically), so a noisy app can't false-positive. Usernames are stripped before comparison
+      // so an echoed username can't create a spurious difference.
+      const strip = (body, ...vals) => {
+        let s = body || '';
+        for (const v of vals) if (v) s = s.split(v).join('');
+        return s;
+      };
+      const sig = (r, uname) => `${r.status}:${strip(r.body, uname, badPass).length}`;
+      const uA = `sxrand${rnd}a`;
+      const uB = `sxrand${rnd}b`;
+      const rA = await submitLogin(target.url, userField, passField, uA, badPass);
+      const rB = await submitLogin(target.url, userField, passField, uB, badPass);
+      if (sig(rA, uA) === sig(rB, uB)) {
+        const baseline = sig(rA, uA);
+        const hits = [];
+        for (const cand of ['admin', 'administrator', 'root', 'test', 'support']) {
+          const r = await submitLogin(target.url, userField, passField, cand, badPass);
+          if (sig(r, cand) !== baseline) hits.push(cand);
+        }
+        if (hits.length)
+          findings.push(
+            F(
+              'auth-user-enum',
+              'medium',
+              target.url,
+              `Username enumeration: the login response differs for existing vs non-existing accounts (e.g. ${hits.slice(0, 3).join(', ')})`,
+            ),
+          );
+      }
+      return findings;
     },
   },
 };
@@ -1072,6 +1188,8 @@ function detectionRule(cls) {
       'Enforce authorization on EVERY request server-side: verify the session identity OWNS the target object (BOLA) and holds the required ROLE for the function (BFLA); deny by default; never rely on unguessable IDs or client-side checks.',
     'sqli-auth-bypass':
       'Use parameterized queries for the login lookup (never string-concatenate credentials); verify the password with a constant-time hash comparison AFTER the query; deny SQL metacharacters in auth fields.',
+    'auth-testing':
+      'Rate-limit and lock accounts after repeated failures (exponential backoff + CAPTCHA); forbid default/weak passwords via a breached-password blocklist; return identical responses and timing for valid vs invalid usernames.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1485,7 +1603,7 @@ export async function runWholeApp({
       return [...(injectList.length ? injectList : pageList.slice(0, 10)), ...formTargets];
     if (['open-redirect', 'ssrf', 'xxe', 'rce-deser', 'prompt-injection'].includes(cls))
       return (injectList.length ? injectList : pageList).slice(0, 15);
-    if (cls === 'sqli-auth-bypass') return formTargets; // login forms only
+    if (cls === 'sqli-auth-bypass' || cls === 'auth-testing') return formTargets; // login forms only
     if (cls === 'host-header') return [origin, ...pageList.slice(0, 5)];
     if (cls === 'graphql-idor') return graphqlList;
     if (cls === 'token-forgery') return authList;
