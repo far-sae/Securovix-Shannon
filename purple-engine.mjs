@@ -107,6 +107,7 @@ const COMPLIANCE = {
     cwe: 'CWE-307',
     mitre: ['TA0006'],
   },
+  'stored-dom-xss': { owasp: 'A03:2021-Injection', cwe: 'CWE-79', mitre: ['TA0001', 'TA0006'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -1190,6 +1191,8 @@ function detectionRule(cls) {
       'Use parameterized queries for the login lookup (never string-concatenate credentials); verify the password with a constant-time hash comparison AFTER the query; deny SQL metacharacters in auth fields.',
     'auth-testing':
       'Rate-limit and lock accounts after repeated failures (exponential backoff + CAPTCHA); forbid default/weak passwords via a breached-password blocklist; return identical responses and timing for valid vs invalid usernames.',
+    'stored-dom-xss':
+      'Context-aware output-encode stored data at RENDER time; set a strict CSP; avoid dangerous DOM sinks (innerHTML/document.write/eval) — use textContent/safe DOM APIs and sanitize untrusted HTML with a trusted library.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1674,6 +1677,40 @@ export async function runWholeApp({
       recordClass(report, ws, 'access-control', findings, log);
     } catch (err) {
       log(`  (access-control error: ${err.message})`);
+    }
+  }
+
+  // Stored + DOM XSS need a real browser (execution proof), so they run only with headless enabled.
+  if (headless) {
+    try {
+      const { proveStoredXss, proveDomXss } = await import('./crawler-headless.mjs');
+      const stored = await proveStoredXss({ origin, forms: formTargets, pages: pageList, headers });
+      const dom = await proveDomXss({ targets: pageList, headers });
+      if (stored !== null || dom !== null) {
+        log('\n=== STORED/DOM-XSS phase — real-browser execution proof ===');
+        const sd = [];
+        for (const st of stored || [])
+          sd.push(
+            F(
+              'stored-xss',
+              'high',
+              st.page,
+              `Stored XSS: a payload submitted to ${new URL(st.formUrl).pathname} (field "${st.field}") EXECUTED when ${new URL(st.page).pathname} was rendered`,
+            ),
+          );
+        for (const d of dom || [])
+          sd.push(
+            F(
+              'dom-xss',
+              'high',
+              d.target,
+              `DOM-based XSS: a client-side sink executed an injected payload via the ${d.kind} (the server never reflected it)`,
+            ),
+          );
+        recordClass(report, ws, 'stored-dom-xss', sd, log);
+      }
+    } catch (err) {
+      log(`  (stored/dom-xss error: ${err.message})`);
     }
   }
   report.crawl = {

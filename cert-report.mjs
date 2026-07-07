@@ -98,6 +98,13 @@ export const METHODOLOGY = {
     pci: '8.3.6',
     iso: 'A.8.5',
   },
+  'stored-dom-xss': {
+    name: 'Stored & DOM-based Cross-Site Scripting',
+    wstg: 'WSTG-INPV-02 / WSTG-CLNT-01',
+    asvs: 'V5.3.3',
+    pci: '6.2.4',
+    iso: 'A.8.28',
+  },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };
