@@ -111,6 +111,8 @@ const COMPLIANCE = {
   csrf: { owasp: 'A01:2021-Broken Access Control', cwe: 'CWE-352', mitre: ['TA0001'] },
   'mass-assignment': { owasp: 'A04:2021-Insecure Design', cwe: 'CWE-915', mitre: ['TA0004'] },
   'verbose-errors': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-209', mitre: ['TA0007'] },
+  'api-data-exposure': { owasp: 'A01:2021-Broken Access Control', cwe: 'CWE-213', mitre: ['TA0007', 'TA0009'] },
+  'graphql-advanced': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-200', mitre: ['TA0007'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -191,6 +193,18 @@ const STACK_SIGNATURES = [
   [/DEBUG\s*=\s*True|APP_DEBUG\s*=?\s*(?:true|1)\b/i, 'debug mode enabled'],
   [/[A-Za-z]:\\(?:[\w .-]+\\)+[\w .-]+\.(?:php|py|rb|js|java|cs|aspx?)/, 'server file path'],
   [/\/(?:var|home|usr|app|opt|srv)\/[\w./-]+\.(?:php|py|rb|js|java)/, 'server file path'],
+];
+// Sensitive fields that should NEVER appear (with a real value) in an API JSON response. Each
+// requires a substantial quoted value so placeholders/nulls/booleans don't false-positive.
+const SENSITIVE_FIELDS = [
+  [/"(?:password|passwd)"\s*:\s*"[^"]{4,}"/i, 'password'],
+  [/"(?:password_hash|passwordhash|pwd_hash|hashed_password)"\s*:\s*"[^"]{6,}"/i, 'password hash'],
+  [/"(?:ssn|social_security(?:_number)?)"\s*:\s*"[^"]{4,}"/i, 'SSN'],
+  [/"(?:credit_card|creditcard|card_number|cardnumber|pan)"\s*:\s*"[^"]{8,}"/i, 'credit-card number'],
+  [/"(?:cvv|cvc|card_cvv)"\s*:\s*"?\d{3,4}"?/i, 'card CVV'],
+  [/"(?:private_key|privatekey)"\s*:\s*"[^"]{20,}"/i, 'private key'],
+  [/"(?:secret_key|secretkey|client_secret)"\s*:\s*"[^"]{8,}"/i, 'secret key'],
+  [/"(?:access_token|refresh_token|api_key|apikey)"\s*:\s*"[^"]{12,}"/i, 'auth token / API key'],
 ];
 
 // Set (replace) a query param — so probing a URL that already has the param overrides its
@@ -1227,6 +1241,68 @@ const PROBERS = {
       return [];
     },
   },
+  // ── Excessive data exposure (API) ───────────────────────────────────────────────────────────
+  // A JSON API response that includes a sensitive field WITH a real value (password hash, SSN, card
+  // number, private key, token). JSON-only + substantial-value regexes keep it zero-FP.
+  'api-data-exposure': {
+    blockable: false,
+    async probe(target) {
+      if (typeof target !== 'string') return [];
+      const { body, headers } = await fetchT(target);
+      if (!/json/i.test(headers.get?.('content-type') || '')) return []; // JSON APIs only
+      for (const [re, label] of SENSITIVE_FIELDS)
+        if (re.test(body || ''))
+          return [
+            F(
+              'api-data-exposure',
+              'high',
+              target,
+              `Excessive data exposure: the API response includes a sensitive "${label}" field with a value`,
+            ),
+          ];
+      return [];
+    },
+  },
+  // ── GraphQL abuse (field suggestion + batching) ─────────────────────────────────────────────
+  // Field suggestions leak schema field names ("Did you mean …") even with introspection off; query
+  // batching (an array of queries) enables request amplification / rate-limit bypass.
+  'graphql-advanced': {
+    blockable: false,
+    async probe(target) {
+      if (typeof target !== 'string') return [];
+      const post = (payload) =>
+        fetchT(target, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      const findings = [];
+      const r = await post({ query: '{ usr }' });
+      if (/did you mean/i.test(r.body || ''))
+        findings.push(
+          F(
+            'graphql-suggestion',
+            'medium',
+            target,
+            'GraphQL field suggestions leak schema field names ("Did you mean …") — disable in production',
+          ),
+        );
+      const rb = await post([{ query: '{ __typename }' }, { query: '{ __typename }' }]);
+      try {
+        const j = JSON.parse(rb.body || 'null');
+        if (Array.isArray(j) && j.length === 2)
+          findings.push(
+            F(
+              'graphql-batching',
+              'medium',
+              target,
+              'GraphQL query batching is enabled (an array of queries was executed) — enables request amplification / rate-limit bypass',
+            ),
+          );
+      } catch {}
+      return findings;
+    },
+  },
 };
 
 function startProxy(origin, filter, onBlock) {
@@ -1318,6 +1394,10 @@ function detectionRule(cls) {
       'Bind only an explicit allowlist of fields (DTO/serializer allowlist); never bind a request body straight to an ORM model; keep privileged attributes out of the create/update schema.',
     'verbose-errors':
       'Disable debug mode and stack traces in production; return generic error pages; log details server-side only; strip framework/version banners.',
+    'api-data-exposure':
+      'Return only the fields each client needs (explicit response DTO/serializer allowlist); never serialize full ORM models; never expose password hashes, tokens, keys, or PII in API responses.',
+    'graphql-advanced':
+      'Disable field suggestions and introspection in production; cap query depth/complexity; disable or rate-limit array batching; enforce per-field authorization.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1726,6 +1806,7 @@ export async function runWholeApp({
       ...s.apiPaths.filter((p) => /api|user|account|admin|me|profile|token/i.test(p)).map((p) => origin + p),
     ]),
   ].slice(0, 10);
+  const apiList = [...new Set(s.apiPaths.map((p) => origin + p))].slice(0, 20);
   const targetsFor = (cls) => {
     if (['rce-ssti', 'xss', 'sqli', 'nosql', 'crlf', 'path-traversal', 'cmd-injection', 'authz-bypass'].includes(cls))
       return [...(injectList.length ? injectList : pageList.slice(0, 10)), ...formTargets];
@@ -1735,7 +1816,8 @@ export async function runWholeApp({
     if (cls === 'csrf' || cls === 'mass-assignment') return formTargets; // state-changing forms
     if (cls === 'verbose-errors') return [...(injectList.length ? injectList : pageList.slice(0, 10)), ...formTargets];
     if (cls === 'host-header') return [origin, ...pageList.slice(0, 5)];
-    if (cls === 'graphql-idor') return graphqlList;
+    if (cls === 'graphql-idor' || cls === 'graphql-advanced') return graphqlList;
+    if (cls === 'api-data-exposure') return [...apiList, ...pageList.slice(0, 10)];
     if (cls === 'token-forgery') return authList;
     if (cls === 'cors-misconfig') return [origin, ...pageList.slice(0, 3)];
     return [origin]; // secrets-exposure, security-headers, templates

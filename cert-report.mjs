@@ -120,6 +120,20 @@ export const METHODOLOGY = {
     pci: '6.2.4',
     iso: 'A.8.9',
   },
+  'api-data-exposure': {
+    name: 'Excessive Data Exposure (API)',
+    wstg: 'WSTG-APIT-01',
+    asvs: 'V13.1.3',
+    pci: '3.4',
+    iso: 'A.8.12',
+  },
+  'graphql-advanced': {
+    name: 'GraphQL Abuse (suggestions / batching)',
+    wstg: 'WSTG-APIT-01',
+    asvs: 'V13.4.1',
+    pci: '6.2.4',
+    iso: 'A.8.28',
+  },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };
