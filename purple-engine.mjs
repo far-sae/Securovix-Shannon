@@ -1769,6 +1769,7 @@ export async function runWholeApp({
   headless = false,
   accessControl = null,
   networkScan = false,
+  monitor = false,
 }) {
   loadEnv();
   setSessionHeaders(headers);
@@ -2012,6 +2013,31 @@ export async function runWholeApp({
   } catch (err) {
     log(`  (attack-chain error: ${err.message})`);
   }
+
+  // Continuous monitoring — diff this scan's findings against the last baseline for the target, then
+  // update the baseline. Surfaces NEW exposures vs the previous run (scheduling is external: cron /
+  // the dashboard re-invoking a scan with --monitor).
+  if (monitor) {
+    try {
+      const { runMonitorDiff } = await import('./monitor.mjs');
+      const delta = runMonitorDiff(target, report);
+      report.monitoring = {
+        new: delta.new,
+        resolved: delta.resolved,
+        total: delta.total,
+        firstRun: !!delta.firstRun,
+        previousScanAt: delta.previousScanAt,
+      };
+      if (delta.firstRun) log(`\n=== MONITOR — baseline established (${delta.total} confirmed finding(s)) ===`);
+      else
+        log(
+          `\n=== MONITOR — ${delta.new.length} NEW, ${delta.resolved.length} resolved since ${delta.previousScanAt} ===`,
+        );
+      for (const nf of delta.new.slice(0, 10)) log(`  NEW: ${nf.severity} ${nf.cls} @ ${nf.target}`);
+    } catch (err) {
+      log(`  (monitor error: ${err.message})`);
+    }
+  }
   return defendAndReport(report, ws, log);
 }
 
@@ -2252,6 +2278,7 @@ if (isMain) {
             '       [--user2-cookie "k=v" | --user2-login-url U --user2-username U --user2-password P]  (2nd peer → BOLA)\n' +
             '       [--admin-cookie "k=v" | --admin-login-url U --admin-username U --admin-password P]   (admin → BFLA)\n' +
             '       [--network-scan]  (OPT-IN: unauth Redis/Memcached/Elasticsearch/anon-FTP on the verified host)\n' +
+            '       [--monitor]  (diff vs last baseline → report NEW exposures; schedule via cron)\n' +
             '       [--no-crawl] [--max-pages N] [--headless] | --selftest',
         );
         process.exit(1);
@@ -2319,6 +2346,7 @@ if (isMain) {
           maxPages: Number(arg('--max-pages')) || 40,
           headless: process.argv.includes('--headless') || process.env.SHANNON_HEADLESS === '1',
           networkScan: process.argv.includes('--network-scan') || process.env.SHANNON_NETWORK_SCAN === '1',
+          monitor: process.argv.includes('--monitor') || process.env.SHANNON_MONITOR === '1',
           accessControl,
         });
       }
