@@ -1570,6 +1570,8 @@ async function defendAndReport(report, ws, log) {
     const cert = buildCertReport(report, { compliance: COMPLIANCE, classesTested: report.exploits.map((e) => e.cls) });
     writeFileSync(join(ws, 'purple', 'certification-report.md'), cert.md);
     writeFileSync(join(ws, 'purple', 'certification-report.html'), cert.html);
+    const { buildSarif } = await import('./sarif.mjs');
+    writeFileSync(join(ws, 'purple', 'report.sarif'), JSON.stringify(buildSarif(report, COMPLIANCE), null, 2));
     log(`=== CERT REPORT written to ${join(ws, 'purple', 'certification-report.html')} (risk: ${cert.risk}) ===`);
   } catch (err) {
     log(`  (cert report error: ${err.message})`);

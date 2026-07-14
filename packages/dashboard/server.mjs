@@ -1336,6 +1336,14 @@ app.get('/api/scans/:id', (req, res) => {
 // Certification-grade pentest report (CVSS 3.1 + OWASP WSTG/ASVS + compliance + sign-off).
 // Open the HTML in a browser and Print → Save as PDF for a deliverable. ?format=md for Markdown.
 app.get('/api/scans/:id/report', (req, res) => {
+  // SARIF export for CI/CD & GitHub code scanning.
+  if (req.query.format === 'sarif') {
+    const sp = join(WORKSPACES, req.params.id, 'purple', 'report.sarif');
+    if (!existsSync(sp)) return res.status(404).json({ error: 'No SARIF report for this scan yet.' });
+    res.setHeader('content-type', 'application/sarif+json; charset=utf-8');
+    res.setHeader('content-disposition', `attachment; filename="shannon-${req.params.id}.sarif"`);
+    return res.end(readFileSync(sp, 'utf-8'));
+  }
   const fmt = req.query.format === 'md' ? 'md' : 'html';
   const p = join(WORKSPACES, req.params.id, 'purple', `certification-report.${fmt}`);
   if (!existsSync(p)) return res.status(404).json({ error: 'No certification report for this scan yet.' });

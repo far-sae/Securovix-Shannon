@@ -3061,6 +3061,7 @@ function renderVerified(){
       <span style="flex:1"></span>
       <a class="btn btn-p" style="padding:6px 12px;font-size:12px;display:inline-flex;align-items:center;gap:6px" href="/api/scans/${window._sid}/report?format=html" target="_blank" rel="noopener" title="CVSS 3.1 + OWASP WSTG/ASVS + compliance report — open and Print → Save as PDF">${ico('file-text',{cls:'ico-sm'})} Certification report</a>
       <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${window._sid}/report?format=md" target="_blank" rel="noopener">Markdown</a>
+      <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${window._sid}/report?format=sarif" target="_blank" rel="noopener" title="SARIF 2.1.0 — import into CI / GitHub code scanning">SARIF</a>
     </div>
     <p style="color:var(--t2);margin-bottom:18px;line-height:1.6;max-width:760px">Findings here were exploited through the scope-locked tool broker and confirmed by a benign proof marker (arithmetic eval, planted canary, or cross-identity read). Unlike inferred findings, these carry <strong style="color:var(--t1)">zero false positives by construction</strong>${classes.length?` — across ${classes.length} vuln class${classes.length>1?'es':''}: ${classes.map(H).join(', ')}.`:'.'}</p>
 
