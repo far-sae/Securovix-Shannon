@@ -1,0 +1,51 @@
+# Securovix Shannon — CI security scan → GitHub code scanning (SARIF).
+#
+# Rename this file to `shannon-scan.yml` to enable it, then configure:
+#   Repo → Settings → Secrets and variables → Actions
+#     Secret   ANTHROPIC_API_KEY       (for the AI analysis/judge; the proof engine runs without it)
+#     Secret   SHANNON_ALERT_WEBHOOK   (optional — Slack/Discord/generic; pinged on NEW exposures)
+#     Variable SHANNON_TARGET          e.g. https://staging.yoursite.com  (a target you OWN/authorize)
+#
+# IMPORTANT: only scan a target you own or are authorized to test. Shannon confirms every finding
+# with a benign proof marker (zero false positives), so results are safe to gate a PR on.
+
+name: Shannon Security Scan
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 3 * * 1' # weekly, Monday 03:00 UTC — continuous monitoring diff + alert on new exposures
+  # pull_request: {}    # uncomment to scan a preview/staging URL on every PR
+
+permissions:
+  contents: read
+  security-events: write # required to upload SARIF to code scanning
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      # Optional: enable the headless XSS-execution / SPA crawl (adds Chromium).
+      # - run: npx playwright install --with-deps chromium
+
+      - name: Run Shannon (proof-based scan + monitoring)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SHANNON_MONITOR: '1'
+          SHANNON_ALERT_WEBHOOK: ${{ secrets.SHANNON_ALERT_WEBHOOK }}
+        run: node purple-engine.mjs --target "${{ vars.SHANNON_TARGET }}" --monitor
+
+      - name: Locate the SARIF report
+        id: sarif
+        run: echo "path=$(ls -t workspaces/*/purple/report.sarif | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SARIF to GitHub code scanning
+        if: ${{ steps.sarif.outputs.path != '' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.sarif.outputs.path }}
+          category: shannon
