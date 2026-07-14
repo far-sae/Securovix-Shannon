@@ -134,6 +134,7 @@ export const METHODOLOGY = {
     pci: '6.2.4',
     iso: 'A.8.28',
   },
+  'tls-config': { name: 'TLS/SSL Configuration', wstg: 'WSTG-CRYP-01', asvs: 'V9.1.1', pci: '4.2.1', iso: 'A.8.24' },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };

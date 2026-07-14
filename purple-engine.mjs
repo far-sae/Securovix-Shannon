@@ -113,6 +113,7 @@ const COMPLIANCE = {
   'verbose-errors': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-209', mitre: ['TA0007'] },
   'api-data-exposure': { owasp: 'A01:2021-Broken Access Control', cwe: 'CWE-213', mitre: ['TA0007', 'TA0009'] },
   'graphql-advanced': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-200', mitre: ['TA0007'] },
+  'tls-config': { owasp: 'A02:2021-Cryptographic Failures', cwe: 'CWE-326', mitre: ['TA0006'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -1398,6 +1399,8 @@ function detectionRule(cls) {
       'Return only the fields each client needs (explicit response DTO/serializer allowlist); never serialize full ORM models; never expose password hashes, tokens, keys, or PII in API responses.',
     'graphql-advanced':
       'Disable field suggestions and introspection in production; cap query depth/complexity; disable or rate-limit array batching; enforce per-field authorization.',
+    'tls-config':
+      'Disable TLS 1.0/1.1 and weak ciphers (RC4/3DES/EXPORT/NULL); use TLS 1.2+ with modern AEAD ciphers; use 2048-bit+ RSA or ECDSA keys from a trusted CA; renew certificates before expiry and match them to the hostname; enable HSTS.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1920,6 +1923,18 @@ export async function runWholeApp({
       }
     } catch (err) {
       log(`  (stored/dom-xss error: ${err.message})`);
+    }
+  }
+
+  // TLS/SSL configuration (transport layer) — factual, safe, HTTPS targets only.
+  if (origin.startsWith('https:')) {
+    try {
+      const { runTlsScan } = await import('./tls-scan.mjs');
+      const u = new URL(origin);
+      const tlsFindings = await runTlsScan(u.hostname, u.port ? Number(u.port) : 443);
+      recordClass(report, ws, 'tls-config', tlsFindings, log);
+    } catch (err) {
+      log(`  (tls-config error: ${err.message})`);
     }
   }
   report.crawl = {
