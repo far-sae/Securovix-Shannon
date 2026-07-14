@@ -1723,6 +1723,7 @@ async function pgDomains(){
     M.innerHTML=`<div class="pg"><p style="color:var(--red)">Could not load domains: ${H(e.message)}</p></div>`; return;
   }
   const domains=Object.entries(data.domains||{});
+  let ranges={};try{ranges=(await api('/verify/ip/list')).ranges||{};}catch{}
   M.innerHTML=`<div class="pg">
     <h1 class="h-display" style="font-size:30px">Domains</h1>
     <p style="color:var(--t2);margin:8px 0 20px;max-width:700px">Prove you control a domain before scanning it. Verify once — via a DNS record, a file at your web root, or a homepage meta tag — then every scan of that domain (and its subdomains) is authorized. This is a legal safeguard: you may only test sites you own or are authorized to test.</p>
@@ -1743,7 +1744,45 @@ async function pgDomains(){
           <button class="btn btn-g" style="padding:7px 12px;font-size:12px" onclick="removeDomain('${H(d)}')">Remove</button>
         </div>
       </div>`).join('')}</div>`:`<div class="empty" style="padding:30px 20px;color:var(--t3);text-align:center">No verified domains yet. Add one above, verify it, then launch a scan.</div>`}
+
+    <h3 class="h-display" style="font-size:18px;margin:30px 0 6px">IP ranges <span style="color:var(--t3);font-size:12px;font-weight:400">— authorizes network-level scanning</span></h3>
+    <p style="color:var(--t2);margin:0 0 12px;max-width:700px;font-size:12.5px">To scan a raw IP range for exposed services, attest ownership and prove control by serving a token on any IP in the range. (Scanning a domain you've verified already covers its host.)</p>
+    <div class="crd" style="padding:16px;margin-bottom:16px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <input id="ip-cidr" placeholder="203.0.113.0/24" autocomplete="off" spellcheck="false" style="flex:1;min-width:200px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
+        <button class="btn btn-p" onclick="startIpVerify()" style="padding:11px 18px">Get token →</button>
+      </div>
+      <div id="ip-instr"></div>
+    </div>
+    ${Object.keys(ranges).length?`<div style="display:flex;flex-direction:column;gap:8px">${Object.entries(ranges).map(([c,info])=>`
+      <div class="crd" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;gap:12px">
+        <div><div style="font-weight:700;color:var(--t0)">${ico('check',{cls:'ico-sm'})} ${H(c)}</div><div style="font-size:11px;color:var(--t3);margin-top:2px">verified ${H((info.verifiedAt||'').slice(0,10))}</div></div>
+        <button class="btn btn-g" style="padding:7px 12px;font-size:12px" onclick="removeRange('${H(c)}')">Remove</button>
+      </div>`).join('')}</div>`:''}
   </div>`;
+}
+async function startIpVerify(){
+  const cidr=($('ip-cidr')?.value||'').trim(); if(!cidr) return;
+  let r; try{ r=await api('/verify/ip/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cidr})}); }catch(e){ alert(e.message); return; }
+  const el=$('ip-instr'); if(!el) return;
+  el.innerHTML=`<div style="margin-top:12px;padding:12px 14px;background:var(--bg2);border:1px solid var(--brd);border-radius:10px;font-size:12.5px;color:var(--t1)">
+    <div>1. Serve this token at <code>http://&lt;an IP in ${H(cidr)}&gt;/.well-known/shannon-verify.txt</code>:</div>
+    <div style="margin:6px 0"><code style="user-select:all;background:var(--s2);padding:3px 6px;border-radius:4px">${H(r.token)}</code></div>
+    <div>2. Enter that IP and check:</div>
+    <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap"><input id="ip-proof" placeholder="203.0.113.10" style="flex:1;min-width:160px;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:13px;outline:0"><button class="btn btn-p" style="padding:9px 14px" onclick="checkIpVerify('${H(cidr)}')">Check →</button></div>
+    <div id="ip-result" style="margin-top:8px"></div>
+  </div>`;
+}
+async function checkIpVerify(cidr){
+  const ip=($('ip-proof')?.value||'').trim(); if(!ip) return;
+  const rz=$('ip-result'); if(rz) rz.innerHTML='<span class="sp"></span> checking…';
+  let r; try{ r=await api('/verify/ip/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cidr,ip})}); }catch(e){ if(rz) rz.innerHTML='<span style="color:var(--red)">'+H(e.message)+'</span>'; return; }
+  if(r.verified){ pgDomains(); } else if(rz){ rz.innerHTML='<span style="color:#d9772b">'+H(r.error||'Not verified yet.')+'</span>'; }
+}
+async function removeRange(cidr){
+  if(!confirm('Remove verification for '+cidr+'?'))return;
+  try{ await api('/verify/ip/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cidr})}); }catch(e){ alert(e.message); }
+  pgDomains();
 }
 async function startVerify(){
   const v=($('dm-input')?.value||'').trim();
