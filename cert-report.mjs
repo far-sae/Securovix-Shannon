@@ -157,6 +157,13 @@ export const METHODOLOGY = {
     iso: 'A.8.20',
   },
   'attack-chain': { name: 'Attack Path / Exploit Chain (correlated)', wstg: '—', asvs: '—', pci: '—', iso: '—' },
+  impact: {
+    name: 'Exploitation Impact / Post-Exploitation',
+    wstg: 'WSTG-INPV-05',
+    asvs: 'V5.3.4',
+    pci: '6.2.4',
+    iso: 'A.8.28',
+  },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };

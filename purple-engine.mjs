@@ -118,6 +118,7 @@ const COMPLIANCE = {
   'cloud-exposure': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-732', mitre: ['TA0007', 'TA0009'] },
   'exposed-service': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-306', mitre: ['TA0007', 'TA0008'] },
   'attack-chain': { owasp: 'A04:2021-Insecure Design', cwe: 'CWE-284', mitre: ['TA0004', 'TA0008', 'TA0040'] },
+  impact: { owasp: 'A03:2021-Injection', cwe: 'CWE-89', mitre: ['TA0009', 'TA0002', 'TA0040'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -1413,6 +1414,8 @@ function detectionRule(cls) {
       'Never expose datastores (Redis/Memcached/Elasticsearch/MongoDB) to the internet; bind to localhost/private networks; require authentication + TLS; restrict with a firewall/security group; disable anonymous FTP.',
     'attack-chain':
       'Break the chain by remediating ANY single constituent finding; apply defense-in-depth (network segmentation, least privilege, secret rotation, blast-radius limits) so one weakness cannot escalate to full compromise.',
+    impact:
+      'Fix the root injection (parameterize queries; never shell out) AND limit blast radius: run the DB as a least-privilege user and the service as a non-root account so a single flaw cannot read everything or execute as root.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1680,7 +1683,7 @@ export async function runExploitDefend({ target, classes, label, workspaceDir })
 
 export const ALL_CLASSES = Object.keys(PROBERS);
 // Exported for unit tests (pure helpers).
-export { injectParam, injReq, mergeCookies, PROBERS, setParam };
+export { fetchT, injectParam, injReq, mergeCookies, PROBERS, setParam, targetUrlOf };
 
 // WHOLE-APP: crawl the target to discover pages/params/forms/APIs, then run every prober
 // across the discovered surface (auth headers applied to all requests), aggregate, defend, report.
@@ -1867,6 +1870,18 @@ export async function runWholeApp({
     if (cls === 'xss' && headless && all.length) await upgradeXssExecution(all, headers, log);
     recordClass(report, ws, cls, all, log);
   }
+
+  // Impact / post-exploitation — for confirmed SQLi/RCE, safely DEMONSTRATE the blast radius
+  // (extract DB metadata; show the OS user/root). Benign, read-only markers only.
+  try {
+    const { runImpact } = await import('./impact.mjs');
+    const impactFindings = await runImpact({ report, fetchT, injReq });
+    if (impactFindings.length) log(`\n=== IMPACT phase — ${impactFindings.length} impact demo(s) proven ===`);
+    recordClass(report, ws, 'impact', impactFindings, log);
+  } catch (err) {
+    log(`  (impact error: ${err.message})`);
+  }
+
   // Broken Access Control (OWASP A01) needs a SECOND identity — run it when one is supplied so the
   // 2-session horizontal/vertical proof can execute. An LLM judge (when a key is present) adversarially
   // vets each deterministically-proven candidate; it can only refute, never invent.
@@ -2216,6 +2231,10 @@ if (isMain) {
               res.writeHead(200, h);
               return res.end(`<p>${rev}</p>`);
             } // simulated jailbroken LLM follows the injected instruction
+            if (/extractvalue|version\(\)/i.test(q)) {
+              res.writeHead(200, h);
+              return res.end("Warning: XPATH syntax error: '~10.5.2-MariaDB'"); // impact: error-based extraction
+            }
             if (q.includes("'")) {
               res.writeHead(200, h);
               return res.end("<p>You have an error in your SQL syntax near '''</p>");
@@ -2223,6 +2242,10 @@ if (isMain) {
             if (/etc\/passwd|\.\.[\/\\]/.test(q)) {
               res.writeHead(200, h);
               return res.end('root:x:0:0:root:/root:/bin/bash');
+            }
+            if (/(^|[;|`&])\s*id\b/.test(q)) {
+              res.writeHead(200, h);
+              return res.end('uid=0(root) gid=0(root) groups=0(root)'); // impact: command-execution context
             }
             const cmd = q.match(/echo\s+sxcmd\$\(\((\d+)\*(\d+)\)\)/);
             if (cmd) {
