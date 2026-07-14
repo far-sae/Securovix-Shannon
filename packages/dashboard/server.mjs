@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import express from 'express';
 import { parse as parseYaml } from 'yaml';
+import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import {
   addVerified,
   initDb,
@@ -1534,6 +1535,52 @@ app.post('/api/verify/remove', (req, res) => {
   res.json({ ok: true, domains: loadVerified()[user.id] || {} });
 });
 
+// ---- IP / range ownership verification (authorizes network-level scanning of a CIDR) ----
+const listCidrs = (userId) =>
+  Object.fromEntries(Object.entries(loadVerified()[userId] || {}).filter(([, v]) => v?.method === 'ip-range'));
+
+app.post('/api/verify/ip/request', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Log in first.' });
+  const cidr = String(req.body?.cidr || '').trim();
+  if (!parseCidr(cidr))
+    return res.status(400).json({ error: 'Provide a valid IPv4 CIDR range (e.g. 203.0.113.0/24).' });
+  const token = ipVerifyToken(SESSION_SECRET, user.id, cidr);
+  res.json({ ok: true, cidr, token, instructions: verificationInstructions(cidr, token) });
+});
+
+app.post('/api/verify/ip/check', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Log in first.' });
+  const cidr = String(req.body?.cidr || '').trim();
+  const ip = String(req.body?.ip || '').trim();
+  if (!parseCidr(cidr)) return res.status(400).json({ error: 'Invalid CIDR.' });
+  if (!ipInCidr(ip, cidr)) return res.status(400).json({ error: 'The proof IP must be inside the range.' });
+  const token = ipVerifyToken(SESSION_SECRET, user.id, cidr);
+  const controlled = await checkIpControl(ip, token);
+  if (!controlled)
+    return res.json({
+      ok: false,
+      verified: false,
+      error: `Token not found at http://${ip}/.well-known/shannon-verify.txt yet.`,
+    });
+  addVerified(user.id, cidr, { method: 'ip-range', verifiedAt: new Date().toISOString() });
+  res.json({ ok: true, verified: true, cidr });
+});
+
+app.get('/api/verify/ip/list', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Log in first.' });
+  res.json({ ok: true, ranges: listCidrs(user.id) });
+});
+
+app.post('/api/verify/ip/remove', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Log in first.' });
+  removeVerified(user.id, String(req.body?.cidr || '').trim());
+  res.json({ ok: true, ranges: listCidrs(user.id) });
+});
+
 // ---- API: Start scan ----
 app.post('/api/scans', (req, res) => {
   const {
@@ -1638,7 +1685,17 @@ app.post('/api/scans', (req, res) => {
   if (req.body.monitor) env.SHANNON_MONITOR = '1';
   if (typeof req.body.alertWebhook === 'string' && /^https:\/\//i.test(req.body.alertWebhook))
     env.SHANNON_ALERT_WEBHOOK = req.body.alertWebhook.slice(0, 2048);
-  if (req.body.networkScan && req.body.networkAuthorized === true) env.SHANNON_NETWORK_SCAN = '1';
+  if (req.body.networkScan && req.body.networkAuthorized === true) {
+    // Authorization: a DOMAIN target already passed the domain-ownership gate (its host serves the
+    // verified domain). A raw-IP target must fall inside a VERIFIED CIDR range. Localhost is exempt.
+    const isRawIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(targetHost);
+    let netOk = isLocalHost(targetHost) || !isRawIp;
+    if (isRawIp && !netOk) {
+      const cidrs = Object.keys(listCidrs(getUser(req)?.id));
+      netOk = cidrs.some((c) => ipInCidr(targetHost, c));
+    }
+    if (netOk) env.SHANNON_NETWORK_SCAN = '1';
+  }
 
   const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], {
     cwd: ROOT,
