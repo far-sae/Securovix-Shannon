@@ -115,6 +115,7 @@ const COMPLIANCE = {
   'graphql-advanced': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-200', mitre: ['TA0007'] },
   'tls-config': { owasp: 'A02:2021-Cryptographic Failures', cwe: 'CWE-326', mitre: ['TA0006'] },
   'attack-surface': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-350', mitre: ['TA0001', 'TA0003'] },
+  'cloud-exposure': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-732', mitre: ['TA0007', 'TA0009'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -1404,6 +1405,8 @@ function detectionRule(cls) {
       'Disable TLS 1.0/1.1 and weak ciphers (RC4/3DES/EXPORT/NULL); use TLS 1.2+ with modern AEAD ciphers; use 2048-bit+ RSA or ECDSA keys from a trusted CA; renew certificates before expiry and match them to the hostname; enable HSTS.',
     'attack-surface':
       'Remove DNS records (CNAME/ALIAS) that point to de-provisioned third-party services; claim or delete dangling subdomains; monitor certificate-transparency logs for unexpected subdomains; require a verification token before pointing DNS at a SaaS.',
+    'cloud-exposure':
+      'Disable public listing and ACLs on cloud storage; deny public read/list via bucket policy; enable "block public access" (S3) / uniform bucket-level access (GCS) / private containers (Azure); serve assets via a CDN with signed URLs.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1958,6 +1961,17 @@ export async function runWholeApp({
         log(`  (attack-surface error: ${err.message})`);
       }
     }
+  }
+
+  // Cloud storage exposure — only buckets the site itself references (attributable), confirmed
+  // publicly listable. Safe: acts only if the pages reference a cloud bucket.
+  try {
+    const { runCloudExposure } = await import('./cloud-exposure.mjs');
+    const { buckets, findings } = await runCloudExposure({ origin, pages: pageList });
+    if (buckets.length) log(`  cloud-exposure: ${buckets.length} referenced bucket(s) checked`);
+    recordClass(report, ws, 'cloud-exposure', findings, log);
+  } catch (err) {
+    log(`  (cloud-exposure error: ${err.message})`);
   }
   report.crawl = {
     pages: s.pages.length,
