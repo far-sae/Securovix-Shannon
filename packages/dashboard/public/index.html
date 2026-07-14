@@ -3041,6 +3041,20 @@ function renderVerified(){
     </div>
     <p style="color:var(--t2);margin-bottom:18px;line-height:1.6;max-width:760px">Findings here were exploited through the scope-locked tool broker and confirmed by a benign proof marker (arithmetic eval, planted canary, or cross-identity read). Unlike inferred findings, these carry <strong style="color:var(--t1)">zero false positives by construction</strong>${classes.length?` — across ${classes.length} vuln class${classes.length>1?'es':''}: ${classes.map(H).join(', ')}.`:'.'}</p>
 
+    ${(b.chains&&b.chains.length)?`<div style="border:1px solid var(--red);border-radius:var(--rs);background:rgba(179,64,31,.06);padding:14px 16px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><strong style="color:var(--t0);font-size:14px">Attack Paths</strong><span class="bx bx-g" style="font-size:11px">${b.chains.length} correlated</span><span style="color:var(--t3);font-size:11px">how findings combine into full compromise</span></div>
+      ${b.chains.map(c=>`<div style="font-size:12.5px;color:var(--t1);padding:6px 0;border-top:1px solid var(--brd2)"><span class="sev sev-${sevCls(c.severity)}" style="font-size:9px;margin-right:6px">${H(c.severity)}</span>${H(c.detail)}</div>`).join('')}
+    </div>`:''}
+
+    ${(b.impact&&b.impact.length)?`<div style="border:1px solid var(--brd);border-radius:var(--rs);background:var(--bg2);padding:12px 16px;margin-bottom:16px">
+      <strong style="color:var(--t0);font-size:13px">Impact demonstrated</strong>
+      ${b.impact.map(f=>`<div style="font-size:12.5px;color:var(--t1);padding:4px 0">${H(f.detail)}</div>`).join('')}
+    </div>`:''}
+
+    ${b.monitoring?`<div style="border:1px solid var(--brd);border-radius:var(--rs);padding:11px 16px;margin-bottom:16px;background:var(--bg2)">
+      ${b.monitoring.firstRun?`<strong style="color:var(--t0);font-size:13px">Monitoring baseline established</strong><span style="color:var(--t2);font-size:12px"> — ${b.monitoring.total||0} finding(s) recorded. Re-scan to detect changes.</span>`:`<strong style="color:var(--t0);font-size:13px">Since last scan</strong><span style="color:var(--t2);font-size:12px"> — <strong style="color:var(--red)">${(b.monitoring.new||[]).length} NEW</strong>, ${(b.monitoring.resolved||[]).length} resolved${b.monitoring.previousScanAt?' since '+H(new Date(b.monitoring.previousScanAt).toLocaleString()):''}.</span>${(b.monitoring.new||[]).slice(0,8).map(n=>`<div style="font-size:12px;color:var(--t1);padding:3px 0">NEW · ${H(n.cls)} @ ${H(n.target)}</div>`).join('')}`}
+    </div>`:''}
+
     ${owasp.length?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px">
       ${owasp.map(([k,n])=>`<span class="sev sev-high" style="font-size:11px">${ico('shield',{cls:'ico-sm'})}<span>${H(k)} &middot; ${n}</span></span>`).join('')}
     </div>`:''}
@@ -3052,6 +3066,11 @@ function renderVerified(){
         <div class="risk-card-meta"><span>${ico('zap',{cls:'ico-sm'})} ${H(f.tool||'broker')}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px" title="${H(f.target||'')}">${H(f.target||'')}</span></div>
       </div>`).join('')}
     </div>`:'<div class="empty" style="padding:40px 20px"><p style="color:var(--t3)">No broker-verified exploits for this scan.</p></div>'}
+
+    ${(b.aiLeads&&b.aiLeads.length)?`<h3 class="h-display" style="font-size:18px;margin:30px 0 10px;color:var(--t0)">AI-Suggested Tests <span style="color:var(--t3);font-size:12px;font-weight:400">— manual review recommended, NOT auto-verified</span></h3>
+    <div style="border:1px solid var(--brd);border-radius:var(--rs);padding:6px 16px">
+      ${b.aiLeads.map(l=>`<div style="font-size:12.5px;color:var(--t2);padding:8px 0;border-top:1px solid var(--brd2)">${H(l)}</div>`).join('')}
+    </div>`:''}
 
     ${rows.length?`<h3 class="h-display" style="font-size:18px;margin:30px 0 12px;color:var(--t0)">Compliance Mapping</h3>
     <div style="overflow-x:auto;border:1px solid var(--brd);border-radius:var(--rs)">

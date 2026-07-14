@@ -2079,6 +2079,13 @@ export async function runWholeApp({
       log(`  (monitor error: ${err.message})`);
     }
   }
+
+  // Surface the monitoring delta + AI leads to the dashboard (the broker API reads these).
+  try {
+    mkdirSync(join(ws, 'broker'), { recursive: true });
+    if (report.monitoring) writeFileSync(join(ws, 'broker', 'monitoring.json'), JSON.stringify(report.monitoring, null, 2));
+    if (report.aiLeads?.length) writeFileSync(join(ws, 'broker', 'ai-leads.json'), JSON.stringify(report.aiLeads, null, 2));
+  } catch {}
   return defendAndReport(report, ws, log);
 }
 

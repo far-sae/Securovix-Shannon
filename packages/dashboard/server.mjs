@@ -1386,7 +1386,14 @@ app.get('/api/scans/:id/broker', (req, res) => {
     }
   }
 
-  res.json({ findings, rows, owaspCoverage, cweCoverage, defenses });
+  // Advanced layers surfaced to the client: attack chains + impact are already in `findings`
+  // (their own classes); the monitoring delta and AI leads are separate report artifacts.
+  const monitoring = rj(join(brokerDir, 'monitoring.json'));
+  const aiLeads = rj(join(brokerDir, 'ai-leads.json')) || [];
+  const chains = findings.filter((f) => f.category === 'attack-chain');
+  const impact = findings.filter((f) => f.category === 'impact');
+
+  res.json({ findings, rows, owaspCoverage, cweCoverage, defenses, monitoring, aiLeads, chains, impact });
 });
 
 // ============================================================
