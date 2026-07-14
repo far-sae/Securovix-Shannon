@@ -2060,7 +2060,7 @@ export async function runWholeApp({
   // the dashboard re-invoking a scan with --monitor).
   if (monitor) {
     try {
-      const { runMonitorDiff } = await import('./monitor.mjs');
+      const { runMonitorDiff, sendMonitorAlert } = await import('./monitor.mjs');
       const delta = runMonitorDiff(target, report);
       report.monitoring = {
         new: delta.new,
@@ -2075,6 +2075,12 @@ export async function runWholeApp({
           `\n=== MONITOR — ${delta.new.length} NEW, ${delta.resolved.length} resolved since ${delta.previousScanAt} ===`,
         );
       for (const nf of delta.new.slice(0, 10)) log(`  NEW: ${nf.severity} ${nf.cls} @ ${nf.target}`);
+      // Alert on NEW exposures (Slack/Discord/generic webhook) — only on a re-scan, never the baseline.
+      const webhook = process.env.SHANNON_ALERT_WEBHOOK;
+      if (webhook && !delta.firstRun && delta.new.length) {
+        const sent = await sendMonitorAlert(target, delta, webhook);
+        log(`  monitor alert: ${sent ? 'sent ✅' : 'webhook not reachable ⚠'}`);
+      }
     } catch (err) {
       log(`  (monitor error: ${err.message})`);
     }
@@ -2083,8 +2089,10 @@ export async function runWholeApp({
   // Surface the monitoring delta + AI leads to the dashboard (the broker API reads these).
   try {
     mkdirSync(join(ws, 'broker'), { recursive: true });
-    if (report.monitoring) writeFileSync(join(ws, 'broker', 'monitoring.json'), JSON.stringify(report.monitoring, null, 2));
-    if (report.aiLeads?.length) writeFileSync(join(ws, 'broker', 'ai-leads.json'), JSON.stringify(report.aiLeads, null, 2));
+    if (report.monitoring)
+      writeFileSync(join(ws, 'broker', 'monitoring.json'), JSON.stringify(report.monitoring, null, 2));
+    if (report.aiLeads?.length)
+      writeFileSync(join(ws, 'broker', 'ai-leads.json'), JSON.stringify(report.aiLeads, null, 2));
   } catch {}
   return defendAndReport(report, ws, log);
 }

@@ -83,3 +83,30 @@ export function runMonitorDiff(target, report) {
   saveBaseline(target, report);
   return { ...diff, previousScanAt: base?.savedAt || null };
 }
+
+// POST an alert when a re-scan turns up NEW findings. Never fires on the first (baseline) run or
+// when nothing new appeared. Payload carries both { text } (Slack) and { content } (Discord) plus a
+// structured body, so a generic/Slack/Discord webhook all work. Returns whether it posted.
+export async function sendMonitorAlert(target, delta, webhookUrl, fetchImpl = fetch) {
+  if (!webhookUrl || delta.firstRun || !delta.new?.length) return false;
+  const lines = delta.new
+    .slice(0, 15)
+    .map((n) => `• [${(n.severity || 'medium').toUpperCase()}] ${n.cls} @ ${n.target}`)
+    .join('\n');
+  const text = `Shannon monitor: ${delta.new.length} NEW finding(s) on ${target}${delta.resolved?.length ? ` (${delta.resolved.length} resolved)` : ''}${delta.previousScanAt ? ` since ${delta.previousScanAt}` : ''}\n${lines}`;
+  const body = JSON.stringify({ text, content: text, target, new: delta.new, resolved: delta.resolved || [] });
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 8000);
+    const r = await fetchImpl(webhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+      signal: c.signal,
+    });
+    clearTimeout(t);
+    return !!r?.ok;
+  } catch {
+    return false;
+  }
+}
