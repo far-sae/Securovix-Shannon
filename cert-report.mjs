@@ -135,6 +135,13 @@ export const METHODOLOGY = {
     iso: 'A.8.28',
   },
   'tls-config': { name: 'TLS/SSL Configuration', wstg: 'WSTG-CRYP-01', asvs: 'V9.1.1', pci: '4.2.1', iso: 'A.8.24' },
+  'attack-surface': {
+    name: 'Subdomain Takeover / Attack Surface',
+    wstg: 'WSTG-CONF-10',
+    asvs: 'V1.11.1',
+    pci: '2.2',
+    iso: 'A.8.9',
+  },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };

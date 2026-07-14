@@ -114,6 +114,7 @@ const COMPLIANCE = {
   'api-data-exposure': { owasp: 'A01:2021-Broken Access Control', cwe: 'CWE-213', mitre: ['TA0007', 'TA0009'] },
   'graphql-advanced': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-200', mitre: ['TA0007'] },
   'tls-config': { owasp: 'A02:2021-Cryptographic Failures', cwe: 'CWE-326', mitre: ['TA0006'] },
+  'attack-surface': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-350', mitre: ['TA0001', 'TA0003'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -1401,6 +1402,8 @@ function detectionRule(cls) {
       'Disable field suggestions and introspection in production; cap query depth/complexity; disable or rate-limit array batching; enforce per-field authorization.',
     'tls-config':
       'Disable TLS 1.0/1.1 and weak ciphers (RC4/3DES/EXPORT/NULL); use TLS 1.2+ with modern AEAD ciphers; use 2048-bit+ RSA or ECDSA keys from a trusted CA; renew certificates before expiry and match them to the hostname; enable HSTS.',
+    'attack-surface':
+      'Remove DNS records (CNAME/ALIAS) that point to de-provisioned third-party services; claim or delete dangling subdomains; monitor certificate-transparency logs for unexpected subdomains; require a verification token before pointing DNS at a SaaS.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1935,6 +1938,25 @@ export async function runWholeApp({
       recordClass(report, ws, 'tls-config', tlsFindings, log);
     } catch (err) {
       log(`  (tls-config error: ${err.message})`);
+    }
+  }
+
+  // Attack surface + subdomain takeover — subdomains of the verified domain are in scope. Skip
+  // localhost/IP (no registrable domain). Best-effort (crt.sh + DNS); errors degrade to nothing.
+  {
+    const asHost = new URL(origin).hostname;
+    const local = asHost === 'localhost' || /^\d/.test(asHost) || asHost === '::1' || asHost.endsWith('.local');
+    if (!local && asHost.includes('.')) {
+      try {
+        const { runAttackSurface } = await import('./attack-surface.mjs');
+        const domain = asHost.split('.').slice(-2).join('.');
+        const { subdomains, findings } = await runAttackSurface(domain);
+        report.attackSurface = { domain, subdomains: subdomains.length };
+        log(`  attack-surface: ${subdomains.length} subdomain(s) discovered for ${domain}`);
+        recordClass(report, ws, 'attack-surface', findings, log);
+      } catch (err) {
+        log(`  (attack-surface error: ${err.message})`);
+      }
     }
   }
   report.crawl = {
