@@ -117,6 +117,7 @@ const COMPLIANCE = {
   'attack-surface': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-350', mitre: ['TA0001', 'TA0003'] },
   'cloud-exposure': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-732', mitre: ['TA0007', 'TA0009'] },
   'exposed-service': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-306', mitre: ['TA0007', 'TA0008'] },
+  'attack-chain': { owasp: 'A04:2021-Insecure Design', cwe: 'CWE-284', mitre: ['TA0004', 'TA0008', 'TA0040'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -1410,6 +1411,8 @@ function detectionRule(cls) {
       'Disable public listing and ACLs on cloud storage; deny public read/list via bucket policy; enable "block public access" (S3) / uniform bucket-level access (GCS) / private containers (Azure); serve assets via a CDN with signed URLs.',
     'exposed-service':
       'Never expose datastores (Redis/Memcached/Elasticsearch/MongoDB) to the internet; bind to localhost/private networks; require authentication + TLS; restrict with a firewall/security group; disable anonymous FTP.',
+    'attack-chain':
+      'Break the chain by remediating ANY single constituent finding; apply defense-in-depth (network segmentation, least privilege, secret rotation, blast-radius limits) so one weakness cannot escalate to full compromise.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1998,6 +2001,17 @@ export async function runWholeApp({
     forms: s.forms.length,
     apiPaths: s.apiPaths.length,
   };
+
+  // Attack-path chaining — correlate all the confirmed findings into exploit chains (proof-based;
+  // a chain is realized only when every step is backed by a confirmed finding).
+  try {
+    const { buildAttackChains } = await import('./attack-chains.mjs');
+    const { chains } = buildAttackChains(report);
+    if (chains.length) log(`\n=== ATTACK-CHAIN phase — ${chains.length} exploit chain(s) correlated ===`);
+    recordClass(report, ws, 'attack-chain', chains, log);
+  } catch (err) {
+    log(`  (attack-chain error: ${err.message})`);
+  }
   return defendAndReport(report, ws, log);
 }
 
