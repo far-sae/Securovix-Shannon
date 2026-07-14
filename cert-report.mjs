@@ -241,6 +241,14 @@ export function buildCertReport(
   const findings = buildFindings(report, compliance);
   const c = counts(findings);
   const risk = overallRisk(c);
+  // Advanced layers surfaced as their own report sections (they are also findings above).
+  const chainF = (report.exploits || [])
+    .filter((e) => e.cls === 'attack-chain' && e.confirmed > 0)
+    .flatMap((e) => e.findings || []);
+  const impactF = (report.exploits || [])
+    .filter((e) => e.cls === 'impact' && e.confirmed > 0)
+    .flatMap((e) => e.findings || []);
+  const mon = report.monitoring;
   const started = report.startedAt || '';
   const finished = report.completedAt || '';
   const crawl = report.crawl
@@ -275,6 +283,24 @@ export function buildCertReport(
     `| Medium | ${c.medium} |`,
     `| Low | ${c.low} |`,
     `| Info | ${c.info} |`,
+    '',
+    ...(mon
+      ? [
+          mon.firstRun
+            ? `_Monitoring: baseline established (${mon.total || 0} confirmed finding(s)). Re-scan to detect changes._`
+            : `_Monitoring: since the last scan — **${(mon.new || []).length} new**, ${(mon.resolved || []).length} resolved._`,
+          '',
+        ]
+      : []),
+    '## 3a. Attack Paths (correlated exploit chains)',
+    chainF.length
+      ? chainF.map((f) => `- **${(f.severity || '').toUpperCase()}** — ${f.detail}`).join('\n')
+      : '_No multi-finding attack chains correlated._',
+    '',
+    '## 3b. Demonstrated Impact (post-exploitation)',
+    impactF.length
+      ? impactF.map((f) => `- ${f.detail}`).join('\n')
+      : '_No post-exploitation impact demonstrated (or not applicable to the confirmed findings)._',
     '',
     '## 4. Findings',
     findings.length
@@ -365,6 +391,9 @@ th{background:#f9fafb}
   <div class="card"><div class="n" style="color:${sevColor.low}">${c.low}</div>Low</div>
   <div class="card"><div class="n">${c.info}</div>Info</div>
 </div>
+${mon ? `<p class="meta">${mon.firstRun ? `Monitoring baseline established (${mon.total || 0} confirmed findings).` : `<b>Since last scan:</b> <b style="color:${sevColor.critical}">${(mon.new || []).length} new</b>, ${(mon.resolved || []).length} resolved.`}</p>` : ''}
+${chainF.length ? `<h2>Attack Paths</h2><ul>${chainF.map((f) => `<li><span class="sev" style="background:${sevColor[f.severity] || '#6b7280'}">${esc((f.severity || '').toUpperCase())}</span> ${esc(f.detail)}</li>`).join('')}</ul>` : ''}
+${impactF.length ? `<h2>Demonstrated Impact</h2><ul>${impactF.map((f) => `<li>${esc(f.detail)}</li>`).join('')}</ul>` : ''}
 <h2>Scope &amp; Methodology</h2>
 <p class="meta">Surface: ${esc(crawl)}. Standards: OWASP WSTG v4.2, OWASP ASVS v4.0, NIST SP 800-115. Findings are tool-confirmed (zero false positives). Classes executed (${classesTested.length}): ${esc(classesTested.join(', ') || '—')}.</p>
 <h2>Findings</h2>
