@@ -119,6 +119,7 @@ const COMPLIANCE = {
   'exposed-service': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-306', mitre: ['TA0007', 'TA0008'] },
   'attack-chain': { owasp: 'A04:2021-Insecure Design', cwe: 'CWE-284', mitre: ['TA0004', 'TA0008', 'TA0040'] },
   impact: { owasp: 'A03:2021-Injection', cwe: 'CWE-89', mitre: ['TA0009', 'TA0002', 'TA0040'] },
+  'ai-verified': { owasp: 'A04:2021-Insecure Design', cwe: 'CWE-915', mitre: ['TA0004'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -1416,6 +1417,8 @@ function detectionRule(cls) {
       'Break the chain by remediating ANY single constituent finding; apply defense-in-depth (network segmentation, least privilege, secret rotation, blast-radius limits) so one weakness cannot escalate to full compromise.',
     impact:
       'Fix the root injection (parameterize queries; never shell out) AND limit blast radius: run the DB as a least-privilege user and the service as a non-root account so a single flaw cannot read everything or execute as root.',
+    'ai-verified':
+      'Bind only an explicit allowlist of fields (DTO/serializer allowlist); never bind a request body straight to an ORM model; keep privileged attributes out of the create/update schema.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1880,6 +1883,29 @@ export async function runWholeApp({
     recordClass(report, ws, 'impact', impactFindings, log);
   } catch (err) {
     log(`  (impact error: ${err.message})`);
+  }
+
+  // AI reasoning layer — the LLM PROPOSES app-specific tests; only DETERMINISTICALLY VERIFIED ones
+  // become findings (the rest are labeled leads in report.aiLeads). Gated on an API key.
+  try {
+    const { makeLlmProposer, runAiReason } = await import('./ai-reason.mjs');
+    const propose = makeLlmProposer(process.env.ANTHROPIC_API_KEY);
+    if (propose) {
+      const surface = [
+        ...pageList.slice(0, 25),
+        ...formTargets.map((f) => `${(f.method || 'post').toUpperCase()} ${f.url} (${(f.params || []).join(',')})`),
+      ].slice(0, 40);
+      const { findings, leads, cost } = await runAiReason({ report, surface, formTargets, propose, fetchT });
+      report.cost = (report.cost || 0) + (cost || 0);
+      report.aiLeads = leads.map((l) => l.detail);
+      if (findings.length || leads.length)
+        log(
+          `\n=== AI-REASON phase — ${findings.length} verified finding(s), ${leads.length} lead(s) for manual review ===`,
+        );
+      recordClass(report, ws, 'ai-verified', findings, log);
+    }
+  } catch (err) {
+    log(`  (ai-reason error: ${err.message})`);
   }
 
   // Broken Access Control (OWASP A01) needs a SECOND identity — run it when one is supplied so the
