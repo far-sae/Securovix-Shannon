@@ -149,6 +149,13 @@ export const METHODOLOGY = {
     pci: '2.2',
     iso: 'A.8.9',
   },
+  'exposed-service': {
+    name: 'Exposed Unauthenticated Services',
+    wstg: 'WSTG-CONF-01',
+    asvs: 'V1.14.3',
+    pci: '1.3',
+    iso: 'A.8.20',
+  },
 };
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4, none: 5 };

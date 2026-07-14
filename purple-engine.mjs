@@ -116,6 +116,7 @@ const COMPLIANCE = {
   'tls-config': { owasp: 'A02:2021-Cryptographic Failures', cwe: 'CWE-326', mitre: ['TA0006'] },
   'attack-surface': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-350', mitre: ['TA0001', 'TA0003'] },
   'cloud-exposure': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-732', mitre: ['TA0007', 'TA0009'] },
+  'exposed-service': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-306', mitre: ['TA0007', 'TA0008'] },
 };
 
 const WEAK_SECRETS = ['secret', 'password', 'admin', 'changeme', 'jwt', 'key', '1234567890'];
@@ -1407,6 +1408,8 @@ function detectionRule(cls) {
       'Remove DNS records (CNAME/ALIAS) that point to de-provisioned third-party services; claim or delete dangling subdomains; monitor certificate-transparency logs for unexpected subdomains; require a verification token before pointing DNS at a SaaS.',
     'cloud-exposure':
       'Disable public listing and ACLs on cloud storage; deny public read/list via bucket policy; enable "block public access" (S3) / uniform bucket-level access (GCS) / private containers (Azure); serve assets via a CDN with signed URLs.',
+    'exposed-service':
+      'Never expose datastores (Redis/Memcached/Elasticsearch/MongoDB) to the internet; bind to localhost/private networks; require authentication + TLS; restrict with a firewall/security group; disable anonymous FTP.',
   };
   return R[cls] || 'Apply input validation and least-privilege controls.';
 }
@@ -1762,6 +1765,7 @@ export async function runWholeApp({
   maxPages = 40,
   headless = false,
   accessControl = null,
+  networkScan = false,
 }) {
   loadEnv();
   setSessionHeaders(headers);
@@ -1972,6 +1976,21 @@ export async function runWholeApp({
     recordClass(report, ws, 'cloud-exposure', findings, log);
   } catch (err) {
     log(`  (cloud-exposure error: ${err.message})`);
+  }
+
+  // Exposed unauthenticated services (Redis/Memcached/Elasticsearch/anon-FTP) — OPT-IN only, and
+  // ONLY against the verified web host (not a range). Authorization: the client scans the host that
+  // serves the domain they already proved they own.
+  if (networkScan || process.env.SHANNON_NETWORK_SCAN === '1') {
+    try {
+      const { runNetworkScan } = await import('./network-scan.mjs');
+      const nsHost = new URL(origin).hostname;
+      log(`  exposed-service: opt-in service check on ${nsHost} (verified host only)`);
+      const { findings } = await runNetworkScan(nsHost);
+      recordClass(report, ws, 'exposed-service', findings, log);
+    } catch (err) {
+      log(`  (exposed-service error: ${err.message})`);
+    }
   }
   report.crawl = {
     pages: s.pages.length,
@@ -2218,6 +2237,7 @@ if (isMain) {
           'usage: --target <url> [--cookie "k=v"] [--header "K: V"] [--login-url U --username U --password P]\n' +
             '       [--user2-cookie "k=v" | --user2-login-url U --user2-username U --user2-password P]  (2nd peer → BOLA)\n' +
             '       [--admin-cookie "k=v" | --admin-login-url U --admin-username U --admin-password P]   (admin → BFLA)\n' +
+            '       [--network-scan]  (OPT-IN: unauth Redis/Memcached/Elasticsearch/anon-FTP on the verified host)\n' +
             '       [--no-crawl] [--max-pages N] [--headless] | --selftest',
         );
         process.exit(1);
@@ -2284,6 +2304,7 @@ if (isMain) {
           headers,
           maxPages: Number(arg('--max-pages')) || 40,
           headless: process.argv.includes('--headless') || process.env.SHANNON_HEADLESS === '1',
+          networkScan: process.argv.includes('--network-scan') || process.env.SHANNON_NETWORK_SCAN === '1',
           accessControl,
         });
       }
