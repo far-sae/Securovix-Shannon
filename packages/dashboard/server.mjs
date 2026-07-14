@@ -1624,6 +1624,14 @@ app.post('/api/scans', (req, res) => {
     .filter((o) => o.cookie || o.header || o.loginUrl);
   if (cleanIds.length >= 2) env.SHANNON_AC = JSON.stringify({ identities: cleanIds });
 
+  // Advanced scan options. Continuous monitoring diffs against the last baseline; an alert webhook
+  // pings on new exposures. Network scanning (unauth services on the verified host) requires an
+  // explicit authorization acknowledgment in addition to the domain-ownership gate.
+  if (req.body.monitor) env.SHANNON_MONITOR = '1';
+  if (typeof req.body.alertWebhook === 'string' && /^https:\/\//i.test(req.body.alertWebhook))
+    env.SHANNON_ALERT_WEBHOOK = req.body.alertWebhook.slice(0, 2048);
+  if (req.body.networkScan && req.body.networkAuthorized === true) env.SHANNON_NETWORK_SCAN = '1';
+
   const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], {
     cwd: ROOT,
     env,

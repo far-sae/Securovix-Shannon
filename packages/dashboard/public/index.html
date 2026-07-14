@@ -2051,6 +2051,21 @@ function wizRender(){
         </label>
       </div>
 
+      <!-- Advanced scan options -->
+      <div style="margin-top:14px;padding:14px 18px;border:1px solid var(--brd);border-radius:var(--rs)">
+        <div style="font-weight:700;color:var(--t0);font-size:13px;margin-bottom:10px">Advanced options</div>
+        <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;margin-bottom:8px">
+          <input type="checkbox" id="mon-toggle" ${WIZ.monitor?'checked':''} style="accent-color:var(--acc);width:16px;height:16px;margin-top:2px">
+          <div style="flex:1"><div style="font-weight:600;color:var(--t1);font-size:13px">Continuous monitoring</div><div style="color:var(--t3);font-size:11.5px;margin-top:3px">Compare against the last scan and flag NEW exposures. Re-run on a schedule for always-on watching.</div></div>
+        </label>
+        <div class="fg" style="margin:0 0 12px 28px"><label for="mon-webhook">Alert webhook <span style="color:var(--t3);font-weight:400;text-transform:none;letter-spacing:0">(optional — Slack/Discord/generic; pinged on new exposures)</span></label><input class="fi" type="text" id="mon-webhook" placeholder="https://hooks.slack.com/…" autocomplete="off" value="${H(WIZ.alertWebhook||'')}"></div>
+        <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer">
+          <input type="checkbox" id="net-toggle" ${WIZ.networkScan?'checked':''} style="accent-color:var(--acc);width:16px;height:16px;margin-top:2px">
+          <div style="flex:1"><div style="font-weight:600;color:var(--t1);font-size:13px">Network service check <span style="color:var(--t3);font-weight:400;font-size:11px">(opt-in)</span></div><div style="color:var(--t3);font-size:11.5px;margin-top:3px">Check for unauthenticated Redis / Memcached / Elasticsearch / anonymous FTP on the verified host only — not a port scan.</div>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11.5px;color:var(--t2)"><input type="checkbox" id="net-auth" ${WIZ.networkAuthorized?'checked':''} style="accent-color:var(--acc);width:14px;height:14px">I authorize network-level testing of this host.</label></div>
+        </label>
+      </div>
+
       ${!k.claude?`<div style="margin-top:14px;padding:14px 16px;background:linear-gradient(135deg,rgba(212,247,69,.08),rgba(212,247,69,.02));border:1px solid rgba(212,247,69,.30);border-radius:var(--rs);display:flex;align-items:center;gap:14px;flex-wrap:wrap">
         <div style="width:32px;height:32px;border-radius:8px;background:radial-gradient(circle at 30% 30%,#ff8888,var(--rt) 60%,#a02020);display:flex;align-items:center;justify-content:center;font-family:'Inter',system-ui,sans-serif;font-weight:800;color:#0b0b0b;flex-shrink:0">C</div>
         <div style="flex:1;min-width:200px">
@@ -2105,6 +2120,10 @@ function wizCollect(){
     WIZ.acAdmUser=$('acAdmUser')?.value||'';WIZ.acAdmPass=$('acAdmPass')?.value||'';WIZ.acAdmCk=$('acAdmCk')?.value||'';
   }else{
     WIZ.warRoom=$('warroom-toggle')?.checked!==false;
+    WIZ.monitor=$('mon-toggle')?.checked===true;
+    WIZ.alertWebhook=$('mon-webhook')?.value||'';
+    WIZ.networkScan=$('net-toggle')?.checked===true;
+    WIZ.networkAuthorized=$('net-auth')?.checked===true;
   }
 }
 function wizNext(){
@@ -2144,6 +2163,10 @@ async function doScan(){
       providerKeys:keys,
       authorized,
       accessControl:(()=>{const lu=(WIZ.acLoginUrl||'').trim();const mk=(label,role,user,pass,ck)=>{user=(user||'').trim();ck=(ck||'').trim();if(lu&&user)return{label,role,loginUrl:lu,username:user,password:(pass||'').trim()};if(ck)return{label,role,cookie:ck};return null;};const ids=[mk('userA','user',WIZ.acAuser,WIZ.acApass,WIZ.acAck),mk('userB','user',WIZ.acBuser,WIZ.acBpass,WIZ.acBck),mk('admin','admin',WIZ.acAdmUser,WIZ.acAdmPass,WIZ.acAdmCk)].filter(Boolean);return ids.length>=2?{identities:ids}:undefined})(),
+      monitor:WIZ.monitor===true,
+      alertWebhook:(WIZ.alertWebhook||'').trim()||undefined,
+      networkScan:WIZ.networkScan===true,
+      networkAuthorized:WIZ.networkAuthorized===true,
     })});
     if(r.error){
       // Server says we must prove we own the domain → open the verification flow, then let them retry.

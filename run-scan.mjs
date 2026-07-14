@@ -496,6 +496,8 @@ try {
     workspaceDir: wsDir,
     maxPages: 40,
     accessControl,
+    monitor: process.env.SHANNON_MONITOR === '1', // continuous monitoring (baseline + diff + alert)
+    networkScan: process.env.SHANNON_NETWORK_SCAN === '1', // opt-in unauth-service check on the verified host
   });
   const confirmed = purple.exploits.reduce((s, e) => s + e.confirmed, 0);
   console.log(
