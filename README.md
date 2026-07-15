@@ -1,387 +1,258 @@
-# Securovix-Shannon
+# Securovix Shannon
 
-Autonomous white-box penetration testing framework powered by LLM agents. Zero false positives — every finding comes with a working proof-of-concept exploit.
+**Autonomous, proof-based penetration-testing platform.** Every finding is confirmed by a
+benign proof signal before it is ever reported — **zero false positives by construction**. The
+current engine is **pure Node.js (no Docker)** and runs on **Windows, macOS, and Linux**.
 
-> **Windows note**: Native Windows is not supported. Use WSL2.
-
----
-
-## Prerequisites
-
-| Tool | Version | Why |
-|------|---------|-----|
-| Node.js | >= 18 | Runtime |
-| pnpm | >= 9 | Package manager |
-| Docker | >= 24 | Containers for Temporal + worker |
-| Docker Compose | v2 | Orchestration |
-| Git | any | Workspace checkpoints |
-
-### Install prerequisites (Ubuntu/WSL2)
-
-```bash
-# Node.js 18+
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# pnpm
-npm install -g pnpm@9
-
-# Docker (if not already installed)
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-```
+> Shannon does not "flag suspicious responses." A vulnerability is recorded **only** when a
+> deterministic prober proves it — arithmetic evaluated by the DB, a planted canary reflected
+> back, a controlled differential between a TRUE and a FALSE payload, an out-of-band callback
+> that actually fired, or an exposed-file signature that actually matched.
 
 ---
 
-## Quick Start (Local Development Mode)
+## How it works — two layers
 
-### 1. Clone and install
+| Layer | Role | Trust |
+|-------|------|-------|
+| **Deterministic proof engine** (`purple-engine.mjs` + module files) | Sends real crafted requests, confirms with benign proof markers, differentials, and controls | **Truth.** A finding exists iff a proof fired. |
+| **LLM layer** (optional, needs `ANTHROPIC_API_KEY`) | Remediation text, detection rules, a *refute-only* judge, and a *propose-but-verify* reasoner | **Judgment.** It can never *create* a finding — only explain or attempt to refute one. |
+
+Because the engine is the source of truth, **35 of 36 detection classes run with no API key at
+all.** The key only enriches reporting and the AI-reasoning class.
+
+For every **confirmed** finding the engine also emits a concrete **detection rule** (WAF/SIEM)
+and, for payload classes, stands up a **live inline filtering proxy** that re-runs the exploit
+and proves it is now **blocked (403)** — attack *and* defense in one pass.
+
+---
+
+## Detection coverage — 36 classes across 5 layers
+
+| Layer | Classes (examples) |
+|-------|--------------------|
+| **Web** (25 + 2) | SQLi (error-based · boolean-blind · time-based), NoSQL, XSS (reflected · stored · DOM, headless-executed), SSRF, XXE (OOB), command injection, path traversal, CRLF / header injection, host-header, open redirect, CSRF, mass-assignment, IDOR, verbose errors, auth-testing (weak creds · no-rate-limit · user-enumeration), access-control **BOLA/BFLA** (multi-identity), API excessive-data-exposure, GraphQL abuse (introspection · suggestion · batching) |
+| **TLS/SSL** | Deprecated protocols, expired / self-signed / hostname-mismatch certs, weak keys |
+| **DNS / attack surface** | Subdomain enumeration (crt.sh) + **subdomain-takeover** (dangling CNAME + service fingerprint) |
+| **Cloud** | Publicly-listable, site-referenced storage buckets (S3 / GCS / Azure) |
+| **Network** (opt-in) | Unauthenticated Redis / Memcached / Elasticsearch / anonymous FTP |
+
+### Platform intelligence (layered on top of raw findings)
+
+- **Attack-path chaining** — correlates confirmed findings into real kill chains
+  (secrets→datastore, SSRF→cloud, Redis→RCE, auth-bypass→admin, traversal→secrets,
+  stored-XSS→account-takeover, takeover→phishing).
+- **Demonstrated impact** — benign, read-only post-exploitation: extracts the real DB version
+  from a SQLi error; proves `uid=0(root)` from a command-injection context.
+- **Continuous monitoring + alerts** — stable finding IDs, baseline diffing, and Slack/Discord/
+  generic-webhook alerts fired **only** on *newly appeared* exposures.
+- **AI reasoning** (key-gated) — the LLM *proposes* privileged field names / attack ideas; the
+  engine *deterministically verifies* each before it can become a finding.
+
+---
+
+## Authorization model
+
+Shannon is for targets you **own or are explicitly authorized to test.**
+
+- **Dashboard** enforces ownership before a scan can start: a **domain-ownership gate**
+  (DNS TXT / `.well-known` / meta tag) and an **IP-ownership range gate** (CIDR + HMAC token +
+  control proof). `localhost` and `--selftest` are exempt.
+- **CLI** trusts the operator: it scans whatever `--target` you give it. Only point it at systems
+  you are authorized to test.
+- **Network scanning is opt-in** (`--network-scan`) and, via the dashboard, restricted to a host
+  inside a verified IP range with an explicit authorization acknowledgment.
+
+Every proof marker is **benign and non-destructive** — Shannon never drops tables, never writes
+data, never DoSes a target.
+
+---
+
+## Quick start (proof engine)
+
+Requires **Node.js ≥ 18** and **pnpm ≥ 9**. No Docker.
 
 ```bash
-cd shannon
+git clone https://github.com/far-sae/Securovix-Shannon.git
+cd Securovix-Shannon
 pnpm install
-pnpm build
 ```
 
-### 2. Set your LLM provider
+### Prove it works — self-test (no target, no key, no network)
 
-Create a `.env` file in the project root:
+Runs the full exploit→defense loop against an in-process vulnerable app:
 
 ```bash
-# Pick exactly ONE provider:
-
-# Option A: Anthropic direct (recommended)
-ANTHROPIC_API_KEY=sk-ant-api03-xxxxx
-
-# Option B: AWS Bedrock
-# AWS_BEDROCK_REGION=us-east-1
-# AWS_ACCESS_KEY_ID=xxxxx
-# AWS_SECRET_ACCESS_KEY=xxxxx
-
-# Option C: GCP Vertex AI
-# VERTEX_PROJECT_ID=my-project
-# VERTEX_REGION=us-central1
-
-# Option D: Custom proxy
-# SHANNON_LLM_BASE_URL=https://proxy.example.com/v1
-# SHANNON_LLM_API_KEY=xxxxx
+node purple-engine.mjs --selftest
 ```
 
-### 3. Create a scan config
-
-Copy the example and edit it:
+### Scan a target you own
 
 ```bash
-cp shannon.example.yaml my-target.yaml
+node purple-engine.mjs --target https://staging.yoursite.com --label yoursite
 ```
 
-Edit `my-target.yaml`:
+Results land in `workspaces/purple-<id>/` (see [Output](#output)).
 
-```yaml
-target:
-  url: https://your-target-app.com
-  repoPath: /path/to/target/source/code    # optional, for white-box
-  urls:
-    focus:
-      - /api/
-      - /admin/
-    avoid:
-      - /docs/
-      - /static/
+### Optional LLM enrichment
 
-authentication:
-  type: form
-  loginUrl: https://your-target-app.com/login
-  username: testuser
-  password: testpassword
-  # totpSecret: JBSWY3DPEHPK3PXP    # uncomment for TOTP 2FA
-
-pipeline:
-  retryPreset: default       # default | fast | subscription
-  maxConcurrentPipelines: 5  # 1-5
-
-loginInstructions: |
-  Navigate to /login, enter username and password, click "Sign In".
-```
-
-### 4. Run the scan
+Create `.env` in the project root (the engine reads it automatically):
 
 ```bash
-# Set local development mode
+ANTHROPIC_API_KEY=sk-ant-api03-xxxxx   # optional — only for remediation text, judge, AI-reasoning
+```
+
+---
+
+## CLI reference
+
+```
+node purple-engine.mjs --target <url> [options]
+
+Authentication / session
+  --cookie "k=v"                     send a session cookie
+  --header "K: V"                    send an arbitrary header (repeatable)
+  --login-url U --username U --password P   form-login first, then scan behind the session
+  --user-field / --pass-field        override the login field names (default username/password)
+
+Access control (BOLA / BFLA) — enabled automatically with ≥ 2 identities
+  --user2-cookie "k=v"  | --user2-login-url U --user2-username U --user2-password P   2nd peer → BOLA
+  --admin-cookie "k=v"  | --admin-login-url U --admin-username U --admin-password P   admin → BFLA
+
+Scope / behavior
+  --no-crawl                         probe only the target URL (skip crawling)
+  --max-pages N                      crawl budget (default 40)
+  --headless                         drive a real browser for stored/DOM-XSS execution + SPA crawl
+  --network-scan                     OPT-IN: unauth Redis/Memcached/Elasticsearch/anon-FTP
+  --monitor                          diff vs the last baseline → report only NEW exposures
+  --label NAME                       label for the workspace/report
+
+  --selftest                         full loop against an in-process vuln app (no Docker/target)
+```
+
+Environment equivalents: `SHANNON_HEADLESS=1`, `SHANNON_NETWORK_SCAN=1`, `SHANNON_MONITOR=1`,
+`SHANNON_ALERT_WEBHOOK=<url>` (monitoring alerts), `SHANNON_SESSION_SECRET` (dashboard sessions),
+`PORT` (dashboard port).
+
+---
+
+## Dashboard
+
+A web UI (Express + vanilla-JS SPA) to launch scans, verify domain/IP ownership, and browse
+findings, attack paths, demonstrated impact, monitoring diffs, and reports.
+
+```bash
+node packages/dashboard/server.mjs
+# → Securovix Dashboard running at http://localhost:3000   (override with PORT)
+```
+
+It surfaces the SARIF export, the certification report, and the "Advanced options" (monitoring
+webhook, opt-in network scan) for each scan.
+
+---
+
+## Output
+
+```
+workspaces/purple-<id>/
+  purple/
+    exploit-defend.json          # machine-readable findings + defense results
+    exploit-defend-report.md     # combined attack/defense report
+    certification-report.md/.html# exploit → impact → chain narrative, CVSS + compliance
+    report.sarif                 # SARIF 2.1.0 — GitHub code scanning / CI
+  broker/
+    <class>/findings.json        # per-class confirmed findings + proofs
+    monitoring.json              # baseline diff (with --monitor)
+    ai-leads.json                # LLM leads (labeled, unverified)
+  defense/
+    <class>/defense.json         # detection rule + inline-proxy block proof
+```
+
+Findings map to **CVSS 3.1**, **OWASP** (WSTG · ASVS · Top 10), **CWE**, **MITRE ATT&CK**,
+**PCI DSS 4.0**, and **ISO 27001**.
+
+---
+
+## CI / GitHub code scanning
+
+Shannon emits **SARIF 2.1.0**, so findings show up natively in GitHub's Security tab.
+Copy `.github/workflows/shannon-scan.yml.example` → `shannon-scan.yml` and set:
+
+- Secret `ANTHROPIC_API_KEY` (optional), Secret `SHANNON_ALERT_WEBHOOK` (optional)
+- Variable `SHANNON_TARGET` — a URL you own/authorize
+
+The workflow runs the proof scan (with `--monitor`) and uploads the SARIF report.
+
+---
+
+## Tests
+
+```bash
+npm test        # 52 tests across 8 files — node:test, no network required
+```
+
+| Suite | Covers |
+|-------|--------|
+| `engine.test.mjs` · `crawler.test.mjs` · `templates.test.mjs` · `cvss.test.mjs` · `cert-report.test.mjs` | engine internals, crawler, payload templates, CVSS scoring, report rendering |
+| `advanced.test.mjs` | pure-logic modules: attack-chains, monitor, ip-ownership, sarif, cloud-exposure |
+| `probers.test.mjs` | detection probers vs local mock servers (SQLi error+blind, NoSQL, CRLF, host-header, CSRF, mass-assignment, verbose-errors, API-data-exposure, GraphQL, auth-testing, network-scan) |
+| `flows.test.mjs` | flow modules: access-control (BOLA/BFLA), impact (SQLi-extract + root), cloud-exposure, attack-surface takeover |
+
+Each prober/flow test asserts it **confirms on a vulnerable response and abstains on a safe one**
+— the zero-false-positive property is regression-gated in CI.
+
+```bash
+pnpm lint       # Biome check + format
+```
+
+---
+
+## Repository layout
+
+```
+purple-engine.mjs        # the proof engine + CLI entry point
+crawler.mjs / crawler-headless.mjs
+tls-scan.mjs             attack-surface.mjs   cloud-exposure.mjs   network-scan.mjs
+access-control.mjs       impact.mjs           attack-chains.mjs    monitor.mjs
+ai-reason.mjs            ip-ownership.mjs      sarif.mjs           cvss.mjs
+templates.mjs            cert-report.mjs
+*.test.mjs               # 8 committed test suites (npm test)
+packages/
+  dashboard/             # Express + SPA control panel (node server.mjs)
+  tool-broker/           # findings broker
+  cli/  worker/          # legacy Temporal/Docker orchestration (see below)
+docs/                    # capability sheet + explainer (HTML + PDF)
+.github/workflows/       # ci.yml (runs npm test) + shannon-scan.yml.example
+```
+
+---
+
+## Legacy: Temporal / Docker orchestration
+
+An earlier architecture (in `packages/cli` = the published `@keygraph/shannon`, plus
+`packages/worker`, `Dockerfile`, and `docker-compose.yml`) runs LLM agents inside a
+Temporal-orchestrated Docker worker. It is **WSL2 + Docker only** and is retained for the
+container-based, config-file workflow:
+
+```bash
+pnpm build                         # compile the CLI + worker first (dist/ is not checked in)
 export SHANNON_LOCAL=1
-
-# Source your API key
-source .env
-
-# Run the scan
 node packages/cli/dist/index.js scan --config my-target.yaml
 ```
 
-This will:
-1. Start a Temporal server via Docker Compose
-2. Build the worker Docker image locally
-3. Mount prompts live (editable during scan)
-4. Store all results in `./workspaces/<scan-id>/`
-
-### 5. Check results
-
-```bash
-# Scan status
-node packages/cli/dist/index.js status
-
-# Results are in the workspace directory:
-ls workspaces/<scan-id>/
-```
-
-Output structure:
-```
-workspaces/<scan-id>/
-  session.json                    # Scan metadata, agent metrics
-  pre-recon/                      # nmap, subfinder, whatweb, source analysis
-  recon/
-    exploration.md                # Browser exploration report
-    api-map.json                  # Discovered API endpoints
-    deception-verdicts.json       # Honeypot/canary detection results
-  vuln/
-    sqli/analysis.md              # SQL injection findings
-    sqli/exploitation-queue.json
-    xss/...
-    auth-bypass/...
-    authz-bypass/...
-    ssrf/...
-    business-logic/...            # State machine logic flaws
-  exploit/
-    sqli/exploit-report.md        # Working POC exploits
-    sqli/poc.md                   # Copy-paste ready exploits
-    xss/...
-    ...
-  chain-analysis/
-    graph.md                      # Attack surface graph
-    chains.json                   # Discovered kill chains
-    execution-plan.md             # Highest-scoring chain steps
-    chain-exploit-report.md       # Chain exploitation results
-  war-room/
-    verdicts.json                 # Agent debate verdicts
-    transcript.md                 # Full debate transcript
-    summary.md                    # False positives eliminated
-  report.md                       # Final penetration test report
-  forensic-package/
-    manifest.json                 # SHA-256 hash-chained evidence
-    integrity-report.md           # Chain verification
-    timeline.md                   # Chronological evidence
-    chain-of-custody.md           # Legal attestation
-  audit/
-    workflow.log                  # Human-readable audit log
-    *.log                         # Per-agent logs
-    prompts/                      # Prompt snapshots
-  evidence.db                     # SQLite forensic evidence chain
-  evasion-profile.json            # Learned WAF evasion strategies
-```
+It reads a YAML config (`shannon.example.yaml`), starts Temporal via Docker Compose, builds the
+worker image, and writes a full workspace (recon → vuln → exploit → war-room → forensic package).
+See the git history and `shannon.example.yaml` for the config schema, auth types (form / SSO /
+API-key / HTTP-basic), retry presets, and per-agent model tiers. New work targets the pure-Node
+proof engine above.
 
 ---
 
-## NPX Mode (Production)
+## Responsible use
 
-For running without cloning the repo:
-
-### 1. Setup credentials
-
-```bash
-mkdir -p ~/.shannon
-cat > ~/.shannon/config.toml << 'EOF'
-[anthropic]
-api_key = "sk-ant-api03-xxxxx"
-EOF
-```
-
-### 2. Run via npx
-
-```bash
-npx @keygraph/shannon scan --config my-target.yaml
-```
-
-This pulls the prebuilt worker image from Docker Hub and stores results in `~/.shannon/workspaces/`.
-
----
-
-## Resume a Failed/Interrupted Scan
-
-```bash
-# Resumes from where it left off, skipping completed agents
-node packages/cli/dist/index.js scan --config my-target.yaml --resume
-
-# Or specify a specific workspace to resume
-node packages/cli/dist/index.js scan --config my-target.yaml --resume --workspace ./workspaces/abc123
-```
-
-Resume will:
-- Read `session.json` to find completed agents
-- Validate their deliverables still exist on disk
-- Restore git checkpoints
-- Skip finished agents, continue from the next one
-
----
-
-## Pipeline Phases
-
-```
-Phase 1    Pre-Recon         nmap, subfinder, whatweb, source code analysis
-Phase 2    Recon             Live browser exploration + API mapping
-Phase 2.5  Counter-Deception Honeypot/canary/tarpit detection
-Phase 3+4  Vuln + Exploit    6 categories in parallel (SQLi, XSS, auth bypass,
-                             authz bypass, SSRF, business logic)
-Phase 3.5  Chain Analysis    Graph-based kill chain discovery + exploitation
-Phase 4.5  War Room          3-agent adversarial debate per finding
-Phase 5    Report            Final markdown report with war room verdicts
-Phase 5.5  Forensic Package  SHA-256 evidence chain + custody documents
-```
-
----
-
-## Configuration Reference
-
-### Retry Presets
-
-| Preset | Max Attempts | Initial Backoff | Max Backoff | Use Case |
-|--------|-------------|-----------------|-------------|----------|
-| `default` | 50 | 5 min | 30 min | Production scans |
-| `fast` | 5 | 10 sec | 2 min | Testing/development |
-| `subscription` | 100 | 5 min | 6 hours | Anthropic rate limit windows |
-
-### Model Tiers
-
-Override per-agent model selection via environment variables:
-
-```bash
-SHANNON_MODEL_SMALL=claude-haiku-4-5-20251001    # pre-recon, forensic
-SHANNON_MODEL_MEDIUM=claude-sonnet-4-6            # recon, report, skeptic
-SHANNON_MODEL_LARGE=claude-opus-4-6               # vuln agents, exploit agents, war room lead
-```
-
-### Authentication Types
-
-```yaml
-# Form-based login
-authentication:
-  type: form
-  loginUrl: https://app.com/login
-  username: admin
-  password: secret
-  totpSecret: JBSWY3DPEHPK3PXP     # optional TOTP 2FA
-
-# SSO
-authentication:
-  type: sso
-  loginUrl: https://app.com/login
-  ssoProvider: okta
-
-# API Key
-authentication:
-  type: api-key
-  apiKey: sk-xxxxx
-  customHeaders:
-    X-API-Key: sk-xxxxx
-
-# HTTP Basic
-authentication:
-  type: http-basic
-  username: admin
-  password: secret
-```
-
----
-
-## Development
-
-### Project Structure
-
-```
-shannon/
-  packages/
-    cli/              @keygraph/shannon (published to npm)
-    worker/           Private, runs in Docker container
-  prompts/            Plain text prompt templates
-  config/             JSON Schema for config validation
-  scripts/            Container utilities (entrypoint, TOTP, save-deliverable)
-  docker-compose.yml  Temporal server
-  Dockerfile          Two-stage Wolfi-based worker image
-```
-
-### Build
-
-```bash
-pnpm install
-pnpm build          # Builds both CLI (tsdown) and worker (tsc)
-pnpm typecheck      # Type-check without emitting
-pnpm lint           # Biome lint + format check
-pnpm lint:fix       # Auto-fix lint issues
-```
-
-### Edit prompts live
-
-In local mode (`SHANNON_LOCAL=1`), prompts are mounted into the container. Edit files in `prompts/` and they take effect immediately on the next agent run.
-
-Prompt variables:
-- `{{TARGET_URL}}` — target application URL
-- `{{REPO_PATH}}` — path to source code
-- `{{CONFIG_CONTEXT}}` — JSON config context
-- `{{LOGIN_INSTRUCTIONS}}` — authentication instructions
-- `{{>partial-name}}` — includes from `prompts/partials/`
-
-### Docker manual build
-
-```bash
-# Build worker image
-docker build -t shannon-worker:local .
-
-# Run Temporal
-docker compose up -d temporal
-
-# Run worker manually
-docker run --rm \
-  --network shannon_default \
-  -e TEMPORAL_ADDRESS=temporal:7233 \
-  -e TEMPORAL_TASK_QUEUE=shannon-scan-test \
-  -e SHANNON_TARGET=https://target.com \
-  -e ANTHROPIC_API_KEY=sk-ant-xxxxx \
-  -v $(pwd)/workspaces/test:/workspace \
-  -v $(pwd)/prompts:/app/prompts \
-  shannon-worker:local
-```
-
-### Stop Temporal
-
-```bash
-docker compose down
-# To also remove the SQLite volume:
-docker compose down -v
-```
-
----
-
-## Troubleshooting
-
-### "No LLM provider configured"
-Set exactly ONE of: `ANTHROPIC_API_KEY`, `AWS_BEDROCK_REGION`, `VERTEX_PROJECT_ID`, or `SHANNON_LLM_BASE_URL`.
-
-### "Exactly one LLM provider must be configured"
-You have multiple providers set. Unset the ones you don't want.
-
-### Docker connection errors
-Make sure Docker is running: `docker info`. On WSL2, ensure Docker Desktop has WSL integration enabled.
-
-### Rate limiting (429 errors)
-Switch to `subscription` retry preset in your config:
-```yaml
-pipeline:
-  retryPreset: subscription
-```
-
-### Temporal UI
-Access the Temporal dashboard at http://localhost:8080 to monitor workflow execution.
-
-### Agent timeout
-Default is 2 hours per agent. For large applications, this may not be enough. The activity will be retried per the retry preset.
+Only test systems you own or are explicitly authorized to assess. Shannon's proofs are benign by
+design, but running any scanner against a system without authorization may be illegal. You are
+responsible for how you use it.
 
 ---
 
