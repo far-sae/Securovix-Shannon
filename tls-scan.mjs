@@ -51,8 +51,23 @@ function tlsConnect(host, port, opts = {}, timeoutMs = 8000) {
   });
 }
 
-// Returns [{tool, severity, target, detail, raw}] — the same finding shape the engine records.
-export async function runTlsScan(host, port = 443) {
+// Pure classification of OBSERVED handshake facts → findings (no network). Exported so the zero-FP
+// verdict logic is unit-testable with synthetic inputs — the weak-key branch in particular cannot be
+// exercised with a real server (Node refuses to load an RSA key < 2048 bits as a server key).
+// `runTlsScan` gathers the facts via real handshakes and delegates here.
+//   authError       — OpenSSL's verification verdict for the presented cert (socket.authorizationError)
+//   cert            — getPeerCertificate() facts: valid_to, bits, nistCurve/asn1Curve
+//   legacyProtocols — deprecated protocol versions that actually negotiated ('TLSv1' / 'TLSv1.1')
+//   weakCipher      — the cipher name a weak-cipher-only handshake negotiated (or null)
+export function classifyTlsFindings({
+  host,
+  port = 443,
+  authError = null,
+  cert = {},
+  legacyProtocols = [],
+  weakCipher = null,
+  now = Date.now(),
+}) {
   const findings = [];
   const F = (severity, detail) => ({
     tool: 'tls-config',
@@ -62,11 +77,8 @@ export async function runTlsScan(host, port = 443) {
     raw: JSON.stringify({ tool: 'tls-config', detail }),
   });
 
-  const base = await tlsConnect(host, port);
-  if (!base.ok) return findings; // not TLS / unreachable → nothing to assert
-
   // ── Certificate verification errors (OpenSSL's own verdict) ──
-  const ae = base.authError;
+  const ae = authError;
   if (ae === 'CERT_HAS_EXPIRED') findings.push(F('high', 'TLS certificate has EXPIRED'));
   else if (ae === 'DEPTH_ZERO_SELF_SIGNED_CERT' || ae === 'SELF_SIGNED_CERT_IN_CHAIN')
     findings.push(F('medium', 'TLS certificate is self-signed (not issued by a trusted CA)'));
@@ -75,9 +87,8 @@ export async function runTlsScan(host, port = 443) {
   else if (ae === 'CERT_NOT_YET_VALID') findings.push(F('medium', 'TLS certificate is not yet valid'));
 
   // ── Certificate facts (expiry window, weak key) ──
-  const cert = base.cert || {};
   if (cert.valid_to) {
-    const daysLeft = (new Date(cert.valid_to).getTime() - Date.now()) / 86_400_000;
+    const daysLeft = (new Date(cert.valid_to).getTime() - now) / 86_400_000;
     if (daysLeft < 0 && ae !== 'CERT_HAS_EXPIRED') findings.push(F('high', 'TLS certificate has EXPIRED'));
     else if (daysLeft >= 0 && daysLeft < 14)
       findings.push(F('low', `TLS certificate expires in ${Math.floor(daysLeft)} day(s)`));
@@ -91,23 +102,47 @@ export async function runTlsScan(host, port = 443) {
     ['TLSv1', 'TLS 1.0'],
     ['TLSv1.1', 'TLS 1.1'],
   ]) {
-    // @SECLEVEL=0 lets our client offer legacy ciphers, so the handshake actually completes when a
-    // real server still supports the old protocol (otherwise the check would false-negative).
-    const r = await tlsConnect(host, port, { minVersion: ver, maxVersion: ver, ciphers: 'DEFAULT@SECLEVEL=0' });
-    if (r.ok && r.protocol === ver)
+    if (legacyProtocols.includes(ver))
       findings.push(F('medium', `Deprecated ${label} protocol is supported (disable it — TLS 1.2+ only)`));
   }
 
   // ── Weak cipher (best-effort; limited to ciphers the local OpenSSL will offer) ──
+  if (weakCipher && /rc4|3des|des-cbc3|null|export|md5/i.test(weakCipher))
+    findings.push(F('medium', `Weak TLS cipher accepted: ${weakCipher}`));
+
+  return findings;
+}
+
+// Returns [{tool, severity, target, detail, raw}] — the same finding shape the engine records.
+export async function runTlsScan(host, port = 443) {
+  const base = await tlsConnect(host, port);
+  if (!base.ok) return []; // not TLS / unreachable → nothing to assert
+
+  // Deprecated protocols: @SECLEVEL=0 lets our client offer legacy ciphers, so the handshake actually
+  // completes when a real server still supports the old protocol (otherwise this false-negatives).
+  const legacyProtocols = [];
+  for (const ver of ['TLSv1', 'TLSv1.1']) {
+    const r = await tlsConnect(host, port, { minVersion: ver, maxVersion: ver, ciphers: 'DEFAULT@SECLEVEL=0' });
+    if (r.ok && r.protocol === ver) legacyProtocols.push(ver);
+  }
+
+  // Weak cipher (best-effort; limited to ciphers the local OpenSSL will offer).
+  let weakCipher = null;
   try {
     const wc = await tlsConnect(host, port, {
       ciphers: 'DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:RC4-SHA:RC4-MD5:NULL-SHA:@SECLEVEL=0',
       minVersion: 'TLSv1',
       maxVersion: 'TLSv1.2',
     });
-    if (wc.ok && wc.cipher?.name && /rc4|3des|des-cbc3|null|export|md5/i.test(wc.cipher.name))
-      findings.push(F('medium', `Weak TLS cipher accepted: ${wc.cipher.name}`));
+    if (wc.ok && wc.cipher?.name) weakCipher = wc.cipher.name;
   } catch {}
 
-  return findings;
+  return classifyTlsFindings({
+    host,
+    port,
+    authError: base.authError,
+    cert: base.cert || {},
+    legacyProtocols,
+    weakCipher,
+  });
 }
