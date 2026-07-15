@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import express from 'express';
 import { parse as parseYaml } from 'yaml';
+import { crawl } from '../../crawler.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
+import { analyzeSurface } from './agent-understand.mjs';
 import {
   addVerified,
   initDb,
@@ -1582,6 +1584,74 @@ app.post('/api/verify/ip/remove', (req, res) => {
 });
 
 // ---- API: Start scan ----
+// ============================================================
+//  AI AGENT — "understand a target" (the recon/planning agent, step 1 of the autonomous engine)
+//  Crawls a target you OWN and builds a deterministic understanding (analyzeSurface, in its own
+//  unit-tested module): what it appears to be, where the risk concentrates, and a prioritized plan
+//  mapping the discovered surface to Shannon's proof classes. Deterministic (needs no API key — matches
+//  the engine-is-truth model); an LLM narrative is layered on top when a key is present.
+// ============================================================
+async function aiNarrative(understanding, key) {
+  if (!key) return null;
+  try {
+    const client = new Anthropic({ apiKey: key });
+    const model = process.env.SHANNON_QUICK_MODEL || process.env.SHANNON_MODEL || 'claude-haiku-4-5-20251001';
+    const msg = await client.messages.create({
+      model,
+      max_tokens: 300,
+      messages: [
+        {
+          role: 'user',
+          content:
+            'You are a penetration-test lead. In 2-3 sentences, say what this web app appears to be and where its risk concentrates, based ONLY on this reconnaissance JSON. Be concrete; do NOT invent findings or claim anything is exploitable.\n\n' +
+            JSON.stringify(understanding).slice(0, 4000),
+        },
+      ],
+    });
+    return (
+      (msg.content || [])
+        .map((c) => c.text || '')
+        .join('')
+        .trim() || null
+    );
+  } catch {
+    return null; // no credits / bad key / network → deterministic understanding still stands alone
+  }
+}
+
+app.post('/api/agent/understand', async (req, res) => {
+  const raw = (req.body?.target || '').trim();
+  if (!raw) return res.status(400).json({ error: 'Provide a target URL.' });
+  const target = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  let targetHost;
+  try {
+    targetHost = hostOf(target);
+  } catch {
+    return res.status(400).json({ error: 'That does not look like a valid URL.' });
+  }
+  // Same authorization gate as scanning: crawling is active HTTP against the target.
+  if (!isLocalHost(targetHost)) {
+    const user = getUser(req);
+    if (!user) return res.status(401).json({ error: 'Sign in to analyze an external target.' });
+    if (!isVerified(user.id, targetHost))
+      return res.status(403).json({
+        error: `Verify ownership of ${registrable(targetHost)} first (Domains page).`,
+        needsVerification: registrable(targetHost),
+      });
+  }
+  let surface;
+  try {
+    surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120 });
+  } catch (e) {
+    return res.status(502).json({ error: `Could not reach the target: ${e.message}` });
+  }
+  const understanding = analyzeSurface(surface);
+  const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
+  understanding.aiAvailable = !!key;
+  understanding.narrative = await aiNarrative(understanding, key);
+  res.json({ ok: true, understanding });
+});
+
 app.post('/api/scans', (req, res) => {
   const {
     targetUrl,

@@ -734,6 +734,7 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
     <button class="on" onclick="go('dash')" id="n-dash" aria-label="Dashboard"><span aria-hidden="true">&#9632;</span> Dashboard</button>
     <button onclick="go('new')" id="n-new" aria-label="New Scan"><span aria-hidden="true">&#9654;</span> New Scan</button>
     <button onclick="go('domains')" id="n-domains" aria-label="Domains"><span aria-hidden="true">&#9745;</span> Domains</button>
+    <button onclick="go('agent')" id="n-agent" aria-label="AI Agent"><span aria-hidden="true">&#9673;</span> AI Agent</button>
     <button onclick="go('code')" id="n-code" aria-label="Code Scan"><span aria-hidden="true">&#9876;</span> Code Scan</button>
     <button onclick="go('cfg')" id="n-cfg" aria-label="Settings"><span aria-hidden="true">&#9881;</span> Settings</button>
   </nav>
@@ -1686,7 +1687,7 @@ function go(p,d){
   if(POLL){clearInterval(POLL);POLL=null}
   if(EVT){EVT.close();EVT=null}
   closeDrawer();
-  ({dash:pgDash,new:pgNew,domains:pgDomains,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling})[p]?.(d);
+  ({dash:pgDash,new:pgNew,domains:pgDomains,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling})[p]?.(d);
 }
 async function api(u,o){
   const r=await fetch('/api'+u,o);
@@ -1711,6 +1712,61 @@ function sList(){
     </div>`).join('');
 }
 function view(id){CID=id;sList();go('scan',id)}
+
+// ===== AI AGENT (understand a target — recon/planning agent) =====
+async function pgAgent(){
+  CID=null;sList();
+  M.innerHTML=`<div class="pg" style="max-width:960px">
+    <h1 class="h-display" style="font-size:30px">AI Agent</h1>
+    <p style="color:var(--t2);margin-top:8px;max-width:660px;line-height:1.55">Point the agent at a target you own. It crawls the app and builds an <b style="color:var(--t0)">understanding</b> — what it appears to be, where the risk concentrates, and a prioritized plan of what to test. The surface map + plan are deterministic (no API key needed); an AI narrative is added when a key is set. This is the reconnaissance the autonomous agent reasons from.</p>
+    <div style="display:flex;gap:10px;margin-top:20px;max-width:660px;flex-wrap:wrap">
+      <input id="ag-target" placeholder="https://staging.yoursite.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')agentUnderstand()" style="flex:1;min-width:260px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
+      <button class="btn btn-p" id="ag-go" onclick="agentUnderstand()">Understand target</button>
+    </div>
+    <div style="color:var(--t3);font-size:12px;margin-top:8px">Only targets you've verified on the <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Domains</a> page (localhost is exempt).</div>
+    <div id="ag-out" style="margin-top:24px"></div>
+  </div>`;
+}
+async function agentUnderstand(){
+  const t=($('ag-target')?.value||'').trim();if(!t)return;
+  const out=$('ag-out'),btn=$('ag-go');btn.disabled=true;
+  out.innerHTML=`<div style="display:flex;align-items:center;gap:10px;color:var(--t2)"><span class="sp"></span> Crawling &amp; understanding <b style="color:var(--t0)">${H(t)}</b>…</div>`;
+  let data;
+  try{ data=await api('/agent/understand',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target:t})}); }
+  catch(e){
+    btn.disabled=false;
+    if(e.status===403){out.innerHTML=`<p style="color:var(--red)">You must verify ownership of this domain first. <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Go to Domains →</a></p>`;return;}
+    if(e.status===401){out.innerHTML=`<p style="color:var(--red)">Please <a href="#" onclick="go('cfg');return false" style="color:var(--acc2)">sign in</a> first.</p>`;return;}
+    out.innerHTML=`<p style="color:var(--red)">${H(e.message||'Something went wrong.')}</p>`;return;
+  }
+  btn.disabled=false;renderUnderstanding(data.understanding);
+}
+function renderUnderstanding(u){
+  if(!u){$('ag-out').innerHTML='';return;}
+  const sev={critical:'var(--red)',high:'#f59e0b',medium:'var(--acc2)',low:'var(--t2)'};
+  const stat=(l,v)=>`<div style="border:1px solid var(--brd);border-radius:10px;padding:12px 16px;min-width:96px;text-align:center"><div style="font-size:24px;font-weight:700;font-variant-numeric:tabular-nums">${v}</div><div style="color:var(--t2);font-size:12px;margin-top:2px">${l}</div></div>`;
+  const rows=(u.plan||[]).map(p=>`
+    <div style="border:1px solid var(--brd);border-radius:10px;padding:14px 16px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <strong style="font-size:14px">${H(p.cls)}</strong>
+        <span style="color:${sev[p.severity]||'var(--t2)'};font-size:11px;text-transform:uppercase;font-weight:700;letter-spacing:.04em">${H(p.severity)}</span>
+      </div>
+      <div style="color:var(--t2);margin:6px 0 8px;font-size:13px;line-height:1.5">${H(p.why)}</div>
+      <div style="font-size:12px;color:var(--t3);word-break:break-all">${(p.targets||[]).map(H).join('  ·  ')||'—'}</div>
+    </div>`).join('');
+  $('ag-out').innerHTML=`
+    ${u.narrative
+      ? `<div style="border-left:3px solid var(--acc2);padding:11px 15px;background:var(--s1);border-radius:8px;margin-bottom:20px"><div style="font-size:11px;text-transform:uppercase;color:var(--acc2);font-weight:700;letter-spacing:.05em;margin-bottom:5px">Agent read</div><div style="line-height:1.55">${H(u.narrative)}</div></div>`
+      : (u.aiAvailable===false?`<div style="color:var(--t3);font-size:12px;margin-bottom:18px;padding:9px 12px;border:1px dashed var(--brd);border-radius:8px">Add an Anthropic API key in <a href="#" onclick="go('cfg');return false" style="color:var(--acc2)">Settings</a> for an AI narrative. The plan below is fully deterministic and needs no key.</div>`:'')}
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${stat('Pages',u.stats.pages)}${stat('Parameters',u.stats.params)}${stat('Forms',u.stats.forms)}${stat('API paths',u.stats.apis)}
+    </div>
+    ${u.traits&&u.traits.length?`<p style="color:var(--t2);margin:2px 0 22px;line-height:1.55">This target ${u.traits.map(H).join(', ')}.</p>`:'<div style="height:8px"></div>'}
+    <h2 style="font-size:18px;margin:6px 0 14px">Prioritized test plan <span style="color:var(--t3);font-weight:400">(${(u.plan||[]).length})</span></h2>
+    ${rows||'<p style="color:var(--t2)">No obvious attack surface was discovered from the crawl. Try a deeper scan.</p>'}
+    <div style="margin-top:20px;display:flex;gap:10px"><button class="btn btn-g" onclick="prefillScan('${H(u.origin||'')}')">Run a full proof-based scan →</button></div>`;
+}
+function prefillScan(origin){ try{ if(origin&&typeof WIZ==='object')WIZ.targetUrl=origin; }catch(e){} go('new'); setTimeout(()=>{const i=$('turl');if(i&&origin&&!i.value)i.value=origin;},60); }
 
 // ===== DOMAINS (ownership verification) =====
 async function pgDomains(){
