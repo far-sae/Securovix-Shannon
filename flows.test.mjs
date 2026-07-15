@@ -6,7 +6,7 @@ import { after, test } from 'node:test';
 import { runAccessControl } from './access-control.mjs';
 import { runAttackSurface } from './attack-surface.mjs';
 import { runCloudExposure } from './cloud-exposure.mjs';
-import { cmdContext, sqliExtract } from './impact.mjs';
+import { cmdContext, sqliExtract, ssrfMetadata } from './impact.mjs';
 import { fetchT, injReq, setScanOrigin } from './purple-engine.mjs';
 
 const servers = [];
@@ -137,6 +137,35 @@ test('impact: constant-echo SQLi sink is not over-claimed as multiple distinct f
   assert.ok(s, 'still confirms the SQLi (injectability is real)');
   const facts = s.detail.match(/"10\.5\.2-MariaDB"/g) || [];
   assert.equal(facts.length, 1, 'the single constant value is reported exactly once, not four times');
+});
+
+test('impact: SSRF → cloud metadata proven on a fetching sink; non-fetching endpoint silent', async () => {
+  // Vulnerable sink server-side-fetches the URL param and reflects the body; /safe ignores it.
+  const origin = await mkHttp((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const tgt = [...u.searchParams.values()].find((v) => /^https?:\/\//.test(v)) || '';
+    res.writeHead(200, { 'content-type': 'text/html' });
+    if (u.pathname === '/fetch') {
+      if (/instance-identity\/document/.test(tgt))
+        return res.end(
+          '{"accountId":"123456789012","instanceId":"i-0abc123def","imageId":"ami-0dead","region":"us-east-1"}',
+        );
+      if (/169\.254\.169\.254\/latest\/meta-data\/$/.test(tgt))
+        return res.end('ami-id\ninstance-id\niam/\nlocal-ipv4\n');
+      return res.end(`fetched: ${tgt}`); // benign echo of the URL, no metadata content
+    }
+    return res.end('static page, performs no server-side fetch');
+  });
+  setScanOrigin(origin);
+  const imp = await ssrfMetadata(`${origin}/fetch?url=http://old.example/img`, { fetchT });
+  assert.ok(imp, 'SSRF metadata proven');
+  assert.ok(/CLOUD METADATA PROVEN/.test(imp.detail) && /instance-identity/.test(imp.detail));
+  assert.ok(/credentials path is deliberately never touched/i.test(imp.detail) || /never touched/i.test(imp.detail));
+  assert.equal(
+    await ssrfMetadata(`${origin}/safe?url=http://old.example/img`, { fetchT }),
+    null,
+    'non-fetching endpoint silent',
+  );
 });
 
 test('cloud-exposure: referenced public bucket flagged; private ignored', async () => {
