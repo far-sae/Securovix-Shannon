@@ -11,7 +11,7 @@ import { parse as parseYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
 import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
-import { PROBERS, fetchT, injReq, setScanOrigin } from '../../purple-engine.mjs';
+import { PROBERS, detectionRule, fetchT, injReq, setScanOrigin } from '../../purple-engine.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import {
@@ -1645,6 +1645,13 @@ function agentDeps(target) {
   return { probe, escalate, recrawl };
 }
 
+// Make each primary finding actionable (Strix-style remediation) using the engine's deterministic
+// per-class fix map — no LLM/credits needed. Impact findings inherit their parent vuln's fix.
+function annotateFixes(run) {
+  for (const f of run.findings || []) if (!f.impact && f.cls) f.fix = detectionRule(f.cls);
+  return run;
+}
+
 // Shared for the AI Agent endpoints: apply the same ownership gate as scanning (crawling is active HTTP
 // against the target), then crawl. `rawTarget` lets the SSE GET stream pass ?target=… (POSTs use body).
 // Returns { target, surface } or { status, error } to send back.
@@ -1695,7 +1702,7 @@ app.post('/api/agent/run', async (req, res) => {
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   try {
     const { probe, escalate, recrawl } = agentDeps(r.target);
-    const run = await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl });
+    const run = annotateFixes(await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl }));
     res.json({ ok: true, run });
   } catch (e) {
     res.status(500).json({ error: `Agent run failed: ${e.message}` });
@@ -1723,7 +1730,9 @@ app.get('/api/agent/run/stream', async (req, res) => {
   }
   try {
     const { probe, escalate, recrawl } = agentDeps(r.target);
-    const run = await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl, onStep: (s) => send(s) });
+    const run = annotateFixes(
+      await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl, onStep: (s) => send(s) }),
+    );
     send({ run }, 'done');
   } catch (e) {
     send({ message: `Agent run failed: ${e.message}` }, 'error');
