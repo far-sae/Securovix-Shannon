@@ -29,3 +29,6 @@ supabase/.branches/
 # graphify generated knowledge-graph outputs (regenerate with /graphify)
 graphify-out/
 .graphify_*
+
+# Chromium/Playwright crashpad stray log
+debug.log
