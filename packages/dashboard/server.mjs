@@ -10,6 +10,8 @@ import express from 'express';
 import { parse as parseYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
+import { PROBERS, setScanOrigin } from '../../purple-engine.mjs';
+import { runAgentLoop } from './agent-loop.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import {
   addVerified,
@@ -1619,37 +1621,61 @@ async function aiNarrative(understanding, key) {
   }
 }
 
-app.post('/api/agent/understand', async (req, res) => {
+// Shared for both AI Agent endpoints: apply the same ownership gate as scanning (crawling is active
+// HTTP against the target), then crawl. Returns { target, surface } or { status, error } to send back.
+async function agentGateAndCrawl(req) {
   const raw = (req.body?.target || '').trim();
-  if (!raw) return res.status(400).json({ error: 'Provide a target URL.' });
+  if (!raw) return { status: 400, error: 'Provide a target URL.' };
   const target = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  let targetHost;
+  let host;
   try {
-    targetHost = hostOf(target);
+    host = hostOf(target);
   } catch {
-    return res.status(400).json({ error: 'That does not look like a valid URL.' });
+    return { status: 400, error: 'That does not look like a valid URL.' };
   }
-  // Same authorization gate as scanning: crawling is active HTTP against the target.
-  if (!isLocalHost(targetHost)) {
+  if (!isLocalHost(host)) {
     const user = getUser(req);
-    if (!user) return res.status(401).json({ error: 'Sign in to analyze an external target.' });
-    if (!isVerified(user.id, targetHost))
-      return res.status(403).json({
-        error: `Verify ownership of ${registrable(targetHost)} first (Domains page).`,
-        needsVerification: registrable(targetHost),
-      });
+    if (!user) return { status: 401, error: 'Sign in to analyze an external target.' };
+    if (!isVerified(user.id, host))
+      return {
+        status: 403,
+        error: `Verify ownership of ${registrable(host)} first (Domains page).`,
+        needsVerification: registrable(host),
+      };
   }
-  let surface;
   try {
-    surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120 });
+    const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120 });
+    return { target, surface };
   } catch (e) {
-    return res.status(502).json({ error: `Could not reach the target: ${e.message}` });
+    return { status: 502, error: `Could not reach the target: ${e.message}` };
   }
-  const understanding = analyzeSurface(surface);
+}
+
+app.post('/api/agent/understand', async (req, res) => {
+  const r = await agentGateAndCrawl(req);
+  if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
+  const understanding = analyzeSurface(r.surface);
   const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
   understanding.aiAvailable = !!key;
   understanding.narrative = await aiNarrative(understanding, key);
   res.json({ ok: true, understanding });
+});
+
+// The AUTONOMOUS agent: understand → decide the probe tasks → RUN the real proof-based probers →
+// report confirmed (zero-FP) findings + a narrated timeline. Every finding is still gated by the
+// engine's benign proof marker — the agent chooses what to run, the engine decides what is REAL.
+app.post('/api/agent/run', async (req, res) => {
+  const r = await agentGateAndCrawl(req);
+  if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
+  try {
+    setScanOrigin(new URL(r.target).origin); // host-gate the probers' fetcher to this target only
+    const probe = (key, target) => (PROBERS[key] ? PROBERS[key].probe(target) : []);
+    const run = await runAgentLoop({ surface: r.surface, probe });
+    run.aiAvailable = !!(loadSettings().apiKey || process.env.ANTHROPIC_API_KEY);
+    res.json({ ok: true, run });
+  } catch (e) {
+    res.status(500).json({ error: `Agent run failed: ${e.message}` });
+  }
 });
 
 app.post('/api/scans', (req, res) => {

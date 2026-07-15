@@ -1764,9 +1764,47 @@ function renderUnderstanding(u){
     ${u.traits&&u.traits.length?`<p style="color:var(--t2);margin:2px 0 22px;line-height:1.55">This target ${u.traits.map(H).join(', ')}.</p>`:'<div style="height:8px"></div>'}
     <h2 style="font-size:18px;margin:6px 0 14px">Prioritized test plan <span style="color:var(--t3);font-weight:400">(${(u.plan||[]).length})</span></h2>
     ${rows||'<p style="color:var(--t2)">No obvious attack surface was discovered from the crawl. Try a deeper scan.</p>'}
-    <div style="margin-top:20px;display:flex;gap:10px"><button class="btn btn-g" onclick="prefillScan('${H(u.origin||'')}')">Run a full proof-based scan →</button></div>`;
+    <div style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-p" id="ag-run" onclick="agentRun()">&#9654; Run the agent — auto-test this plan</button>
+      <button class="btn btn-g" onclick="prefillScan('${H(u.origin||'')}')">Full proof-based scan &rarr;</button>
+    </div>
+    <div id="ag-run-out" style="margin-top:22px"></div>`;
 }
 function prefillScan(origin){ try{ if(origin&&typeof WIZ==='object')WIZ.targetUrl=origin; }catch(e){} go('new'); setTimeout(()=>{const i=$('turl');if(i&&origin&&!i.value)i.value=origin;},60); }
+async function agentRun(){
+  const t=($('ag-target')?.value||'').trim();if(!t)return;
+  const btn=$('ag-run'),out=$('ag-run-out');if(btn)btn.disabled=true;
+  out.innerHTML=`<div style="display:flex;align-items:center;gap:10px;color:var(--t2)"><span class="sp"></span> Agent working — running proof-based probes against the discovered vectors. This can take up to a minute…</div>`;
+  let data;
+  try{ data=await api('/agent/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target:t})}); }
+  catch(e){ if(btn)btn.disabled=false; out.innerHTML=`<p style="color:var(--red)">${H(e.message||'Agent run failed.')}</p>`; return; }
+  if(btn)btn.disabled=false; renderRun(data.run);
+}
+function renderRun(run){
+  if(!run){$('ag-run-out').innerHTML='';return;}
+  const ic={understand:'&#9713;',plan:'&#9636;',act:'&#9654;',confirm:'&#10003;',report:'&#9632;'};
+  const pc={understand:'var(--t2)',plan:'var(--t2)',act:'var(--acc2)',confirm:'var(--red)',report:'var(--grn)'};
+  const timeline=(run.steps||[]).map(s=>`
+    <div style="display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--brd)">
+      <span style="color:${pc[s.phase]||'var(--t2)'};font-weight:700;min-width:88px;text-transform:uppercase;font-size:11px;letter-spacing:.04em">${ic[s.phase]||'&middot;'} ${H(s.phase)}</span>
+      <span style="flex:1;font-size:13px;line-height:1.5;color:var(--t2)">${H(s.detail)}</span>
+    </div>`).join('');
+  const sev={critical:'var(--red)',high:'#f59e0b',medium:'var(--acc2)',low:'var(--t2)'};
+  const finds=(run.findings||[]).map(f=>`
+    <div style="border:1px solid var(--brd);border-left:3px solid ${sev[f.severity]||'var(--t2)'};border-radius:8px;padding:12px 14px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;gap:10px"><strong style="font-size:13px">${H(f.cls||f.tool||'finding')}</strong><span style="color:${sev[f.severity]||'var(--t2)'};font-size:11px;text-transform:uppercase;font-weight:700">${H(f.severity||'')}</span></div>
+      <div style="color:var(--t2);font-size:12.5px;margin-top:5px;line-height:1.5;word-break:break-word">${H((f.detail||'').toString().slice(0,300))}</div>
+      <div style="color:var(--t3);font-size:11px;margin-top:5px;word-break:break-all">${H(f.target||'')}</div>
+    </div>`).join('');
+  const n=run.stats?.confirmed||0;
+  $('ag-run-out').innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin:4px 0 14px">
+      <div style="font-size:15px;font-weight:700">Agent run complete</div>
+      <span class="bx ${n?'bx-o':'bx-g'}">${n} confirmed &middot; ${run.stats?.tasks||0} probes</span>
+    </div>
+    <div style="border:1px solid var(--brd);border-radius:10px;padding:4px 14px;margin-bottom:18px">${timeline}</div>
+    ${n?`<h2 style="font-size:17px;margin:6px 0 12px">Proven findings (${n})</h2>${finds}`:`<p style="color:var(--t2)">The agent proved nothing on this target — every probe abstained. That's the zero-FP guarantee working: no proof, no finding.</p>`}`;
+}
 
 // ===== DOMAINS (ownership verification) =====
 async function pgDomains(){
