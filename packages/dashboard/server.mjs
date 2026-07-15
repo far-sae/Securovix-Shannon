@@ -9,9 +9,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import express from 'express';
 import { parse as parseYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
+import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
-import { PROBERS, setScanOrigin } from '../../purple-engine.mjs';
-import { runAgentLoop } from './agent-loop.mjs';
+import { PROBERS, fetchT, injReq, setScanOrigin } from '../../purple-engine.mjs';
+import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import {
   addVerified,
@@ -1621,10 +1622,34 @@ async function aiNarrative(understanding, key) {
   }
 }
 
-// Shared for both AI Agent endpoints: apply the same ownership gate as scanning (crawling is active
-// HTTP against the target), then crawl. Returns { target, surface } or { status, error } to send back.
-async function agentGateAndCrawl(req) {
-  const raw = (req.body?.target || '').trim();
+// Build the agent's escalation + re-crawl closures for a given resolved target. escalate chains a
+// confirmed finding into a benign, read-only impact demonstrator; recrawl deepens the surface (or
+// re-crawls as a newly-obtained identity) each round.
+function agentDeps(target) {
+  const origin = new URL(target).origin;
+  setScanOrigin(origin); // host-gate the probers' fetcher to this target only
+  const probe = (key, t) => (PROBERS[key] ? PROBERS[key].probe(t) : []);
+  const escalate = async (cls, t) => {
+    const url = typeof t === 'string' ? t : t.url;
+    try {
+      if (cls === 'sqli' || cls === 'sqli-auth-bypass') return await sqliExtract(url, { fetchT, injReq });
+      if (cls === 'ssrf') return await ssrfMetadata(url, { fetchT });
+      if (cls === 'cmd-injection') return await cmdContext(url, { fetchT, injReq });
+    } catch {}
+    return null;
+  };
+  const recrawl = async ({ round, identity }) => {
+    const headers = identity?.headers || {};
+    return crawl({ target, maxPages: 25 * round, timeoutMs: 7000, maxRequests: 120 + 60 * round, headers });
+  };
+  return { probe, escalate, recrawl };
+}
+
+// Shared for the AI Agent endpoints: apply the same ownership gate as scanning (crawling is active HTTP
+// against the target), then crawl. `rawTarget` lets the SSE GET stream pass ?target=… (POSTs use body).
+// Returns { target, surface } or { status, error } to send back.
+async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
+  const raw = (rawTarget || '').trim();
   if (!raw) return { status: 400, error: 'Provide a target URL.' };
   const target = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   let host;
@@ -1661,21 +1686,49 @@ app.post('/api/agent/understand', async (req, res) => {
   res.json({ ok: true, understanding });
 });
 
-// The AUTONOMOUS agent: understand → decide the probe tasks → RUN the real proof-based probers →
-// report confirmed (zero-FP) findings + a narrated timeline. Every finding is still gated by the
-// engine's benign proof marker — the agent chooses what to run, the engine decides what is REAL.
+// The AUTONOMOUS agent (non-streaming fallback): understand → decide → RUN the real proof-based
+// probers → ESCALATE each hit into an impact demonstrator → report, across adaptive rounds. Every
+// finding is still gated by the engine's benign proof — the agent chooses what to run, the engine
+// decides what is REAL.
 app.post('/api/agent/run', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   try {
-    setScanOrigin(new URL(r.target).origin); // host-gate the probers' fetcher to this target only
-    const probe = (key, target) => (PROBERS[key] ? PROBERS[key].probe(target) : []);
-    const run = await runAgentLoop({ surface: r.surface, probe });
-    run.aiAvailable = !!(loadSettings().apiKey || process.env.ANTHROPIC_API_KEY);
+    const { probe, escalate, recrawl } = agentDeps(r.target);
+    const run = await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl });
     res.json({ ok: true, run });
   } catch (e) {
     res.status(500).json({ error: `Agent run failed: ${e.message}` });
   }
+});
+
+// Same autonomous campaign, STREAMED live over Server-Sent Events so the UI watches the agent work
+// step-by-step. EventSource is GET-only and same-origin (cookies carry auth); the target is a query
+// param. Gate/crawl errors are delivered as an SSE `error` event (the stream itself is always 200).
+app.get('/api/agent/run/stream', async (req, res) => {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  const send = (obj, event) => {
+    if (event) res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+  const r = await agentGateAndCrawl(req, req.query.target);
+  if (r.error) {
+    send({ message: r.error, needsVerification: r.needsVerification }, 'error');
+    return res.end();
+  }
+  try {
+    const { probe, escalate, recrawl } = agentDeps(r.target);
+    const run = await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl, onStep: (s) => send(s) });
+    send({ run }, 'done');
+  } catch (e) {
+    send({ message: `Agent run failed: ${e.message}` }, 'error');
+  }
+  res.end();
 });
 
 app.post('/api/scans', (req, res) => {

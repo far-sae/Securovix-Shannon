@@ -3,7 +3,7 @@
 // deterministically, without needing a live target. Real wiring uses PROBERS[key].probe.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildProbeTasks, runAgentLoop } from './packages/dashboard/agent-loop.mjs';
+import { buildProbeTasks, runAgentCampaign, runAgentLoop } from './packages/dashboard/agent-loop.mjs';
 
 const SURFACE = {
   origin: 'https://shop.example',
@@ -98,4 +98,55 @@ test('runAgentLoop: a throwing probe is contained, not fatal', async () => {
   const { findings, stats } = await runAgentLoop({ surface: SURFACE, probe });
   assert.equal(findings.length, 0, 'a crashing probe drops to no-finding, loop continues');
   assert.ok(stats.tasks > 0);
+});
+
+test('runAgentLoop: a confirmed finding is ESCALATED into an impact demonstrator', async () => {
+  const probe = async (key, target) =>
+    key === 'sqli' && /search\?q=x/.test(typeof target === 'string' ? target : target.url)
+      ? [{ tool: 'sqli-probe', severity: 'critical', target: 'u', detail: 'boolean-blind confirmed' }]
+      : [];
+  const escalate = async (cls) =>
+    cls === 'sqli'
+      ? { tool: 'impact-sqli-extract', severity: 'critical', target: 'u', detail: 'DB version="10.5.2-MariaDB"' }
+      : null;
+  const { findings, steps } = await runAgentLoop({ surface: SURFACE, probe, escalate });
+  assert.equal(findings.length, 2, 'the probe finding plus the escalated impact finding');
+  assert.ok(
+    findings.some((f) => f.impact && /MariaDB/.test(f.detail)),
+    'impact finding is tagged and present',
+  );
+  assert.ok(
+    steps.some((s) => s.phase === 'escalate'),
+    'an escalate step is narrated',
+  );
+});
+
+test('runAgentCampaign: multi-round — re-crawl exposes a new vector, then stops when dry (no spinning)', async () => {
+  const round2 = { ...SURFACE, pages: [...SURFACE.pages, { url: 'https://shop.example/admin?id=9' }] };
+  const probe = async (key, target) => {
+    const u = typeof target === 'string' ? target : target.url;
+    return key === 'sqli' && /\/admin\?id=9/.test(u)
+      ? [{ tool: 'sqli', severity: 'high', target: u, detail: 'x' }]
+      : [];
+  };
+  // round 2 crawl reveals /admin; round 3 crawl reveals nothing new → campaign must stop.
+  const recrawl = async () => round2;
+  const rounds = [];
+  const { stats, steps, findings } = await runAgentCampaign({
+    surface: SURFACE,
+    probe,
+    recrawl,
+    maxRounds: 4,
+    onStep: (s) => s.phase === 'round' && rounds.push(s),
+  });
+  assert.equal(stats.rounds, 2, 'ran round 1 + round 2, then stopped (round 3 crawl added no fresh task)');
+  assert.equal(rounds.length, 2, 'two round markers streamed');
+  assert.equal(stats.confirmed, 1, 'the vector revealed only in round 2 was found');
+  assert.ok(findings[0].round === 2, 'finding attributed to round 2');
+  assert.ok(steps.some((s) => s.phase === 'report'));
+});
+
+test('runAgentCampaign: with no recrawl it runs exactly one round', async () => {
+  const { stats } = await runAgentCampaign({ surface: SURFACE, probe: async () => [], maxRounds: 3 });
+  assert.equal(stats.rounds, 1);
 });
