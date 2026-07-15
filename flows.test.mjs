@@ -76,22 +76,67 @@ test('access-control: horizontal BOLA + vertical BFLA proven; secure endpoints n
   assert.ok(!findings.some((f) => /secure/.test(f.target)), 'no FP on secure endpoints');
 });
 
-test('impact: SQLi extracts DB version; cmd shows root; safe silent', async () => {
+test('impact: SQLi aggregates DB metadata; cmd proves root + captures read-only recon; safe silent', async () => {
+  // Mock a MySQL/MariaDB error channel (echoes the queried fact) and a shell (id oracle + nonce recon).
+  const DB = {
+    'version()': '10.5.2-MariaDB',
+    'current_user()': 'shopadmin@10.0.0.5',
+    'database()': 'shop_prod',
+    'information_schema.tables': '137',
+  };
   const origin = await mkHttp((req, res) => {
     const u = new URL(req.url, 'http://x');
     const val = [...u.searchParams.values()].join(' ');
     res.writeHead(200, { 'content-type': 'text/html' });
-    if (u.pathname === '/sqli')
-      return res.end(/extractvalue|version\(\)/i.test(val) ? "XPATH syntax error: '~10.5.2-MariaDB'" : 'ok');
-    if (u.pathname === '/cmd') return res.end(/(^|[;|`&])\s*id\b/i.test(val) ? 'uid=0(root) gid=0(root)' : 'ok');
+    if (u.pathname === '/sqli') {
+      if (/extractvalue/i.test(val)) {
+        const key = Object.keys(DB).find((k) => val.includes(k));
+        return res.end(key ? `XPATH syntax error: '~${DB[key]}'` : 'ok');
+      }
+      return res.end('ok');
+    }
+    if (u.pathname === '/cmd') {
+      const echo = [...val.matchAll(/echo (SX\w+)/g)].map((m) => m[1]);
+      if (echo.length === 2) {
+        // recon bundle → emit the two nonce markers wrapping realistic read-only output
+        return res.end(
+          `${echo[0]}\nroot\nweb-01\nLinux web-01 5.15.0-generic x86_64\nroot:x:0:0:root:/root:/bin/bash\n${echo[1]}`,
+        );
+      }
+      return res.end(/(^|[;|`&])\s*id\b/i.test(val) ? 'uid=0(root) gid=0(root) groups=0(root)' : 'ok');
+    }
     res.end('safe');
   });
   setScanOrigin(origin);
+
   const s = await sqliExtract(`${origin}/sqli?q=1`, { fetchT, injReq });
-  assert.ok(s && /10\.5\.2-MariaDB/.test(s.detail));
+  assert.ok(s, 'SQLi extraction confirmed');
+  // aggregated multiple facts, not just the version
+  for (const frag of ['10.5.2-MariaDB', 'shopadmin@10.0.0.5', 'shop_prod', 'readable table count', '137'])
+    assert.ok(s.detail.includes(frag), `detail names ${frag}`);
+
   const c = await cmdContext(`${origin}/cmd?x=1`, { fetchT, injReq });
-  assert.ok(c && /uid=0\(root\)/.test(c.detail) && /ROOT/.test(c.detail));
-  assert.equal(await sqliExtract(`${origin}/safe?q=1`, { fetchT, injReq }), null);
+  assert.ok(c && /uid=0\(root\)/.test(c.detail) && /ROOT/.test(c.detail), 'root RCE proven');
+  // captured the read-only recon evidence between the nonce markers
+  assert.ok(/root:x:0:0/.test(c.detail), 'captured /etc/passwd first line');
+  assert.ok(/web-01/.test(c.detail), 'captured hostname/uname');
+
+  assert.equal(await sqliExtract(`${origin}/safe?q=1`, { fetchT, injReq }), null, 'safe endpoint silent');
+});
+
+test('impact: constant-echo SQLi sink is not over-claimed as multiple distinct facts', async () => {
+  // A naive sink returns the SAME canned error for every extractvalue payload. We must report the one
+  // value once — never mislabel it as version AND user AND database AND table-count.
+  const origin = await mkHttp((req, res) => {
+    const val = [...new URL(req.url, 'http://x').searchParams.values()].join(' ');
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(/extractvalue/i.test(val) ? "XPATH syntax error: '~10.5.2-MariaDB'" : 'ok');
+  });
+  setScanOrigin(origin);
+  const s = await sqliExtract(`${origin}/sqli?q=1`, { fetchT, injReq });
+  assert.ok(s, 'still confirms the SQLi (injectability is real)');
+  const facts = s.detail.match(/"10\.5\.2-MariaDB"/g) || [];
+  assert.equal(facts.length, 1, 'the single constant value is reported exactly once, not four times');
 });
 
 test('cloud-exposure: referenced public bucket flagged; private ignored', async () => {
