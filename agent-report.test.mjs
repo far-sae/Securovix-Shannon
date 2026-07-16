@@ -1,7 +1,7 @@
 // Tests for the agent-run report formatter — the two tiers stay separated and labeled.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { toJson, toMarkdown } from './packages/dashboard/agent-report.mjs';
+import { toJson, toMarkdown, toSarif } from './packages/dashboard/agent-report.mjs';
 
 const RUN = {
   stats: { confirmed: 2, rounds: 2, tested: 24 },
@@ -45,6 +45,24 @@ test('toMarkdown: an empty run says nothing was proven (no invented content)', (
   const md = toMarkdown({ stats: { confirmed: 0, rounds: 1, tested: 10 }, findings: [], leads: [] }, {});
   assert.ok(/No proof, no finding/.test(md));
   assert.ok(!/## Potential/.test(md), 'no potential section when there are no leads');
+});
+
+test('toSarif: valid SARIF 2.1.0 with a result + rule per finding and mapped severity', () => {
+  const s = toSarif(RUN, { target: 'https://x', date: '2026-07-16' });
+  assert.equal(s.version, '2.1.0');
+  assert.ok(/sarif-2\.1\.0/.test(s.$schema));
+  const run0 = s.runs[0];
+  assert.equal(run0.results.length, 3, 'one result per finding');
+  // rules deduped by class (sqli appears twice: sqli + impact-sqli-extract are distinct ids)
+  const ids = new Set(run0.tool.driver.rules.map((r) => r.id));
+  assert.ok(ids.has('sqli') && ids.has('security-headers'));
+  // severity → SARIF level
+  const sqliResult = run0.results.find((r) => r.ruleId === 'sqli');
+  assert.equal(sqliResult.level, 'error', 'critical → error');
+  assert.equal(run0.results.find((r) => r.ruleId === 'security-headers').level, 'note', 'low → note');
+  // security-severity present for GitHub
+  assert.ok(run0.tool.driver.rules.every((r) => r.properties['security-severity'] !== undefined));
+  assert.ok(run0.results.every((r) => r.locations[0].physicalLocation.artifactLocation.uri));
 });
 
 test('toJson: round-trips the run with tier separation intact', () => {

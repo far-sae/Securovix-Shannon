@@ -68,3 +68,53 @@ export function toJson(run = {}, meta = {}) {
     2,
   );
 }
+
+// SARIF 2.1.0 — consumable by GitHub code scanning / CI. Only the PROVEN (confirmed) findings become
+// results (SARIF is for real findings); the potential tier is intentionally excluded.
+const SARIF_LEVEL = { critical: 'error', high: 'error', medium: 'warning', low: 'note', info: 'note' };
+const SEV_SCORE = { critical: 9.5, high: 8, medium: 5, low: 3, info: 1 };
+export function toSarif(run = {}, meta = {}) {
+  const rules = new Map();
+  const results = (run.findings || []).map((f) => {
+    const id = String(f.cls || f.tool || 'finding');
+    if (!rules.has(id))
+      rules.set(id, {
+        id,
+        name: id,
+        shortDescription: { text: id },
+        help: { text: f.fix || 'See the Shannon agent report for remediation.' },
+        properties: { 'security-severity': String(SEV_SCORE[f.severity] ?? 0), tags: ['security'] },
+      });
+    let uri = f.target || meta.target || '';
+    try {
+      new URL(uri);
+    } catch {
+      uri = meta.target || uri;
+    }
+    return {
+      ruleId: id,
+      level: SARIF_LEVEL[f.severity] || 'warning',
+      message: { text: String(f.detail || id).slice(0, 400) },
+      locations: [{ physicalLocation: { artifactLocation: { uri } } }],
+      properties: { severity: f.severity, impact: !!f.impact, fix: f.fix || null },
+    };
+  });
+  return {
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    version: '2.1.0',
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: 'Securovix Shannon (Agent)',
+            version: '1.0.0',
+            informationUri: 'https://securovix.com',
+            rules: [...rules.values()],
+          },
+        },
+        results,
+        properties: { target: meta.target || null, scannedAt: meta.date || null },
+      },
+    ],
+  };
+}

@@ -23,7 +23,7 @@ import {
 } from '../../purple-engine.mjs';
 import { diffRuns } from './agent-history.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
-import { toJson, toMarkdown } from './agent-report.mjs';
+import { toJson, toMarkdown, toSarif } from './agent-report.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import { locateFinding } from './code-locate.mjs';
 import {
@@ -1955,6 +1955,7 @@ app.post('/api/agent/report', (req, res) => {
   if (!run || typeof run !== 'object') return res.status(400).json({ error: 'No run to report.' });
   const meta = { target: target || null, date: new Date().toISOString().slice(0, 10) };
   if (format === 'json') return res.type('application/json').send(toJson(run, meta));
+  if (format === 'sarif') return res.type('application/json').send(JSON.stringify(toSarif(run, meta), null, 2));
   return res.type('text/markdown').send(toMarkdown(run, meta));
 });
 
