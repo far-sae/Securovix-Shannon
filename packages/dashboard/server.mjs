@@ -1959,6 +1959,46 @@ app.post('/api/agent/report', (req, res) => {
   return res.type('text/markdown').send(toMarkdown(run, meta));
 });
 
+// REPEATER — craft & replay a single request to a target you own and see the raw response (manual
+// verification, à la Burp/Caido Repeater). Same ownership gate as scans; the engine's fetchT blocks
+// internal/metadata hosts (SSRF guard) and follows redirects safely. Only the supplied headers are sent.
+const REPLAY_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
+app.post('/api/agent/replay', async (req, res) => {
+  const { method = 'GET', url, headers = {}, body } = req.body || {};
+  if (!url || typeof url !== 'string') return res.status(400).json({ error: 'Provide a URL.' });
+  let host;
+  try {
+    host = hostOf(url);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL.' });
+  }
+  if (!isLocalHost(host)) {
+    const user = getUser(req);
+    if (!user) return res.status(401).json({ error: 'Sign in first.' });
+    if (!isVerified(user.id, host))
+      return res.status(403).json({
+        error: `Verify ownership of ${registrable(host)} first (Domains page).`,
+        needsVerification: registrable(host),
+      });
+  }
+  const m = String(method).toUpperCase();
+  if (!REPLAY_METHODS.has(m)) return res.status(400).json({ error: 'Unsupported method.' });
+  try {
+    setSessionHeaders({}); // send ONLY the headers the user supplied (don't leak a prior run's session)
+    setScanOrigin(new URL(url).origin);
+    const t0 = Date.now();
+    const r = await fetchT(url, { method: m, headers: headers || {}, body: body || undefined }, 12000);
+    const timeMs = Date.now() - t0;
+    const hdrs = {};
+    try {
+      if (r.headers?.forEach) r.headers.forEach((v, k) => (hdrs[k] = v));
+    } catch {}
+    res.json({ ok: true, status: r.status, timeMs, headers: hdrs, body: String(r.body || '').slice(0, 200_000) });
+  } catch (e) {
+    res.status(502).json({ error: `Request failed: ${e.message}` });
+  }
+});
+
 // CODE LOCATOR — bridge a proven finding to the likely vulnerable line in pasted source (first step
 // toward a fix/patch). Pure local analysis of code the caller provides; touches no target.
 app.post('/api/agent/locate', (req, res) => {

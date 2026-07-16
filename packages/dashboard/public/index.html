@@ -1764,7 +1764,41 @@ async function pgAgent(){
         <div id="mon-list" style="margin-top:12px"></div>
       </div>
     </details>
+    <details style="margin-top:12px;max-width:660px">
+      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; Repeater — edit &amp; replay a request</summary>
+      <div style="margin-top:10px">
+        <p style="color:var(--t3);font-size:12px;margin:0 0 8px;line-height:1.5">Craft a request to a target you own and see the raw response — for manual verification. Same ownership gate as scans; internal/metadata hosts are blocked.</p>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <select id="rp-method" style="flex:0 0 auto;padding:9px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select>
+          <input id="rp-url" placeholder="https://staging.yoursite.com/api/x?id=1" spellcheck="false" style="flex:1;min-width:0;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
+        </div>
+        <textarea id="rp-headers" rows="3" placeholder="Headers, one per line&#10;Cookie: sid=abc123&#10;Content-Type: application/json" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;resize:vertical;font-family:ui-monospace,monospace;box-sizing:border-box;margin-bottom:6px"></textarea>
+        <textarea id="rp-body" rows="2" placeholder="Request body (POST/PUT/PATCH)" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;resize:vertical;font-family:ui-monospace,monospace;box-sizing:border-box"></textarea>
+        <div style="margin-top:6px"><button class="btn btn-p" onclick="repeaterSend()">Send</button></div>
+        <div id="rp-out" style="margin-top:10px"></div>
+      </div>
+    </details>
     <div id="ag-out" style="margin-top:24px"></div>
+  </div>`;
+}
+async function repeaterSend(){
+  const method=(($('rp-method')||{}).value||'GET'),url=($('rp-url')?.value||'').trim(),out=$('rp-out');
+  if(!out)return;
+  if(!url){out.innerHTML='<span style="color:var(--red);font-size:12px">Enter a URL.</span>';return;}
+  const headers={};(($('rp-headers')?.value||'').split(/\n/)).forEach(l=>{const i=l.indexOf(':');if(i>0)headers[l.slice(0,i).trim()]=l.slice(i+1).trim();});
+  const body=($('rp-body')?.value||'');
+  out.innerHTML='<span class="sp"></span>';
+  let r,j;
+  try{ r=await fetch('/api/agent/replay',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({method,url,headers,body:body||undefined})}); j=await r.json().catch(()=>({})); }
+  catch(e){ out.innerHTML=`<span style="color:var(--red);font-size:12px">${H(e.message||'Failed.')}</span>`; return; }
+  if(!r.ok){ out.innerHTML=`<span style="color:var(--red);font-size:12px">${H(j.error||('HTTP '+r.status))}${j.needsVerification?` <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Verify →</a>`:''}</span>`; return; }
+  const hh=Object.entries(j.headers||{}).map(([k,v])=>`${H(k)}: ${H(v)}`).join('\n');
+  const stColor=j.status>=200&&j.status<300?'var(--grn)':j.status>=400?'var(--red)':(j.status?'var(--acc2)':'var(--t3)');
+  const mono='font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all';
+  out.innerHTML=`<div>
+    <div style="margin-bottom:6px;font-size:12px"><span style="color:${stColor};font-weight:700">${j.status||'blocked/unreachable'}</span> <span style="color:var(--t3)">${j.timeMs||0}ms</span></div>
+    <div style="${mono};color:var(--t3);max-height:120px;overflow:auto;border:1px solid var(--brd);border-radius:6px;padding:8px;margin-bottom:6px">${H(hh)||'(no headers)'}</div>
+    <div style="${mono};color:var(--t2);max-height:300px;overflow:auto;border:1px solid var(--brd);border-radius:6px;padding:8px">${H((j.body||'').slice(0,20000))||'(empty body)'}</div>
   </div>`;
 }
 async function agentMonitors(){
