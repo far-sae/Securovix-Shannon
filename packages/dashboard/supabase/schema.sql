@@ -48,6 +48,21 @@ create table if not exists public.shannon_verified_domains (
 create index if not exists shannon_verified_domains_user_idx on public.shannon_verified_domains (user_id);
 
 -- ============================================================
+-- 3b. Agent run history (regression tracking) — one row per completed AI-Agent run.
+-- ============================================================
+create table if not exists public.shannon_agent_runs (
+  id          text primary key,
+  user_id     text not null,
+  target      text,
+  created_at  bigint not null,
+  stats       jsonb,
+  findings    jsonb,
+  leads       jsonb
+);
+create index if not exists shannon_agent_runs_user_idx
+  on public.shannon_agent_runs (user_id, created_at desc);
+
+-- ============================================================
 -- 4. Row-Level Security
 -- We use the SERVICE_ROLE key from the server, which bypasses RLS, so we just
 -- need the tables to exist. If you ever expose them to the anon key, add
@@ -56,4 +71,5 @@ create index if not exists shannon_verified_domains_user_idx on public.shannon_v
 alter table public.shannon_users             enable row level security;
 alter table public.shannon_leaderboard        enable row level security;
 alter table public.shannon_verified_domains   enable row level security;
+alter table public.shannon_agent_runs         enable row level security;
 -- (No policies defined → anon role gets nothing. Service role bypasses RLS.)

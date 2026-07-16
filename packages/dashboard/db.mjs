@@ -21,6 +21,8 @@ const SHANNON_HOME = join(os.homedir(), '.shannon');
 const USERS_PATH = join(SHANNON_HOME, 'users.json');
 const LEADERBOARD_PATH = join(SHANNON_HOME, 'leaderboard.json');
 const VERIFIED_PATH = join(SHANNON_HOME, 'verified-domains.json');
+const RUNS_PATH = join(SHANNON_HOME, 'agent-runs.json');
+const MAX_RUNS_PER_USER = 50; // keep run history bounded in memory / storage
 
 // ---- Supabase config (only used when both env vars are set) ----
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
@@ -31,6 +33,7 @@ const USE_SUPABASE = !!(SUPABASE_URL && SUPABASE_KEY);
 let _users = {};
 let _lb = {};
 let _verified = {}; // { [userId]: { [domain]: { verifiedAt, method } } }
+let _runs = {}; // { [userId]: [ { id, target, createdAt, stats, findings, leads }, … newest first ] }
 let _ready = false;
 
 function ensureHome() {
@@ -122,8 +125,27 @@ export async function initDb() {
         if (!_verified[r.user_id]) _verified[r.user_id] = {};
         _verified[r.user_id][r.domain] = { verifiedAt: r.verified_at || null, method: r.method || null };
       }
+      // Non-fatal: agent-run history table may not exist yet.
+      let runRows = [];
+      try {
+        runRows = await sb('/shannon_agent_runs?select=*&order=created_at.desc&limit=1000');
+      } catch (e) {
+        console.warn('[db] agent_runs hydrate skipped (run the migration?):', e.message);
+        runRows = [];
+      }
+      _runs = {};
+      for (const r of runRows || []) {
+        (_runs[r.user_id] ||= []).push({
+          id: r.id,
+          target: r.target,
+          createdAt: r.created_at ? Number(r.created_at) : Date.now(),
+          stats: r.stats || {},
+          findings: r.findings || [],
+          leads: r.leads || [],
+        });
+      }
       console.log(
-        `[db] Hydrated ${Object.keys(_users).length} users · ${Object.keys(_lb).length} providers · ${vRows?.length || 0} verified domains from Supabase`,
+        `[db] Hydrated ${Object.keys(_users).length} users · ${Object.keys(_lb).length} providers · ${vRows?.length || 0} verified domains · ${runRows?.length || 0} agent runs from Supabase`,
       );
     } catch (e) {
       console.error('[db] Supabase hydration FAILED — server cannot start safely:', e.message);
@@ -146,8 +168,58 @@ export async function initDb() {
     } catch {
       _verified = {};
     }
+    try {
+      _runs = JSON.parse(readFileSync(RUNS_PATH, 'utf-8'));
+    } catch {
+      _runs = {};
+    }
   }
   _ready = true;
+}
+
+// ---- Agent run history (regression tracking) ----
+// rec = { id, target, createdAt, stats, findings, leads }. Newest-first, capped per user.
+export function saveAgentRun(userId, rec) {
+  if (!userId || !rec?.id) return;
+  const list = (_runs[userId] ||= []);
+  list.unshift(rec);
+  if (list.length > MAX_RUNS_PER_USER) list.length = MAX_RUNS_PER_USER;
+  if (USE_SUPABASE) {
+    sb('/shannon_agent_runs', {
+      method: 'POST',
+      headers: { prefer: 'return=minimal' },
+      body: JSON.stringify([
+        {
+          id: rec.id,
+          user_id: userId,
+          target: rec.target || null,
+          created_at: rec.createdAt || Date.now(),
+          stats: rec.stats || {},
+          findings: rec.findings || [],
+          leads: rec.leads || [],
+        },
+      ]),
+    }).catch((e) => console.error('[db] agent-run save failed:', e.message));
+  } else {
+    try {
+      ensureHome();
+      writeFileSync(RUNS_PATH, JSON.stringify(_runs, null, 2));
+    } catch (e) {
+      console.error('[db] agent-run local write failed:', e.message);
+    }
+  }
+}
+
+// Summaries (no findings payload) for a user, optionally filtered to one target, newest first.
+export function listAgentRuns(userId, target) {
+  const list = _runs[userId] || [];
+  return list
+    .filter((r) => !target || r.target === target)
+    .map((r) => ({ id: r.id, target: r.target, createdAt: r.createdAt, stats: r.stats || {} }));
+}
+
+export function getAgentRun(userId, id) {
+  return (_runs[userId] || []).find((r) => r.id === id) || null;
 }
 
 export function isReady() {

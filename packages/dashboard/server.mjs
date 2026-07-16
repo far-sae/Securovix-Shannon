@@ -12,18 +12,22 @@ import { crawl } from '../../crawler.mjs';
 import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import { PROBERS, detectionRule, fetchT, injReq, setScanOrigin } from '../../purple-engine.mjs';
+import { diffRuns } from './agent-history.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
 import { toJson, toMarkdown } from './agent-report.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import { locateFinding } from './code-locate.mjs';
 import {
   addVerified,
+  getAgentRun,
   initDb,
   isSupabase,
+  listAgentRuns,
   loadLeaderboard,
   loadUsers,
   loadVerified,
   removeVerified,
+  saveAgentRun,
   saveLeaderboard,
   saveUsers,
 } from './db.mjs';
@@ -1713,6 +1717,7 @@ app.post('/api/agent/run', async (req, res) => {
       fetchText,
       confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
     });
+    run.savedId = persistRun(req, r.target, run);
     res.json({ ok: true, run });
   } catch (e) {
     res.status(500).json({ error: `Agent run failed: ${e.message}` });
@@ -1747,6 +1752,7 @@ app.get('/api/agent/run/stream', async (req, res) => {
       fetchText,
       confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
     });
+    run.savedId = persistRun(req, r.target, run);
     send({
       phase: 'leads',
       detail: `Gathered ${run.leads.length} potential lead(s) for manual review — UNPROVEN, kept separate from the ${run.stats.confirmed} confirmed finding(s).`,
@@ -1756,6 +1762,53 @@ app.get('/api/agent/run/stream', async (req, res) => {
     send({ message: `Agent run failed: ${e.message}` }, 'error');
   }
   res.end();
+});
+
+// Persist a completed run for regression tracking (only when logged in). Best-effort; never throws.
+function persistRun(req, target, run) {
+  try {
+    const user = getUser(req);
+    if (!user) return null;
+    const id = randomUUID().slice(0, 12);
+    saveAgentRun(user.id, {
+      id,
+      target,
+      createdAt: Date.now(),
+      stats: run.stats || {},
+      findings: run.findings || [],
+      leads: run.leads || [],
+    });
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+// Run history + regression diff (per user).
+app.get('/api/agent/runs', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in to see run history.' });
+  res.json({ ok: true, runs: listAgentRuns(user.id, req.query.target || undefined) });
+});
+app.get('/api/agent/runs/:id', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in first.' });
+  const run = getAgentRun(user.id, req.params.id);
+  if (!run) return res.status(404).json({ error: 'Run not found.' });
+  res.json({ ok: true, run });
+});
+app.get('/api/agent/runs/:id/diff/:prevId', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in first.' });
+  const curr = getAgentRun(user.id, req.params.id);
+  const prev = getAgentRun(user.id, req.params.prevId);
+  if (!curr || !prev) return res.status(404).json({ error: 'Run not found.' });
+  res.json({
+    ok: true,
+    diff: diffRuns(prev, curr),
+    curr: { id: curr.id, createdAt: curr.createdAt },
+    prev: { id: prev.id, createdAt: prev.createdAt },
+  });
 });
 
 // AGENT REPORT — format a completed run as a shareable Markdown or JSON report. Pure formatting of

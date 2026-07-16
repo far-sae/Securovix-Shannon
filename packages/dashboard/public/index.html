@@ -1733,7 +1733,41 @@ async function pgAgent(){
       </div>
       <div id="ag-batch-out" style="margin-top:16px"></div>
     </details>
+    <details style="margin-top:12px;max-width:660px">
+      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none" onclick="setTimeout(agentHistory,0)">&#9656; Run history &amp; regressions</summary>
+      <div id="ag-hist" style="margin-top:12px;font-size:13px;color:var(--t2)">Loading…</div>
+    </details>
     <div id="ag-out" style="margin-top:24px"></div>
+  </div>`;
+}
+async function agentHistory(){
+  const t=($('ag-target')?.value||'').trim(),el=$('ag-hist');if(!el)return;
+  el.innerHTML='<span class="sp"></span>';
+  let data;
+  try{ data=await api('/agent/runs'+(t?('?target='+encodeURIComponent(t)):'')); }
+  catch(e){ el.innerHTML=e.status===401?`<span style="color:var(--t3)">Sign in to save &amp; compare run history (regression tracking).</span>`:`<span style="color:var(--red)">${H(e.message||'Failed.')}</span>`; return; }
+  const runs=data.runs||[];
+  if(!runs.length){ el.innerHTML='<span style="color:var(--t3)">No saved runs yet'+(t?' for this target':'')+'. Run the agent while signed in to start tracking regressions over time.</span>'; return; }
+  const fmt=(ms)=>{try{return new Date(ms).toISOString().slice(0,16).replace('T',' ')+' UTC'}catch(e){return ms}};
+  el.innerHTML=`
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${runs.slice(0,12).map(r=>`<div style="display:flex;gap:10px;align-items:center;border:1px solid var(--brd);border-radius:8px;padding:8px 10px"><span class="bx ${r.stats?.confirmed?'bx-o':'bx-g'}">${r.stats?.confirmed||0} proven</span><span style="color:var(--t3);font-size:12px">${fmt(r.createdAt)}</span><span style="color:var(--t3);font-size:11px;flex:1;word-break:break-all">${H(r.target||'')}</span></div>`).join('')}
+    </div>
+    ${runs.length>=2?`<div style="margin-top:10px"><button class="btn btn-p" style="padding:6px 11px;font-size:12px" onclick="agentDiff('${H(runs[0].id)}','${H(runs[1].id)}')">Compare newest two &rarr; regressions</button></div>`:''}
+    <div id="ag-diff" style="margin-top:12px"></div>`;
+}
+async function agentDiff(currId,prevId){
+  const el=$('ag-diff');if(!el)return;el.innerHTML='<span class="sp"></span>';
+  let data;
+  try{ data=await api(`/agent/runs/${encodeURIComponent(currId)}/diff/${encodeURIComponent(prevId)}`); }
+  catch(e){ el.innerHTML=`<span style="color:var(--red)">${H(e.message||'Diff failed.')}</span>`; return; }
+  const d=data.diff||{},s=d.summary||{};
+  const list=(arr,color,label)=>arr&&arr.length?`<div style="margin-top:8px"><div style="color:${color};font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em">${label} (${arr.length})</div>${arr.map(f=>`<div style="font-size:12px;color:var(--t2);margin-top:3px;word-break:break-all">${H(f.cls||f.tool||'')} — ${H(f.target||'')}</div>`).join('')}</div>`:'';
+  el.innerHTML=`<div style="border:1px solid var(--brd);border-radius:8px;padding:12px 14px">
+    <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;font-weight:700"><span style="color:var(--red)">${s.new||0} new</span><span style="color:var(--grn)">${s.fixed||0} fixed</span><span style="color:var(--t2)">${s.still||0} still present</span></div>
+    ${list(d.added,'var(--red)','New — regressions')}
+    ${list(d.removed,'var(--grn)','Fixed since last run')}
+    ${(!(d.added||[]).length&&!(d.removed||[]).length)?`<div style="color:var(--grn);font-size:12px;margin-top:8px">No change since the previous run.</div>`:''}
   </div>`;
 }
 async function agentUnderstand(){
