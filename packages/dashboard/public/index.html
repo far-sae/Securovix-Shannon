@@ -1834,8 +1834,10 @@ function appendStep(s,tl){
   row.innerHTML=`<span style="color:${pc[s.phase]||'var(--t2)'};font-weight:700;min-width:92px;text-transform:uppercase;font-size:11px;letter-spacing:.04em">${ic[s.phase]||'&middot;'} ${H(s.phase)}</span><span style="flex:1;font-size:13px;line-height:1.5;color:var(--t2)">${H(s.detail||'')}</span>`;
   tl.appendChild(row);
 }
+let AG_LAST_RUN=null;
 function finishRun(run,el,withLocate){
   if(!run||!el)return;
+  if(withLocate)AG_LAST_RUN=run;
   const n=run.stats?.confirmed||0,rounds=run.stats?.rounds||1,tested=run.stats?.tested||0;
   const sev={critical:'var(--red)',high:'#f59e0b',medium:'var(--acc2)',low:'var(--t2)'};
   const finds=(run.findings||[]).map((f,idx)=>`
@@ -1854,9 +1856,20 @@ function finishRun(run,el,withLocate){
       <div style="color:var(--t3);font-size:11px;margin-top:4px;word-break:break-all">${H(l.target||'')}</div>
     </div>`).join('');
   el.innerHTML=`
-    <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px;flex-wrap:wrap"><span class="bx ${n?'bx-o':'bx-g'}">${n} proven</span>${L.length?`<span class="bx" style="border-color:#f59e0b;color:#f59e0b">${L.length} potential</span>`:''}<span style="color:var(--t3);font-size:12px">${rounds} round${rounds>1?'s':''} &middot; ${tested} probes run</span></div>
+    <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px;flex-wrap:wrap"><span class="bx ${n?'bx-o':'bx-g'}">${n} proven</span>${L.length?`<span class="bx" style="border-color:#f59e0b;color:#f59e0b">${L.length} potential</span>`:''}<span style="color:var(--t3);font-size:12px">${rounds} round${rounds>1?'s':''} &middot; ${tested} probes run</span>${withLocate?`<span style="margin-left:auto;display:flex;gap:6px"><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="downloadReport('md')">Download .md</button><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="downloadReport('json')">.json</button></span>`:''}</div>
     ${n?`<h2 style="font-size:17px;margin:6px 0 12px">Proven findings (${n}) <span style="color:var(--grn);font-size:12px;font-weight:400">zero false positives</span></h2>${finds}`:`<p style="color:var(--t2)">The agent proved nothing on this target — every probe abstained. That's the zero-FP guarantee working: no proof, no finding.</p>`}
     ${L.length?`<div style="margin-top:22px;border-top:1px solid var(--brd);padding-top:16px"><h2 style="font-size:15px;margin:0 0 4px;color:#f59e0b">&#9888; Potential — needs review <span style="color:var(--t3);font-weight:400;font-size:13px">(${L.length}, UNPROVEN)</span></h2><p style="color:var(--t3);font-size:12px;margin:0 0 12px;line-height:1.45">These are NOT confirmed — the agent has no proof for them. They are surfaced for manual verification and kept strictly separate from the proven results above.</p>${leadCards}</div>`:''}`;
+}
+async function downloadReport(fmt){
+  if(!AG_LAST_RUN)return;
+  const target=($('ag-target')?.value||'').trim();
+  let r;
+  try{ r=await fetch('/api/agent/report',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({run:AG_LAST_RUN,target,format:fmt})}); }
+  catch(e){ return; }
+  const txt=await r.text();
+  const blob=new Blob([txt],{type:fmt==='json'?'application/json':'text/markdown'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`shannon-agent-report.${fmt==='json'?'json':'md'}`;
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>{try{URL.revokeObjectURL(a.href)}catch(e){}},1000);
 }
 let AG_LAST_FINDINGS=[];
 function renderLocate(findings){

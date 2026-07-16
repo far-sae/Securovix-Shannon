@@ -13,6 +13,7 @@ import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import { PROBERS, detectionRule, fetchT, injReq, setScanOrigin } from '../../purple-engine.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
+import { toJson, toMarkdown } from './agent-report.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import { locateFinding } from './code-locate.mjs';
 import {
@@ -1755,6 +1756,16 @@ app.get('/api/agent/run/stream', async (req, res) => {
     send({ message: `Agent run failed: ${e.message}` }, 'error');
   }
   res.end();
+});
+
+// AGENT REPORT — format a completed run as a shareable Markdown or JSON report. Pure formatting of
+// data the caller already has; touches no target.
+app.post('/api/agent/report', (req, res) => {
+  const { run, target, format } = req.body || {};
+  if (!run || typeof run !== 'object') return res.status(400).json({ error: 'No run to report.' });
+  const meta = { target: target || null, date: new Date().toISOString().slice(0, 10) };
+  if (format === 'json') return res.type('application/json').send(toJson(run, meta));
+  return res.type('text/markdown').send(toMarkdown(run, meta));
 });
 
 // CODE LOCATOR — bridge a proven finding to the likely vulnerable line in pasted source (first step

@@ -53,6 +53,38 @@ test('locateFinding: benign source yields no candidates (no over-claiming)', () 
   );
 });
 
+test('locateFinding: multi-language sinks — PHP, Java, Python, Go, C#, Ruby', () => {
+  const cases = [
+    // [class, target, code(one line), lang]
+    [
+      'sqli',
+      'https://x/user?id=1',
+      '$res = mysqli_query($db, "SELECT * FROM users WHERE id=" . $_GET[\'id\']);',
+      'PHP',
+    ],
+    [
+      'sqli',
+      'https://x/user?id=1',
+      'ResultSet rs = stmt.executeQuery("SELECT * FROM users WHERE id=" + request.getParameter("id"));',
+      'Java',
+    ],
+    ['cmd-injection', 'https://x/ping?host=1', 'os.system("ping " + request.args.get("host"))', 'Python'],
+    [
+      'cmd-injection',
+      'https://x/run?cmd=1',
+      'out, _ := exec.Command("sh", "-c", r.URL.Query().Get("cmd")).Output()',
+      'Go',
+    ],
+    ['ssrf', 'https://x/fetch?url=1', 'var resp = await httpClient.GetAsync(Request.Query["url"]);', 'C#'],
+    ['path-traversal', 'https://x/file?name=1', 'contents = File.read(params[:name])', 'Ruby'],
+    ['xss', 'https://x/p?q=1', 'echo $_GET["q"];', 'PHP'],
+  ];
+  for (const [cls, target, line, lang] of cases) {
+    const locs = locateFinding({ finding: { cls, target }, files: [{ path: `f.${lang}`, content: line }] });
+    assert.ok(locs.length >= 1 && locs[0].line === 1, `${lang} ${cls} should be located; got ${JSON.stringify(locs)}`);
+  }
+});
+
 test('locateFinding: unknown class → empty (never guesses)', () => {
   assert.deepEqual(
     locateFinding({
