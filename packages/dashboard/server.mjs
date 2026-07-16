@@ -14,6 +14,7 @@ import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstruc
 import { PROBERS, detectionRule, fetchT, injReq, setScanOrigin } from '../../purple-engine.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
+import { locateFinding } from './code-locate.mjs';
 import {
   addVerified,
   initDb,
@@ -1752,6 +1753,17 @@ app.get('/api/agent/run/stream', async (req, res) => {
     send({ message: `Agent run failed: ${e.message}` }, 'error');
   }
   res.end();
+});
+
+// CODE LOCATOR — bridge a proven finding to the likely vulnerable line in pasted source (first step
+// toward a fix/patch). Pure local analysis of code the caller provides; touches no target.
+app.post('/api/agent/locate', (req, res) => {
+  const { finding, code, filename } = req.body || {};
+  if (!finding || !code) return res.status(400).json({ error: 'Provide a finding and source code.' });
+  if (typeof code !== 'string' || code.length > 1_000_000)
+    return res.status(413).json({ error: 'Code exceeds 1MB — paste the specific route/handler file.' });
+  const locations = locateFinding({ finding, files: [{ path: filename || 'pasted-source', content: code }] });
+  res.json({ ok: true, locations });
 });
 
 app.post('/api/scans', (req, res) => {

@@ -1794,11 +1794,11 @@ function agentRun(){
   const t=($('ag-target')?.value||'').trim();if(!t)return;
   const btn=$('ag-run');if(btn)btn.disabled=true;
   if(AG_ES){try{AG_ES.close()}catch(e){}AG_ES=null;}
-  $('ag-run-out').innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin:4px 0 12px"><div style="font-size:15px;font-weight:700" id="ag-status">Agent working…</div><span class="sp" id="ag-spin"></span></div><div id="ag-tl" style="border:1px solid var(--brd);border-radius:10px;padding:4px 14px"></div><div id="ag-finds" style="margin-top:16px"></div>`;
+  $('ag-run-out').innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin:4px 0 12px"><div style="font-size:15px;font-weight:700" id="ag-status">Agent working…</div><span class="sp" id="ag-spin"></span></div><div id="ag-tl" style="border:1px solid var(--brd);border-radius:10px;padding:4px 14px"></div><div id="ag-finds" style="margin-top:16px"></div><div id="ag-locate" style="margin-top:20px"></div>`;
   const fin=()=>{if(btn)btn.disabled=false;const sp=$('ag-spin');if(sp)sp.remove();AG_ES=null;};
   AG_ES=streamAgent(t,{
     onStep:s=>appendStep(s,$('ag-tl')),
-    onDone:run=>{fin();const st=$('ag-status');if(st)st.textContent='Agent run complete';finishRun(run,$('ag-finds'));},
+    onDone:run=>{fin();const st=$('ag-status');if(st)st.textContent='Agent run complete';finishRun(run,$('ag-finds'));renderLocate((run&&run.findings)||[]);},
     onError:(msg,nv)=>{fin();const st=$('ag-status');if(st)st.textContent='Agent stopped';const tl=$('ag-tl');if(tl)tl.innerHTML=`<div style="padding:10px;color:var(--red)">${H(msg)}${nv?` <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Verify ownership →</a>`:(msg.indexOf('Sign in')>=0?` <a href="#" onclick="go('cfg');return false" style="color:var(--acc2)">Sign in →</a>`:'')}</div>`;}
   });
 }
@@ -1856,6 +1856,37 @@ function finishRun(run,el){
     <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px;flex-wrap:wrap"><span class="bx ${n?'bx-o':'bx-g'}">${n} proven</span>${L.length?`<span class="bx" style="border-color:#f59e0b;color:#f59e0b">${L.length} potential</span>`:''}<span style="color:var(--t3);font-size:12px">${rounds} round${rounds>1?'s':''} &middot; ${tested} probes run</span></div>
     ${n?`<h2 style="font-size:17px;margin:6px 0 12px">Proven findings (${n}) <span style="color:var(--grn);font-size:12px;font-weight:400">zero false positives</span></h2>${finds}`:`<p style="color:var(--t2)">The agent proved nothing on this target — every probe abstained. That's the zero-FP guarantee working: no proof, no finding.</p>`}
     ${L.length?`<div style="margin-top:22px;border-top:1px solid var(--brd);padding-top:16px"><h2 style="font-size:15px;margin:0 0 4px;color:#f59e0b">&#9888; Potential — needs review <span style="color:var(--t3);font-weight:400;font-size:13px">(${L.length}, UNPROVEN)</span></h2><p style="color:var(--t3);font-size:12px;margin:0 0 12px;line-height:1.45">These are NOT confirmed — the agent has no proof for them. They are surfaced for manual verification and kept strictly separate from the proven results above.</p>${leadCards}</div>`:''}`;
+}
+let AG_LAST_FINDINGS=[];
+function renderLocate(findings){
+  AG_LAST_FINDINGS=findings||[];
+  const el=$('ag-locate');if(!el)return;
+  if(!AG_LAST_FINDINGS.length){el.innerHTML='';return;}
+  el.innerHTML=`<details style="border-top:1px solid var(--brd);padding-top:16px">
+    <summary style="cursor:pointer;color:var(--acc2);font-size:14px;user-select:none">&#9656; Locate a finding in your source code <span style="color:var(--t3)">— first step toward a fix</span></summary>
+    <p style="color:var(--t3);font-size:12px;margin:10px 0;line-height:1.5">Shannon tests your live app (black-box), so it knows the vuln but not the line. Pick a proven finding, paste the relevant handler/file, and it points at the likely vulnerable line(s). Deterministic — best-effort candidates, not certainty.</p>
+    <select id="ag-fsel" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:13px;margin-bottom:8px">${AG_LAST_FINDINGS.map((f,i)=>`<option value="${i}">${H((f.cls||f.tool||'finding'))} — ${H((f.target||'').slice(0,64))}</option>`).join('')}</select>
+    <textarea id="ag-fcode" rows="8" placeholder="Paste the route/handler source file here…" style="width:100%;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12.5px;outline:0;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;box-sizing:border-box"></textarea>
+    <div style="margin-top:8px"><button class="btn btn-p" onclick="agentLocate()">Locate in code</button></div>
+    <div id="ag-floc" style="margin-top:12px"></div>
+  </details>`;
+}
+async function agentLocate(){
+  const idx=+(($('ag-fsel')||{}).value||0),code=(($('ag-fcode')||{}).value||'').trim(),out=$('ag-floc');
+  if(!code){if(out)out.innerHTML='<p style="color:var(--t3);font-size:12px">Paste some source first.</p>';return;}
+  const f=AG_LAST_FINDINGS[idx];if(!f||!out)return;
+  out.innerHTML='<span class="sp"></span>';
+  let data;
+  try{ data=await api('/agent/locate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({finding:f,code})}); }
+  catch(e){ out.innerHTML=`<p style="color:var(--red)">${H(e.message||'Locate failed.')}</p>`; return; }
+  const locs=data.locations||[];
+  out.innerHTML=locs.length
+    ? `<div style="color:var(--t3);font-size:12px;margin-bottom:8px">${locs.length} candidate location${locs.length>1?'s':''} (ranked):</div>`+locs.map(l=>`
+      <div style="border:1px solid var(--brd);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+        <div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--acc2)">${H(l.file)}:${l.line} <span style="color:var(--t3)">— ${H(l.why||'')}</span></div>
+        <div style="color:var(--t2);margin-top:5px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all">${H(l.snippet||'')}</div>
+      </div>`).join('')
+    : `<p style="color:var(--t2);font-size:12.5px">No obvious sink located in this source — try pasting the specific route handler, or the file that queries the database / runs the command for this endpoint.</p>`;
 }
 
 // ===== DOMAINS (ownership verification) =====
