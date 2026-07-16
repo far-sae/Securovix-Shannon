@@ -23,6 +23,22 @@ const pathOf = (u) => {
   }
 };
 
+// Bounded-concurrency runner: run worker(item, index) over items with at most `limit` in flight (the
+// "parallel agents"). Results are returned in the ORIGINAL order regardless of completion order.
+export async function runConcurrent(items = [], worker, limit = 4) {
+  const results = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await worker(items[i], i);
+    }
+  };
+  const lanes = Math.max(1, Math.min(limit, items.length || 1));
+  await Promise.all(Array.from({ length: lanes }, lane));
+  return results;
+}
+
 // Turn a crawled surface into an ordered, de-duplicated, bounded list of {key, target, label} probe
 // tasks. GET URLs (with params) get the injection probers; POST forms get the form probers; a GET form
 // is synthesized into a query URL; origin + API paths get the config/exposure probers.
@@ -78,7 +94,7 @@ export function buildProbeTasks(surface = {}, { maxTasks = 30, maxPer = 6 } = {}
 // One pass over a surface: run each (not-yet-tested) probe task; on a confirmed finding, escalate it
 // into an impact demonstrator. Returns findings (probe + impact), the narrated steps, and testedIds
 // (so a campaign can dedupe across rounds).
-export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 30, onStep } = {}) {
+export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 30, concurrency = 4, onStep } = {}) {
   const understanding = analyzeSurface(surface);
   const steps = [];
   const emit = (phase, detail) => {
@@ -98,43 +114,51 @@ export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 
   );
 
   const tasks = buildProbeTasks(surface, { maxTasks }).filter((t) => !(skip && skip.has(taskId(t))));
+  const lanes = Math.max(1, Math.min(Number(concurrency) || 4, 8));
   emit(
     'act',
-    `Running ${tasks.length} proof-based probe${tasks.length === 1 ? '' : 's'} against the discovered vectors…`,
+    `Dispatching ${tasks.length} proof-based probe${tasks.length === 1 ? '' : 's'} across ${Math.min(lanes, tasks.length) || 1} parallel agents…`,
   );
 
   const findings = [];
   const testedIds = [];
-  for (const task of tasks) {
-    testedIds.push(taskId(task));
-    let res = [];
-    try {
-      res = (await probe(task.key, task.target)) || [];
-    } catch {
-      res = [];
-    }
-    if (!res.length) continue;
-    for (const f of res) findings.push({ ...f, cls: task.key });
-    emit(
-      'confirm',
-      `${task.label} — CONFIRMED (${res.length}): ${String(res[0].detail || res[0].severity || '').slice(0, 160)}`,
-    );
-
-    // ESCALATE: chain the confirmed finding into a benign, read-only impact demonstrator.
-    if (escalate) {
-      let imp = null;
+  // Each task runs on one of `lanes` concurrent agents. Probers only READ the shared scan origin/session
+  // (set once per run), so concurrent probing is safe; array pushes are safe in the single-threaded loop.
+  await runConcurrent(
+    tasks,
+    async (task, i) => {
+      const agent = (i % lanes) + 1;
+      testedIds.push(taskId(task));
+      let res = [];
       try {
-        imp = await escalate(task.key, task.target);
+        res = (await probe(task.key, task.target)) || [];
       } catch {
-        imp = null;
+        res = [];
       }
-      if (imp) {
-        findings.push({ ...imp, cls: imp.tool || `impact:${task.key}`, impact: true });
-        emit('escalate', `↳ impact proven: ${String(imp.detail || '').slice(0, 200)}`);
-        if (imp.session) findings[findings.length - 1].session = imp.session;
+      if (!res.length) return;
+      for (const f of res) findings.push({ ...f, cls: task.key });
+      emit(
+        'confirm',
+        `[agent ${agent}] ${task.label} — CONFIRMED (${res.length}): ${String(res[0].detail || res[0].severity || '').slice(0, 150)}`,
+      );
+      // ESCALATE: chain the confirmed finding into a benign, read-only impact demonstrator.
+      if (escalate) {
+        let imp = null;
+        try {
+          imp = await escalate(task.key, task.target);
+        } catch {
+          imp = null;
+        }
+        if (imp) {
+          const rec = { ...imp, cls: imp.tool || `impact:${task.key}`, impact: true };
+          if (imp.session) rec.session = imp.session;
+          findings.push(rec);
+          emit('escalate', `↳ [agent ${agent}] impact proven: ${String(imp.detail || '').slice(0, 200)}`);
+        }
       }
-    }
-  }
+    },
+    lanes,
+  );
 
   emit(
     'report',

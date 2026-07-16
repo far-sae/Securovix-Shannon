@@ -3,7 +3,7 @@
 // deterministically, without needing a live target. Real wiring uses PROBERS[key].probe.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildProbeTasks, runAgentCampaign, runAgentLoop } from './packages/dashboard/agent-loop.mjs';
+import { buildProbeTasks, runAgentCampaign, runAgentLoop, runConcurrent } from './packages/dashboard/agent-loop.mjs';
 
 const SURFACE = {
   origin: 'https://shop.example',
@@ -149,4 +149,37 @@ test('runAgentCampaign: multi-round — re-crawl exposes a new vector, then stop
 test('runAgentCampaign: with no recrawl it runs exactly one round', async () => {
   const { stats } = await runAgentCampaign({ surface: SURFACE, probe: async () => [], maxRounds: 3 });
   assert.equal(stats.rounds, 1);
+});
+
+test('runConcurrent: preserves order, runs all items, and never exceeds the concurrency limit', async () => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const worker = async (n) => {
+    inFlight++;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight--;
+    return n * 2;
+  };
+  const items = [1, 2, 3, 4, 5, 6, 7];
+  const out = await runConcurrent(items, worker, 3);
+  assert.deepEqual(out, [2, 4, 6, 8, 10, 12, 14], 'results in original order');
+  assert.ok(maxInFlight <= 3, `never more than 3 in flight (saw ${maxInFlight})`);
+  assert.ok(maxInFlight >= 2, 'actually ran concurrently');
+});
+
+test('runAgentLoop: parallel dispatch — findings still aggregate; agents are labelled', async () => {
+  const probe = async (key, target) => {
+    const url = typeof target === 'string' ? target : target.url;
+    return key === 'sqli' && /search|item/.test(url)
+      ? [{ tool: 'sqli', severity: 'critical', target: url, detail: 'confirmed' }]
+      : [];
+  };
+  const { findings, steps } = await runAgentLoop({ surface: SURFACE, probe, concurrency: 4 });
+  assert.ok(findings.length >= 2, 'both sqli vectors confirmed under concurrency');
+  assert.ok(steps.some((s) => s.phase === 'act' && /parallel agents/.test(s.detail)));
+  assert.ok(
+    steps.some((s) => s.phase === 'confirm' && /\[agent \d\]/.test(s.detail)),
+    'confirm steps carry an agent label',
+  );
 });
