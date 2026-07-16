@@ -12,7 +12,15 @@ import { crawl } from '../../crawler.mjs';
 import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import { sendMonitorAlert } from '../../monitor.mjs';
-import { PROBERS, detectionRule, fetchT, injReq, setScanOrigin } from '../../purple-engine.mjs';
+import {
+  PROBERS,
+  detectionRule,
+  fetchT,
+  injReq,
+  login,
+  setScanOrigin,
+  setSessionHeaders,
+} from '../../purple-engine.mjs';
 import { diffRuns } from './agent-history.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
 import { toJson, toMarkdown } from './agent-report.mjs';
@@ -1641,9 +1649,10 @@ async function aiNarrative(understanding, key) {
 // Build the agent's escalation + re-crawl closures for a given resolved target. escalate chains a
 // confirmed finding into a benign, read-only impact demonstrator; recrawl deepens the surface (or
 // re-crawls as a newly-obtained identity) each round.
-function agentDeps(target) {
+function agentDeps(target, headers = {}) {
   const origin = new URL(target).origin;
   setScanOrigin(origin); // host-gate the probers' fetcher to this target only
+  setSessionHeaders(headers || {}); // authenticated probing when a session was supplied ({} resets it)
   const probe = (key, t) => (PROBERS[key] ? PROBERS[key].probe(t) : []);
   const escalate = async (cls, t) => {
     const url = typeof t === 'string' ? t : t.url;
@@ -1655,11 +1664,34 @@ function agentDeps(target) {
     return null;
   };
   const recrawl = async ({ round, identity }) => {
-    const headers = identity?.headers || {};
-    return crawl({ target, maxPages: 25 * round, timeoutMs: 7000, maxRequests: 120 + 60 * round, headers });
+    const h = identity?.headers ? { ...headers, ...identity.headers } : headers;
+    return crawl({ target, maxPages: 25 * round, timeoutMs: 7000, maxRequests: 120 + 60 * round, headers: h });
   };
   const fetchText = async (url) => (await fetchT(url)).body || ''; // host-gated to the target origin
   return { probe, escalate, recrawl, fetchText };
+}
+
+// Resolve an optional authenticated session from the request: a session Cookie, or a form login (which
+// we perform server-side → session cookie). The login URL must share the target's registrable domain
+// (or be localhost) so the server can't be used to POST credentials to an unrelated host.
+async function resolveAuthHeaders(req, target) {
+  const b = req.body || {};
+  const q = req.query || {};
+  const cookie = String(b.cookie || q.cookie || '').trim();
+  if (cookie) return { Cookie: cookie };
+  const loginUrl = String(b.loginUrl || q.loginUrl || '').trim();
+  const username = String(b.username || q.username || '').trim();
+  const password = String(b.password || q.password || '');
+  if (!loginUrl || !username) return {};
+  try {
+    const lh = hostOf(loginUrl);
+    const th = hostOf(target);
+    if (!isLocalHost(lh) && registrable(lh) !== registrable(th)) return {}; // cross-domain login → refuse
+    const sess = await login({ loginUrl, username, password });
+    return sess?.Cookie ? sess : {};
+  } catch {
+    return {};
+  }
 }
 
 // Make each primary finding actionable (Strix-style remediation) using the engine's deterministic
@@ -1693,8 +1725,9 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
       };
   }
   try {
-    const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120 });
-    return { target, surface };
+    const headers = await resolveAuthHeaders(req, target);
+    const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120, headers });
+    return { target, surface, headers };
   } catch (e) {
     return { status: 502, error: `Could not reach the target: ${e.message}` };
   }
@@ -1718,7 +1751,7 @@ app.post('/api/agent/run', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   try {
-    const { probe, escalate, recrawl, fetchText } = agentDeps(r.target);
+    const { probe, escalate, recrawl, fetchText } = agentDeps(r.target, r.headers);
     const run = annotateFixes(await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl }));
     run.leads = await gatherLeads(r.surface, {
       fetchText,
@@ -1751,7 +1784,7 @@ app.get('/api/agent/run/stream', async (req, res) => {
     return res.end();
   }
   try {
-    const { probe, escalate, recrawl, fetchText } = agentDeps(r.target);
+    const { probe, escalate, recrawl, fetchText } = agentDeps(r.target, r.headers);
     const run = annotateFixes(
       await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl, onStep: (s) => send(s) }),
     );

@@ -1724,6 +1724,18 @@ async function pgAgent(){
       <button class="btn btn-p" id="ag-go" onclick="agentUnderstand()">Understand target</button>
     </div>
     <div style="color:var(--t3);font-size:12px;margin-top:8px">Only targets you've verified on the <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Domains</a> page (localhost is exempt).</div>
+    <details style="margin-top:12px;max-width:660px">
+      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; Authenticated scan (optional — reach logged-in surface)</summary>
+      <div style="margin-top:10px">
+        <p style="color:var(--t3);font-size:12px;margin:0 0 8px;line-height:1.5">Give a session cookie, OR login credentials (Shannon logs in and reuses the session). The login URL must be on the same domain as the target. Prefer a cookie so no password travels in the URL.</p>
+        <input id="ag-cookie" placeholder="session cookie, e.g. sid=abc123; theme=dark" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box">
+        <div style="text-align:center;color:var(--t3);font-size:11px;margin:6px 0">— or —</div>
+        <div style="display:grid;gap:6px">
+          <input id="ag-loginurl" placeholder="login URL, e.g. https://site.com/login" spellcheck="false" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
+          <div style="display:flex;gap:6px"><input id="ag-user" placeholder="username" spellcheck="false" style="flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><input id="ag-pass" type="password" placeholder="password" style="flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"></div>
+        </div>
+      </div>
+    </details>
     <details style="margin-top:16px;max-width:660px">
       <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; Batch mode — run the agent across many targets</summary>
       <textarea id="ag-batch" rows="4" placeholder="https://a.example&#10;https://b.example&#10;https://c.example" style="width:100%;margin-top:10px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0;resize:vertical;font-family:inherit;box-sizing:border-box"></textarea>
@@ -1815,12 +1827,19 @@ async function agentDiff(currId,prevId){
     ${(!(d.added||[]).length&&!(d.removed||[]).length)?`<div style="color:var(--grn);font-size:12px;margin-top:8px">No change since the previous run.</div>`:''}
   </div>`;
 }
+function agentAuthBody(){
+  const cookie=($('ag-cookie')?.value||'').trim();
+  if(cookie)return{cookie};
+  const loginUrl=($('ag-loginurl')?.value||'').trim(),username=($('ag-user')?.value||'').trim(),password=($('ag-pass')?.value||'');
+  return (loginUrl&&username)?{loginUrl,username,password}:{};
+}
+function agentAuthQuery(){const a=agentAuthBody();return Object.keys(a).map(k=>'&'+k+'='+encodeURIComponent(a[k])).join('');}
 async function agentUnderstand(){
   const t=($('ag-target')?.value||'').trim();if(!t)return;
   const out=$('ag-out'),btn=$('ag-go');btn.disabled=true;
   out.innerHTML=`<div style="display:flex;align-items:center;gap:10px;color:var(--t2)"><span class="sp"></span> Crawling &amp; understanding <b style="color:var(--t0)">${H(t)}</b>…</div>`;
   let data;
-  try{ data=await api('/agent/understand',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target:t})}); }
+  try{ data=await api('/agent/understand',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target:t,...agentAuthBody()})}); }
   catch(e){
     btn.disabled=false;
     if(e.status===403){out.innerHTML=`<p style="color:var(--red)">You must verify ownership of this domain first. <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Go to Domains →</a></p>`;return;}
@@ -1861,7 +1880,7 @@ function renderUnderstanding(u){
 function prefillScan(origin){ try{ if(origin&&typeof WIZ==='object')WIZ.targetUrl=origin; }catch(e){} go('new'); setTimeout(()=>{const i=$('turl');if(i&&origin&&!i.value)i.value=origin;},60); }
 // Shared SSE runner — streams one agent run; callbacks fire per step / on done / on error.
 function streamAgent(target,{onStep,onDone,onError}={}){
-  const es=new EventSource('/api/agent/run/stream?target='+encodeURIComponent(target));
+  const es=new EventSource('/api/agent/run/stream?target='+encodeURIComponent(target)+(typeof agentAuthQuery==='function'?agentAuthQuery():''));
   let done=false;
   es.onmessage=e=>{try{onStep&&onStep(JSON.parse(e.data))}catch(x){}};
   es.addEventListener('done',e=>{done=true;try{es.close()}catch(x){}let run=null;try{run=JSON.parse(e.data).run}catch(x){}onDone&&onDone(run);});
