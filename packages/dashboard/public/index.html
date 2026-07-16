@@ -1908,9 +1908,33 @@ async function agentPatch(i){
     ${p.applicable&&p.after?`<div style="${mono};color:var(--red)">- ${H(p.before)}</div><div style="${mono};color:var(--grn)">+ ${H(p.after)}</div>`:`<div style="${mono};color:var(--t2)">${H(p.before)}</div>`}
     <div style="color:var(--t2);font-size:12px;margin-top:8px;line-height:1.45"><span style="color:var(--acc2);font-weight:700">Fix:</span> ${H(p.note||'')}</div>
     ${p.llm?`<div style="color:var(--t2);font-size:12px;margin-top:8px;border-top:1px dashed var(--brd);padding-top:8px"><span style="color:var(--acc2);font-weight:700">AI patch:</span><div style="${mono};margin-top:4px;color:var(--grn)">${H(p.llm)}</div></div>`:''}
-    ${p.patchedFile?`<div style="margin-top:8px"><button class="btn btn-p" style="padding:6px 11px;font-size:12px" onclick="copyPatched(${i})" id="ag-copy-${i}">Copy fixed file</button></div>`:''}
+    ${p.patchedFile?`<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-g" style="padding:6px 11px;font-size:12px" onclick="copyPatched(${i})" id="ag-copy-${i}">Copy fixed file</button></div>
+      <details style="margin-top:8px"><summary style="cursor:pointer;color:var(--acc2);font-size:12px;user-select:none">&#9656; Open a pull request with this fix</summary>
+        <div style="display:grid;gap:6px;margin-top:8px">
+          <input id="ag-pr-repo-${i}" placeholder="owner/repo" spellcheck="false" style="padding:8px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:7px;color:var(--t0);font-size:12px;outline:0">
+          <input id="ag-pr-path-${i}" placeholder="path/to/the/file.js (real path in the repo)" spellcheck="false" style="padding:8px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:7px;color:var(--t0);font-size:12px;outline:0">
+          <input id="ag-pr-token-${i}" type="password" placeholder="GitHub token (repo scope) — stays in your browser" style="padding:8px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:7px;color:var(--t0);font-size:12px;outline:0">
+          <div><button class="btn btn-p" style="padding:6px 11px;font-size:12px" onclick="agentOpenPR(${i})">Open pull request</button></div>
+          <div id="ag-pr-out-${i}" style="font-size:12px;word-break:break-all"></div>
+        </div>
+      </details>`:''}
     <div style="color:#f59e0b;font-size:11px;margin-top:8px">&#9888; ${H(p.disclaimer||'')}</div>
   </div>`;
+  if(p.patchedFile){ try{ const tk=localStorage.getItem('shannon_gh_token'),rp=localStorage.getItem('shannon_gh_repo'); const tf=$('ag-pr-token-'+i),rf=$('ag-pr-repo-'+i); if(tk&&tf)tf.value=tk; if(rp&&rf)rf.value=rp; }catch(e){} }
+}
+async function agentOpenPR(i){
+  const repo=(($('ag-pr-repo-'+i)||{}).value||'').trim(),path=(($('ag-pr-path-'+i)||{}).value||'').trim(),token=(($('ag-pr-token-'+i)||{}).value||'').trim(),content=AG_PATCHED[i],out=$('ag-pr-out-'+i);
+  if(!out)return;
+  if(!repo||!path||!token){out.innerHTML='<span style="color:var(--red)">Fill in repo, file path, and token.</span>';return;}
+  if(!content){out.innerHTML='<span style="color:var(--red)">No fixed file yet — click “Copy fixed file” first.</span>';return;}
+  try{localStorage.setItem('shannon_gh_token',token);localStorage.setItem('shannon_gh_repo',repo);}catch(e){}
+  out.innerHTML='<span class="sp"></span> opening…';
+  const f=AG_LOC&&AG_LOC.finding;
+  let r,j;
+  try{ r=await fetch('/api/agent/pr',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repo,path,content,token,finding:f})}); j=await r.json().catch(()=>({})); }
+  catch(e){ out.innerHTML=`<span style="color:var(--red)">${H(e.message||'PR failed.')}</span>`; return; }
+  if(!r.ok){ out.innerHTML=`<span style="color:var(--red)">${H(j.error||('HTTP '+r.status))}</span>`; return; }
+  out.innerHTML=`<span style="color:var(--grn)">&#10003; PR opened:</span> <a href="${H(j.url)}" target="_blank" rel="noopener" style="color:var(--acc2)">${H(j.url)}</a>`;
 }
 function copyPatched(i){
   const txt=AG_PATCHED[i];if(!txt)return;

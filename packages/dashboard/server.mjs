@@ -26,6 +26,7 @@ import {
   saveLeaderboard,
   saveUsers,
 } from './db.mjs';
+import { openPullRequest } from './github-pr.mjs';
 import { gatherLeads } from './leads.mjs';
 import { applyLineFix, generatePatch } from './patch.mjs';
 
@@ -1811,6 +1812,27 @@ app.post('/api/agent/patch', async (req, res) => {
     if (patchedFile) patch.patchedFile = patchedFile;
   }
   res.json({ ok: true, patch });
+});
+
+// OPEN A PULL REQUEST with a fix. The GitHub token is supplied per-request (stored only in the caller's
+// browser, never persisted here) and acts on repos that token already authorizes — the final auto-patch
+// step. This is the only piece that needs a credential.
+app.post('/api/agent/pr', async (req, res) => {
+  const { repo, path: filePath, content, token, finding } = req.body || {};
+  const tok = (token || process.env.GITHUB_TOKEN || '').trim();
+  if (!tok)
+    return res.status(400).json({ error: 'Add a GitHub token (repo scope) to open PRs — it stays in your browser.' });
+  if (!repo || !filePath || !content)
+    return res.status(400).json({ error: 'Provide the repo, file path, and the fixed content.' });
+  const cls = String(finding?.cls || finding?.tool || 'vulnerability').replace(/^impact[-:]/, '');
+  const title = `fix(security): ${cls} in ${filePath}`;
+  const body = `Automated fix suggested by **Securovix Shannon** for a proven \`${cls}\` finding.\n\n> ⚠️ Suggested patch — review before merging; not verified against the full codebase.`;
+  try {
+    const out = await openPullRequest({ token: tok, repo, path: filePath, content, title, body });
+    res.json({ ok: true, url: out.url, branch: out.branch });
+  } catch (e) {
+    res.status(502).json({ error: `Could not open PR: ${e.message}` });
+  }
 });
 
 app.post('/api/scans', (req, res) => {
