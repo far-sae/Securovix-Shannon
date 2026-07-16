@@ -1798,7 +1798,7 @@ function agentRun(){
   const fin=()=>{if(btn)btn.disabled=false;const sp=$('ag-spin');if(sp)sp.remove();AG_ES=null;};
   AG_ES=streamAgent(t,{
     onStep:s=>appendStep(s,$('ag-tl')),
-    onDone:run=>{fin();const st=$('ag-status');if(st)st.textContent='Agent run complete';finishRun(run,$('ag-finds'));renderLocate((run&&run.findings)||[]);},
+    onDone:run=>{fin();const st=$('ag-status');if(st)st.textContent='Agent run complete';finishRun(run,$('ag-finds'),true);renderLocate((run&&run.findings)||[]);},
     onError:(msg,nv)=>{fin();const st=$('ag-status');if(st)st.textContent='Agent stopped';const tl=$('ag-tl');if(tl)tl.innerHTML=`<div style="padding:10px;color:var(--red)">${H(msg)}${nv?` <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Verify ownership →</a>`:(msg.indexOf('Sign in')>=0?` <a href="#" onclick="go('cfg');return false" style="color:var(--acc2)">Sign in →</a>`:'')}</div>`;}
   });
 }
@@ -1834,16 +1834,17 @@ function appendStep(s,tl){
   row.innerHTML=`<span style="color:${pc[s.phase]||'var(--t2)'};font-weight:700;min-width:92px;text-transform:uppercase;font-size:11px;letter-spacing:.04em">${ic[s.phase]||'&middot;'} ${H(s.phase)}</span><span style="flex:1;font-size:13px;line-height:1.5;color:var(--t2)">${H(s.detail||'')}</span>`;
   tl.appendChild(row);
 }
-function finishRun(run,el){
+function finishRun(run,el,withLocate){
   if(!run||!el)return;
   const n=run.stats?.confirmed||0,rounds=run.stats?.rounds||1,tested=run.stats?.tested||0;
   const sev={critical:'var(--red)',high:'#f59e0b',medium:'var(--acc2)',low:'var(--t2)'};
-  const finds=(run.findings||[]).map(f=>`
+  const finds=(run.findings||[]).map((f,idx)=>`
     <div style="border:1px solid var(--brd);border-left:3px solid ${sev[f.severity]||'var(--t2)'};border-radius:8px;padding:12px 14px;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;gap:10px"><strong style="font-size:13px">${H(f.cls||f.tool||'finding')}${f.impact?' <span style="color:#f59e0b;font-size:10px;text-transform:uppercase;font-weight:700">impact</span>':''}</strong><span style="color:${sev[f.severity]||'var(--t2)'};font-size:11px;text-transform:uppercase;font-weight:700">${H(f.severity||'')}</span></div>
       <div style="color:var(--t2);font-size:12.5px;margin-top:5px;line-height:1.5;word-break:break-word">${H((f.detail||'').toString().slice(0,320))}</div>
       <div style="color:var(--t3);font-size:11px;margin-top:5px;word-break:break-all">${H(f.target||'')}</div>
       ${f.fix?`<div style="margin-top:8px;padding:8px 10px;background:var(--s1);border-radius:6px;font-size:12px;color:var(--t2);line-height:1.45"><span style="color:var(--grn);font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:.05em">Fix</span> ${H(f.fix)}</div>`:''}
+      ${withLocate?`<div style="margin-top:8px"><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="jumpToLocate(${idx})">Locate &amp; fix in code &darr;</button></div>`:''}
     </div>`).join('');
   const L=run.leads||[];
   const leadCards=L.map(l=>`
@@ -1870,6 +1871,13 @@ function renderLocate(findings){
     <div style="margin-top:8px"><button class="btn btn-p" onclick="agentLocate()">Locate in code</button></div>
     <div id="ag-floc" style="margin-top:12px"></div>
   </details>`;
+}
+function jumpToLocate(idx){
+  const loc=$('ag-locate');if(!loc)return;
+  const det=loc.querySelector('details');if(det)det.open=true;
+  const sel=$('ag-fsel');if(sel)sel.value=String(idx);
+  loc.scrollIntoView({behavior:'smooth',block:'nearest'});
+  const code=$('ag-fcode');if(code)setTimeout(()=>{try{code.focus()}catch(e){}},250);
 }
 async function agentLocate(){
   const idx=+(($('ag-fsel')||{}).value||0),code=(($('ag-fcode')||{}).value||'').trim(),out=$('ag-floc');
@@ -3724,6 +3732,14 @@ function posturePhrase(s){
 const KEYS_LS='shannon_provider_keys';
 function csLoadKeys(){try{return JSON.parse(localStorage.getItem(KEYS_LS)||'{}')}catch{return{}}}
 function csSaveKeys(k){localStorage.setItem(KEYS_LS,JSON.stringify(k))}
+function saveGithubToken(){
+  try{
+    const t=(($('s-gh-token')||{}).value||'').trim(),r=(($('s-gh-repo')||{}).value||'').trim();
+    if(t)localStorage.setItem('shannon_gh_token',t);else localStorage.removeItem('shannon_gh_token');
+    if(r)localStorage.setItem('shannon_gh_repo',r);else localStorage.removeItem('shannon_gh_repo');
+    const m=$('s-gh-msg');if(m){m.textContent='Saved ✓';setTimeout(()=>{if(m)m.textContent=''},1600);}
+  }catch(e){}
+}
 function csKeyMask(v){return v?(v.slice(0,6)+'…'+v.slice(-4)):''}
 
 const PROVIDER_ROWS=[
@@ -3735,6 +3751,8 @@ const PROVIDER_ROWS=[
 
 async function pgCfg(){
   const stored=csLoadKeys();
+  const ghTok=(()=>{try{return localStorage.getItem('shannon_gh_token')||''}catch(e){return''}})();
+  const ghRepo=(()=>{try{return localStorage.getItem('shannon_gh_repo')||''}catch(e){return''}})();
   const [st,models,lb]=await Promise.all([api('/settings'),api('/models'),api('/code-scan/leaderboard').catch(()=>({leaderboard:[]}))]);
   const totalRuns=lb.leaderboard.reduce((a,r)=>a+(r.runs||0),0);
 
@@ -3804,6 +3822,18 @@ async function pgCfg(){
         <button class="btn btn-p" id="s-save-keys" type="button">Save keys</button>
       </div>
     </section>
+
+    <div class="crd" style="padding:30px;margin-bottom:16px">
+      <h3 class="h-display" style="font-size:17px;color:var(--t0);margin-bottom:4px">GitHub — auto-patch pull requests</h3>
+      <p style="font-size:12px;color:var(--t3);margin-bottom:16px;line-height:1.55">Add a token with <b>repo</b> scope so the AI Agent can open a pull request with a fix. Stored only in your browser (localStorage) — it never touches our server, and acts only on repos it already authorizes.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <input id="s-gh-token" type="password" value="${H(ghTok)}" placeholder="ghp_… (repo scope)" autocomplete="off" spellcheck="false" style="flex:1;min-width:260px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
+        <input id="s-gh-repo" value="${H(ghRepo)}" placeholder="default owner/repo (optional)" autocomplete="off" spellcheck="false" style="flex:1;min-width:200px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
+        <button class="btn btn-p" onclick="saveGithubToken()">Save</button>
+        <span id="s-gh-msg" style="font-size:12px;color:var(--grn)"></span>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-top:8px"><a href="https://github.com/settings/tokens/new?scopes=repo&description=Securovix%20Shannon" target="_blank" rel="noopener" style="color:var(--acc2)">Create a token &rarr;</a> — classic with <b>repo</b> scope, or a fine-grained token with Contents + Pull requests: write on the target repo.</div>
+    </div>
 
     <div class="crd" style="padding:30px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
