@@ -1827,8 +1827,8 @@ async function agentBatch(){
 }
 function appendStep(s,tl){
   if(!s||!s.phase||!tl)return;
-  const ic={understand:'&#9713;',plan:'&#9636;',act:'&#9654;',confirm:'&#10003;',escalate:'&#8627;',report:'&#9632;',round:'&#9673;'};
-  const pc={understand:'var(--t2)',plan:'var(--t2)',act:'var(--acc2)',confirm:'var(--red)',escalate:'#f59e0b',report:'var(--grn)',round:'var(--acc2)'};
+  const ic={understand:'&#9713;',plan:'&#9636;',act:'&#9654;',confirm:'&#10003;',escalate:'&#8627;',leads:'&#9888;',report:'&#9632;',round:'&#9673;'};
+  const pc={understand:'var(--t2)',plan:'var(--t2)',act:'var(--acc2)',confirm:'var(--red)',escalate:'#f59e0b',leads:'#f59e0b',report:'var(--grn)',round:'var(--acc2)'};
   const row=document.createElement('div');
   row.style.cssText='display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--brd)';
   row.innerHTML=`<span style="color:${pc[s.phase]||'var(--t2)'};font-weight:700;min-width:92px;text-transform:uppercase;font-size:11px;letter-spacing:.04em">${ic[s.phase]||'&middot;'} ${H(s.phase)}</span><span style="flex:1;font-size:13px;line-height:1.5;color:var(--t2)">${H(s.detail||'')}</span>`;
@@ -1845,9 +1845,17 @@ function finishRun(run,el){
       <div style="color:var(--t3);font-size:11px;margin-top:5px;word-break:break-all">${H(f.target||'')}</div>
       ${f.fix?`<div style="margin-top:8px;padding:8px 10px;background:var(--s1);border-radius:6px;font-size:12px;color:var(--t2);line-height:1.45"><span style="color:var(--grn);font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:.05em">Fix</span> ${H(f.fix)}</div>`:''}
     </div>`).join('');
+  const L=run.leads||[];
+  const leadCards=L.map(l=>`
+    <div style="border:1px dashed var(--brd);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;gap:10px"><strong style="font-size:12.5px;color:var(--t0)">${H(l.kind||'lead')}</strong><span style="color:#f59e0b;font-size:10px;text-transform:uppercase;font-weight:700;letter-spacing:.04em">potential</span></div>
+      <div style="color:var(--t2);font-size:12px;margin-top:4px;line-height:1.45">${H(l.note||'')}</div>
+      <div style="color:var(--t3);font-size:11px;margin-top:4px;word-break:break-all">${H(l.target||'')}</div>
+    </div>`).join('');
   el.innerHTML=`
-    <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px"><span class="bx ${n?'bx-o':'bx-g'}">${n} proven</span><span style="color:var(--t3);font-size:12px">${rounds} round${rounds>1?'s':''} &middot; ${tested} probes run</span></div>
-    ${n?`<h2 style="font-size:17px;margin:6px 0 12px">Proven findings (${n})</h2>${finds}`:`<p style="color:var(--t2)">The agent proved nothing on this target — every probe abstained. That's the zero-FP guarantee working: no proof, no finding.</p>`}`;
+    <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px;flex-wrap:wrap"><span class="bx ${n?'bx-o':'bx-g'}">${n} proven</span>${L.length?`<span class="bx" style="border-color:#f59e0b;color:#f59e0b">${L.length} potential</span>`:''}<span style="color:var(--t3);font-size:12px">${rounds} round${rounds>1?'s':''} &middot; ${tested} probes run</span></div>
+    ${n?`<h2 style="font-size:17px;margin:6px 0 12px">Proven findings (${n}) <span style="color:var(--grn);font-size:12px;font-weight:400">zero false positives</span></h2>${finds}`:`<p style="color:var(--t2)">The agent proved nothing on this target — every probe abstained. That's the zero-FP guarantee working: no proof, no finding.</p>`}
+    ${L.length?`<div style="margin-top:22px;border-top:1px solid var(--brd);padding-top:16px"><h2 style="font-size:15px;margin:0 0 4px;color:#f59e0b">&#9888; Potential — needs review <span style="color:var(--t3);font-weight:400;font-size:13px">(${L.length}, UNPROVEN)</span></h2><p style="color:var(--t3);font-size:12px;margin:0 0 12px;line-height:1.45">These are NOT confirmed — the agent has no proof for them. They are surfaced for manual verification and kept strictly separate from the proven results above.</p>${leadCards}</div>`:''}`;
 }
 
 // ===== DOMAINS (ownership verification) =====

@@ -25,6 +25,7 @@ import {
   saveLeaderboard,
   saveUsers,
 } from './db.mjs';
+import { gatherLeads } from './leads.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -1642,7 +1643,8 @@ function agentDeps(target) {
     const headers = identity?.headers || {};
     return crawl({ target, maxPages: 25 * round, timeoutMs: 7000, maxRequests: 120 + 60 * round, headers });
   };
-  return { probe, escalate, recrawl };
+  const fetchText = async (url) => (await fetchT(url)).body || ''; // host-gated to the target origin
+  return { probe, escalate, recrawl, fetchText };
 }
 
 // Make each primary finding actionable (Strix-style remediation) using the engine's deterministic
@@ -1701,8 +1703,12 @@ app.post('/api/agent/run', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   try {
-    const { probe, escalate, recrawl } = agentDeps(r.target);
+    const { probe, escalate, recrawl, fetchText } = agentDeps(r.target);
     const run = annotateFixes(await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl }));
+    run.leads = await gatherLeads(r.surface, {
+      fetchText,
+      confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
+    });
     res.json({ ok: true, run });
   } catch (e) {
     res.status(500).json({ error: `Agent run failed: ${e.message}` });
@@ -1729,10 +1735,18 @@ app.get('/api/agent/run/stream', async (req, res) => {
     return res.end();
   }
   try {
-    const { probe, escalate, recrawl } = agentDeps(r.target);
+    const { probe, escalate, recrawl, fetchText } = agentDeps(r.target);
     const run = annotateFixes(
       await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl, onStep: (s) => send(s) }),
     );
+    run.leads = await gatherLeads(r.surface, {
+      fetchText,
+      confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
+    });
+    send({
+      phase: 'leads',
+      detail: `Gathered ${run.leads.length} potential lead(s) for manual review — UNPROVEN, kept separate from the ${run.stats.confirmed} confirmed finding(s).`,
+    });
     send({ run }, 'done');
   } catch (e) {
     send({ message: `Agent run failed: ${e.message}` }, 'error');
