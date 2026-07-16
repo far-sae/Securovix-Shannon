@@ -13,7 +13,7 @@
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
     "web": "node web/server.mjs",
-    "test": "node --test ./engine.test.mjs ./templates.test.mjs ./crawler.test.mjs ./cvss.test.mjs ./cert-report.test.mjs ./advanced.test.mjs ./probers.test.mjs ./flows.test.mjs ./tls.test.mjs ./agent-understand.test.mjs ./agent-loop.test.mjs ./leads.test.mjs ./code-locate.test.mjs ./patch.test.mjs ./github-pr.test.mjs ./templates-files.test.mjs ./agent-report.test.mjs ./agent-history.test.mjs ./monitor-schedule.test.mjs"
+    "test": "node --test ./engine.test.mjs ./templates.test.mjs ./crawler.test.mjs ./cvss.test.mjs ./cert-report.test.mjs ./advanced.test.mjs ./probers.test.mjs ./flows.test.mjs ./tls.test.mjs ./agent-understand.test.mjs ./agent-loop.test.mjs ./leads.test.mjs ./code-locate.test.mjs ./patch.test.mjs ./github-pr.test.mjs ./templates-files.test.mjs ./agent-report.test.mjs ./agent-history.test.mjs ./monitor-schedule.test.mjs ./custom-check.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

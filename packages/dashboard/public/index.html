@@ -1778,7 +1778,43 @@ async function pgAgent(){
         <div id="rp-out" style="margin-top:10px"></div>
       </div>
     </details>
+    <details style="margin-top:12px;max-width:660px">
+      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; AI custom check (safe — no code execution)</summary>
+      <div style="margin-top:10px">
+        <p style="color:var(--t3);font-size:12px;margin:0 0 8px;line-height:1.5">Describe what to test — the AI authors a bounded HTTP check and Shannon runs it deterministically (SSRF-guarded, on the target above). A match is a <b style="color:#f59e0b">POTENTIAL</b> lead (unproven), never confirmed. No code runs on the server. AI mode needs a key; or specify a manual check.</p>
+        <input id="cc-instruction" placeholder="e.g. is /actuator/env exposed and does it leak secrets?" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box">
+        <div style="text-align:center;color:var(--t3);font-size:11px;margin:6px 0">— or manual —</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <select id="cc-method" style="flex:0 0 auto;padding:9px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select>
+          <input id="cc-path" placeholder="/path?x=1" spellcheck="false" style="flex:1;min-width:0;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
+        </div>
+        <input id="cc-contains" placeholder='response must contain… e.g. password' spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box">
+        <div style="margin-top:6px"><button class="btn btn-p" onclick="runCustomCheck()">Run check</button></div>
+        <div id="cc-out" style="margin-top:10px"></div>
+      </div>
+    </details>
     <div id="ag-out" style="margin-top:24px"></div>
+  </div>`;
+}
+async function runCustomCheck(){
+  const target=($('ag-target')?.value||'').trim(),out=$('cc-out');if(!out)return;
+  if(!target){out.innerHTML='<span style="color:var(--red);font-size:12px">Enter a target above first.</span>';return;}
+  const instruction=($('cc-instruction')?.value||'').trim(),path=($('cc-path')?.value||'').trim(),contains=($('cc-contains')?.value||'').trim(),method=(($('cc-method')||{}).value||'GET');
+  const payload={target};
+  if(instruction)payload.instruction=instruction;
+  else if(path&&contains)payload.check={method,path,matcher:{contains}};
+  else{out.innerHTML='<span style="color:var(--red);font-size:12px">Give an instruction (AI), or a manual path + "contains".</span>';return;}
+  out.innerHTML='<span class="sp"></span>';
+  let r,j;
+  try{ r=await fetch('/api/agent/custom-check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}); j=await r.json().catch(()=>({})); }
+  catch(e){ out.innerHTML=`<span style="color:var(--red);font-size:12px">${H(e.message||'Failed.')}</span>`; return; }
+  if(!r.ok){ out.innerHTML=`<span style="color:var(--red);font-size:12px">${H(j.error||('HTTP '+r.status))}${j.needsVerification?` <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Verify →</a>`:''}</span>`; return; }
+  const c=j.check||{},mono='font-family:ui-monospace,monospace';
+  out.innerHTML=`<div style="font-size:12px">
+    <div style="${mono};color:var(--t3)">${H(c.method||'GET')} ${H(c.path||'')} → ${j.status||'—'}</div>
+    <div style="margin-top:6px;font-weight:700;color:${j.matched?'#f59e0b':'var(--grn)'}">${j.matched?'&#9888; MATCHED — POTENTIAL (unproven)':'No match'}</div>
+    ${j.matched&&j.lead?`<div style="color:var(--t2);margin-top:4px;line-height:1.45">${H(j.lead.note||'')}</div>`:''}
+    <div style="${mono};color:var(--t3);margin-top:6px;max-height:120px;overflow:auto;border:1px solid var(--brd);border-radius:6px;padding:8px;white-space:pre-wrap;word-break:break-all">${H(j.snippet||'')||'(empty)'}</div>
   </div>`;
 }
 async function repeaterSend(){

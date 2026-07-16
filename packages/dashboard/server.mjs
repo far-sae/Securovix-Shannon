@@ -26,6 +26,7 @@ import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
 import { toJson, toMarkdown, toSarif } from './agent-report.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import { locateFinding } from './code-locate.mjs';
+import { evaluateMatcher, sanitizeCheck } from './custom-check.mjs';
 import {
   addVerified,
   allMonitors,
@@ -1996,6 +1997,84 @@ app.post('/api/agent/replay', async (req, res) => {
     res.json({ ok: true, status: r.status, timeMs, headers: hdrs, body: String(r.body || '').slice(0, 200_000) });
   } catch (e) {
     res.status(502).json({ error: `Request failed: ${e.message}` });
+  }
+});
+
+// AI CUSTOM CHECK — the LLM AUTHORS a bounded HTTP check; Shannon runs it deterministically (SSRF-
+// guarded, path forced relative to the authorized origin). A match is a labeled POTENTIAL lead, never
+// a confirmed finding — and NO code executes on the host (the safe alternative to a code sandbox).
+async function llmProposeCheck(instruction, key) {
+  try {
+    const client = new Anthropic({ apiKey: key });
+    const model = process.env.SHANNON_QUICK_MODEL || process.env.SHANNON_MODEL || 'claude-haiku-4-5-20251001';
+    const msg = await client.messages.create({
+      model,
+      max_tokens: 300,
+      messages: [
+        {
+          role: 'user',
+          content: `Propose ONE bounded HTTP check to test for: ${instruction}\nRespond with JSON ONLY (no prose): {"method":"GET","path":"/relative/path","matcher":{"status":200,"contains":"text","regex":"...","condition":"and|or"},"why":"..."}. The path MUST be relative (start with /). Include only the matcher fields you need.`,
+        },
+      ],
+    });
+    const text = (msg.content || []).map((c) => c.text || '').join('');
+    const m = text.match(/\{[\s\S]*\}/);
+    return m ? JSON.parse(m[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
+app.post('/api/agent/custom-check', async (req, res) => {
+  const { target, check, instruction } = req.body || {};
+  if (!target) return res.status(400).json({ error: 'Provide a target.' });
+  let host;
+  try {
+    host = hostOf(target);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL.' });
+  }
+  if (!isLocalHost(host)) {
+    const user = getUser(req);
+    if (!user) return res.status(401).json({ error: 'Sign in first.' });
+    if (!isVerified(user.id, host))
+      return res.status(403).json({
+        error: `Verify ownership of ${registrable(host)} first (Domains page).`,
+        needsVerification: registrable(host),
+      });
+  }
+  let proposed = check;
+  if (!proposed && instruction) {
+    const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
+    if (!key)
+      return res
+        .status(400)
+        .json({ error: 'Add an Anthropic key to have the AI author a check, or specify one manually.' });
+    proposed = await llmProposeCheck(instruction, key);
+    if (!proposed) return res.status(502).json({ error: 'The AI could not author a check — try a manual one.' });
+  }
+  if (!proposed) return res.status(400).json({ error: 'Provide an instruction (AI) or a manual check.' });
+  const c = sanitizeCheck(proposed);
+  if (!Object.keys(c.matcher).length)
+    return res.status(400).json({ error: 'The check needs at least one matcher (status / contains / regex).' });
+  try {
+    const origin = new URL(target).origin;
+    setSessionHeaders({});
+    setScanOrigin(origin);
+    const r = await fetchT(origin + c.path, { method: c.method, body: c.body }, 12000);
+    const matched = evaluateMatcher(r, c.matcher);
+    const lead = matched
+      ? {
+          kind: 'ai-custom-check',
+          tier: 'potential',
+          severity: 'info',
+          target: origin + c.path,
+          note: `Custom check MATCHED (POTENTIAL — unproven): ${c.why || `matcher ${Object.keys(c.matcher).join(', ')}`}. Verify manually.`,
+        }
+      : null;
+    res.json({ ok: true, check: c, matched, status: r.status, snippet: String(r.body || '').slice(0, 400), lead });
+  } catch (e) {
+    res.status(502).json({ error: `Check failed: ${e.message}` });
   }
 });
 
