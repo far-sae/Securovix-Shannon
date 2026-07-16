@@ -22,6 +22,7 @@ const USERS_PATH = join(SHANNON_HOME, 'users.json');
 const LEADERBOARD_PATH = join(SHANNON_HOME, 'leaderboard.json');
 const VERIFIED_PATH = join(SHANNON_HOME, 'verified-domains.json');
 const RUNS_PATH = join(SHANNON_HOME, 'agent-runs.json');
+const MONITORS_PATH = join(SHANNON_HOME, 'monitors.json');
 const MAX_RUNS_PER_USER = 50; // keep run history bounded in memory / storage
 
 // ---- Supabase config (only used when both env vars are set) ----
@@ -34,6 +35,7 @@ let _users = {};
 let _lb = {};
 let _verified = {}; // { [userId]: { [domain]: { verifiedAt, method } } }
 let _runs = {}; // { [userId]: [ { id, target, createdAt, stats, findings, leads }, … newest first ] }
+let _monitors = {}; // { [userId]: [ { id, target, intervalHours, webhookUrl, enabled, lastRunAt, createdAt } ] }
 let _ready = false;
 
 function ensureHome() {
@@ -144,8 +146,28 @@ export async function initDb() {
           leads: r.leads || [],
         });
       }
+      // Non-fatal: monitors table may not exist yet.
+      let monRows = [];
+      try {
+        monRows = await sb('/shannon_monitors?select=*');
+      } catch (e) {
+        console.warn('[db] monitors hydrate skipped (run the migration?):', e.message);
+        monRows = [];
+      }
+      _monitors = {};
+      for (const r of monRows || []) {
+        (_monitors[r.user_id] ||= []).push({
+          id: r.id,
+          target: r.target,
+          intervalHours: r.interval_hours ? Number(r.interval_hours) : 24,
+          webhookUrl: r.webhook_url || null,
+          enabled: r.enabled !== false,
+          lastRunAt: r.last_run_at ? Number(r.last_run_at) : 0,
+          createdAt: r.created_at ? Number(r.created_at) : Date.now(),
+        });
+      }
       console.log(
-        `[db] Hydrated ${Object.keys(_users).length} users · ${Object.keys(_lb).length} providers · ${vRows?.length || 0} verified domains · ${runRows?.length || 0} agent runs from Supabase`,
+        `[db] Hydrated ${Object.keys(_users).length} users · ${Object.keys(_lb).length} providers · ${vRows?.length || 0} verified domains · ${runRows?.length || 0} agent runs · ${monRows?.length || 0} monitors from Supabase`,
       );
     } catch (e) {
       console.error('[db] Supabase hydration FAILED — server cannot start safely:', e.message);
@@ -173,8 +195,80 @@ export async function initDb() {
     } catch {
       _runs = {};
     }
+    try {
+      _monitors = JSON.parse(readFileSync(MONITORS_PATH, 'utf-8'));
+    } catch {
+      _monitors = {};
+    }
   }
   _ready = true;
+}
+
+// ---- Continuous-monitoring schedules ----
+function persistMonitors() {
+  if (USE_SUPABASE) return; // Supabase writes happen per-op below
+  try {
+    ensureHome();
+    writeFileSync(MONITORS_PATH, JSON.stringify(_monitors, null, 2));
+  } catch (e) {
+    console.error('[db] monitors local write failed:', e.message);
+  }
+}
+function monitorToRow(userId, m) {
+  return {
+    id: m.id,
+    user_id: userId,
+    target: m.target || null,
+    interval_hours: m.intervalHours || 24,
+    webhook_url: m.webhookUrl || null,
+    enabled: m.enabled !== false,
+    last_run_at: m.lastRunAt || 0,
+    created_at: m.createdAt || Date.now(),
+  };
+}
+export function saveMonitor(userId, m) {
+  if (!userId || !m?.id) return;
+  (_monitors[userId] ||= []).unshift(m);
+  if (USE_SUPABASE) {
+    sb('/shannon_monitors', {
+      method: 'POST',
+      headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify([monitorToRow(userId, m)]),
+    }).catch((e) => console.error('[db] monitor save failed:', e.message));
+  } else persistMonitors();
+}
+export function listMonitors(userId) {
+  return _monitors[userId] || [];
+}
+export function getMonitor(userId, id) {
+  return (_monitors[userId] || []).find((m) => m.id === id) || null;
+}
+export function removeMonitor(userId, id) {
+  if (_monitors[userId]) _monitors[userId] = _monitors[userId].filter((m) => m.id !== id);
+  if (USE_SUPABASE) {
+    sb(`/shannon_monitors?id=eq.${encodeURIComponent(id)}&user_id=eq.${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+      headers: { prefer: 'return=minimal' },
+    }).catch((e) => console.error('[db] monitor delete failed:', e.message));
+  } else persistMonitors();
+}
+export function touchMonitor(userId, id, lastRunAt) {
+  const m = getMonitor(userId, id);
+  if (!m) return;
+  m.lastRunAt = lastRunAt;
+  if (USE_SUPABASE) {
+    sb(`/shannon_monitors?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { prefer: 'return=minimal' },
+      body: JSON.stringify({ last_run_at: lastRunAt }),
+    }).catch((e) => console.error('[db] monitor touch failed:', e.message));
+  } else persistMonitors();
+}
+// Flat list of every monitor with its owner attached — for the scheduler.
+export function allMonitors() {
+  const out = [];
+  for (const [userId, list] of Object.entries(_monitors)) for (const m of list) out.push({ ...m, userId });
+  return out;
 }
 
 // ---- Agent run history (regression tracking) ----

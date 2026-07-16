@@ -63,6 +63,21 @@ create index if not exists shannon_agent_runs_user_idx
   on public.shannon_agent_runs (user_id, created_at desc);
 
 -- ============================================================
+-- 3c. Continuous-monitoring schedules — one row per monitor (scheduled agent run + webhook alert).
+-- ============================================================
+create table if not exists public.shannon_monitors (
+  id             text primary key,
+  user_id        text not null,
+  target         text,
+  interval_hours integer not null default 24,
+  webhook_url    text,
+  enabled        boolean not null default true,
+  last_run_at    bigint  not null default 0,
+  created_at     bigint  not null
+);
+create index if not exists shannon_monitors_user_idx on public.shannon_monitors (user_id);
+
+-- ============================================================
 -- 4. Row-Level Security
 -- We use the SERVICE_ROLE key from the server, which bypasses RLS, so we just
 -- need the tables to exist. If you ever expose them to the anon key, add
@@ -72,4 +87,5 @@ alter table public.shannon_users             enable row level security;
 alter table public.shannon_leaderboard        enable row level security;
 alter table public.shannon_verified_domains   enable row level security;
 alter table public.shannon_agent_runs         enable row level security;
+alter table public.shannon_monitors           enable row level security;
 -- (No policies defined → anon role gets nothing. Service role bypasses RLS.)

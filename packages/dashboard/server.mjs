@@ -11,6 +11,7 @@ import { parse as parseYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
 import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
+import { sendMonitorAlert } from '../../monitor.mjs';
 import { PROBERS, detectionRule, fetchT, injReq, setScanOrigin } from '../../purple-engine.mjs';
 import { diffRuns } from './agent-history.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
@@ -19,20 +20,26 @@ import { analyzeSurface } from './agent-understand.mjs';
 import { locateFinding } from './code-locate.mjs';
 import {
   addVerified,
+  allMonitors,
   getAgentRun,
   initDb,
   isSupabase,
   listAgentRuns,
+  listMonitors,
   loadLeaderboard,
   loadUsers,
   loadVerified,
+  removeMonitor,
   removeVerified,
   saveAgentRun,
   saveLeaderboard,
+  saveMonitor,
   saveUsers,
+  touchMonitor,
 } from './db.mjs';
 import { openPullRequest } from './github-pr.mjs';
 import { gatherLeads } from './leads.mjs';
+import { diffToDelta, dueMonitors } from './monitor-schedule.mjs';
 import { applyLineFix, generatePatch } from './patch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1811,6 +1818,103 @@ app.get('/api/agent/runs/:id/diff/:prevId', (req, res) => {
   });
 });
 
+// ── Continuous monitoring — a scheduled agent run + auto-diff + webhook alert on NEW findings ──
+// Reusable: crawl + run the campaign + gather leads (no HTTP req — used by the scheduler).
+async function executeAgentRun(target) {
+  const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120 });
+  const { probe, escalate, recrawl, fetchText } = agentDeps(target);
+  const run = annotateFixes(await runAgentCampaign({ surface, probe, escalate, recrawl }));
+  run.leads = await gatherLeads(surface, {
+    fetchText,
+    confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
+  });
+  return run;
+}
+
+let _monitorBusy = false;
+async function runDueMonitors() {
+  if (_monitorBusy) return;
+  _monitorBusy = true;
+  try {
+    const due = dueMonitors(allMonitors(), Date.now());
+    for (const m of due) {
+      try {
+        const prevSummary = listAgentRuns(m.userId, m.target)[0];
+        const prev = prevSummary ? getAgentRun(m.userId, prevSummary.id) : null;
+        const run = await executeAgentRun(m.target);
+        saveAgentRun(m.userId, {
+          id: randomUUID().slice(0, 12),
+          target: m.target,
+          createdAt: Date.now(),
+          stats: run.stats || {},
+          findings: run.findings || [],
+          leads: run.leads || [],
+        });
+        touchMonitor(m.userId, m.id, Date.now());
+        if (m.webhookUrl && prev) {
+          const diff = diffRuns(prev, run);
+          if (diff.summary.new > 0) {
+            const previousScanAt = prev.createdAt ? new Date(prev.createdAt).toISOString().slice(0, 16) : null;
+            await sendMonitorAlert(
+              m.target,
+              diffToDelta(diff, { firstRun: false, previousScanAt }),
+              m.webhookUrl,
+            ).catch(() => {});
+          }
+        }
+        console.log(`[monitor] ran ${m.target} → ${run.stats?.confirmed || 0} proven`);
+      } catch (e) {
+        console.error('[monitor] run failed for', m.target, '—', e.message);
+      }
+    }
+  } finally {
+    _monitorBusy = false;
+  }
+}
+
+app.post('/api/agent/monitors', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in first.' });
+  const raw = (req.body?.target || '').trim();
+  if (!raw) return res.status(400).json({ error: 'Provide a target URL.' });
+  const target = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  let host;
+  try {
+    host = hostOf(target);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL.' });
+  }
+  if (!isLocalHost(host) && !isVerified(user.id, host))
+    return res.status(403).json({
+      error: `Verify ownership of ${registrable(host)} first (Domains page).`,
+      needsVerification: registrable(host),
+    });
+  const intervalHours = Math.max(1, Math.min(168, Number(req.body?.intervalHours) || 24));
+  const webhookUrl = (req.body?.webhookUrl || '').trim() || null;
+  const monitor = {
+    id: randomUUID().slice(0, 12),
+    target,
+    intervalHours,
+    webhookUrl,
+    enabled: true,
+    lastRunAt: 0,
+    createdAt: Date.now(),
+  };
+  saveMonitor(user.id, monitor);
+  res.json({ ok: true, monitor });
+});
+app.get('/api/agent/monitors', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in first.' });
+  res.json({ ok: true, monitors: listMonitors(user.id) });
+});
+app.delete('/api/agent/monitors/:id', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in first.' });
+  removeMonitor(user.id, req.params.id);
+  res.json({ ok: true });
+});
+
 // AGENT REPORT — format a completed run as a shareable Markdown or JSON report. Pure formatting of
 // data the caller already has; touches no target.
 app.post('/api/agent/report', (req, res) => {
@@ -2258,4 +2362,7 @@ app.get('/healthz', (_req, res) =>
     process.exit(1);
   }
   app.listen(PORT, () => console.log(`\n  Securovix Dashboard running at http://localhost:${PORT}\n`));
+  // Continuous monitoring: check for due monitors shortly after boot, then every 10 minutes.
+  setTimeout(runDueMonitors, 30_000);
+  setInterval(runDueMonitors, 10 * 60 * 1000);
 })();

@@ -1737,8 +1737,53 @@ async function pgAgent(){
       <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none" onclick="setTimeout(agentHistory,0)">&#9656; Run history &amp; regressions</summary>
       <div id="ag-hist" style="margin-top:12px;font-size:13px;color:var(--t2)">Loading…</div>
     </details>
+    <details style="margin-top:12px;max-width:660px">
+      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none" onclick="setTimeout(agentMonitors,0)">&#9656; Continuous monitoring (scheduled scans + alerts)</summary>
+      <div style="margin-top:12px">
+        <p style="color:var(--t3);font-size:12px;margin:0 0 10px;line-height:1.5">Schedule the agent to re-scan a target you own on an interval. Each run diffs against the last; set a webhook (Slack/Discord/generic) to be alerted on NEW findings only.</p>
+        <div style="display:grid;gap:6px">
+          <input id="mon-target" placeholder="https://staging.yoursite.com" spellcheck="false" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <select id="mon-interval" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;flex:1;min-width:110px"><option value="1">every 1h</option><option value="6">every 6h</option><option value="12">every 12h</option><option value="24" selected>daily</option><option value="168">weekly</option></select>
+            <input id="mon-webhook" placeholder="Alert webhook (optional)" spellcheck="false" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;flex:2;min-width:200px">
+          </div>
+          <div style="display:flex;gap:8px;align-items:center"><button class="btn btn-p" onclick="addMonitor()">Add monitor</button><span id="mon-msg" style="font-size:12px;color:var(--grn)"></span></div>
+        </div>
+        <div id="mon-list" style="margin-top:12px"></div>
+      </div>
+    </details>
     <div id="ag-out" style="margin-top:24px"></div>
   </div>`;
+}
+async function agentMonitors(){
+  const el=$('mon-list');if(!el)return;
+  const t=($('ag-target')?.value||'').trim(),mt=$('mon-target');if(mt&&!mt.value&&t)mt.value=t;
+  el.innerHTML='<span class="sp"></span>';
+  let data;
+  try{ data=await api('/agent/monitors'); }
+  catch(e){ el.innerHTML=e.status===401?'<span style="color:var(--t3)">Sign in to schedule monitors.</span>':`<span style="color:var(--red)">${H(e.message||'Failed.')}</span>`; return; }
+  const mons=data.monitors||[];
+  el.innerHTML=mons.length?mons.map(m=>`
+    <div style="display:flex;gap:8px;align-items:center;border:1px solid var(--brd);border-radius:8px;padding:8px 10px;margin-bottom:6px">
+      <span style="flex:1;min-width:0;word-break:break-all;font-size:12px">${H(m.target||'')}</span>
+      <span style="color:var(--t3);font-size:11px;white-space:nowrap">every ${m.intervalHours}h${m.webhookUrl?' &middot; alerts':''}</span>
+      <span style="color:var(--t3);font-size:11px;white-space:nowrap">${m.lastRunAt?('ran '+new Date(m.lastRunAt).toISOString().slice(0,10)):'never run'}</span>
+      <button class="btn btn-g" style="padding:4px 9px;font-size:11px" onclick="removeMonitorUI('${H(m.id)}')">Remove</button>
+    </div>`).join(''):'<span style="color:var(--t3);font-size:12px">No monitors yet.</span>';
+}
+async function addMonitor(){
+  const target=($('mon-target')?.value||'').trim(),intervalHours=+(($('mon-interval')||{}).value||24),webhookUrl=($('mon-webhook')?.value||'').trim(),msg=$('mon-msg');
+  if(!target){if(msg){msg.style.color='var(--red)';msg.textContent='Enter a target.'}return;}
+  if(msg)msg.textContent='';
+  try{ await api('/agent/monitors',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target,intervalHours,webhookUrl})}); }
+  catch(e){ if(msg){msg.style.color='var(--red)';msg.textContent=e.status===403?'Verify this domain first (Domains page).':e.status===401?'Sign in first.':(e.message||'Failed.');} return; }
+  if(msg){msg.style.color='var(--grn)';msg.textContent='Added ✓';setTimeout(()=>{if(msg)msg.textContent=''},1600);}
+  const w=$('mon-webhook');if(w)w.value='';
+  agentMonitors();
+}
+async function removeMonitorUI(id){
+  try{ await api('/agent/monitors/'+encodeURIComponent(id),{method:'DELETE'}); }catch(e){}
+  agentMonitors();
 }
 async function agentHistory(){
   const t=($('ag-target')?.value||'').trim(),el=$('ag-hist');if(!el)return;
