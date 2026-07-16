@@ -1,0 +1,12 @@
+{
+  "id": "phpmyadmin-exposed",
+  "name": "phpMyAdmin login exposed",
+  "severity": "medium",
+  "requests": [{ "path": "/phpmyadmin/" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "words": ["pma_username"], "condition": "and" }
+  ],
+  "remediation": "Restrict phpMyAdmin to admin IPs / VPN, require strong auth, and prefer removing it from production hosts."
+}

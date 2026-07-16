@@ -1,0 +1,12 @@
+{
+  "id": "exposed-ssh-key",
+  "name": "Exposed SSH private key",
+  "severity": "critical",
+  "requests": [{ "path": "/.ssh/id_rsa" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "regex": "-----BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----" }
+  ],
+  "remediation": "Remove private keys from the web root immediately and ROTATE the key pair; deny dotfiles at the server."
+}

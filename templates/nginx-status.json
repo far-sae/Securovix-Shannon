@@ -1,0 +1,12 @@
+{
+  "id": "nginx-status",
+  "name": "nginx stub_status endpoint exposed",
+  "severity": "low",
+  "requests": [{ "path": "/nginx_status" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "words": ["Active connections:", "server accepts handled requests"], "condition": "and" }
+  ],
+  "remediation": "Restrict stub_status to localhost/monitoring IPs; it leaks live connection and request counts."
+}

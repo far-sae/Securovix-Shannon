@@ -10,7 +10,7 @@ import { analyzeSurface } from './agent-understand.mjs';
 
 const GET_PROBES = ['sqli', 'xss', 'ssrf', 'nosql', 'crlf', 'open-redirect'];
 const FORM_PROBES = ['csrf', 'mass-assignment', 'auth-testing'];
-const ORIGIN_PROBES = ['security-headers', 'secrets-exposure', 'cors-misconfig'];
+const ORIGIN_PROBES = ['security-headers', 'secrets-exposure', 'cors-misconfig', 'templates'];
 const API_PROBES = ['api-data-exposure'];
 
 const urlOf = (target) => (typeof target === 'string' ? target : target.url);

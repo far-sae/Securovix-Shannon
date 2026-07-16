@@ -53,6 +53,24 @@ test('generatePatch: empty snippet → null', () => {
   assert.equal(generatePatch({ finding: { cls: 'sqli' }, snippet: '   ' }), null);
 });
 
+test('generatePatch: XSS innerHTML → textContent (confident rewrite)', () => {
+  const p = generatePatch({ finding: { cls: 'xss' }, snippet: "el.innerHTML = req.query.q + '!';" });
+  assert.equal(p.applicable, true);
+  assert.ok(/\.textContent\s*=/.test(p.after) && !/innerHTML/.test(p.after), p.after);
+});
+
+test('generatePatch: stored-DOM-XSS jQuery .html() → .text()', () => {
+  const p = generatePatch({ finding: { cls: 'stored-dom-xss' }, snippet: "$('#out').html(data);" });
+  assert.equal(p.applicable, true);
+  assert.ok(/\.text\(data\)/.test(p.after) && !/\.html\(/.test(p.after), p.after);
+});
+
+test('generatePatch: an XSS sink with no clean rewrite (res.send) falls back to guidance', () => {
+  const p = generatePatch({ finding: { cls: 'xss' }, snippet: 'res.send(userInput)' });
+  assert.equal(p.applicable, false);
+  assert.ok(/escap|CSP|textContent/i.test(p.note));
+});
+
 test('applyLineFix: replaces the target line, preserves indentation, leaves others intact', () => {
   const code = [
     "app.get('/s', (req, res) => {",

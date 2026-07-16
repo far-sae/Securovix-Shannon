@@ -41,6 +41,23 @@ function sqliTransform(line) {
   };
 }
 
+// XSS: innerHTML/.html() → textContent/.text() (inserts as TEXT, never parsed as HTML).
+function xssTransform(line) {
+  let m = line.match(/^(.*)\.innerHTML(\s*=\s*)(.+?)(;?)$/i);
+  if (m)
+    return {
+      after: `${m[1]}.textContent${m[2]}${m[3]}${m[4]}`,
+      note: 'Use textContent instead of innerHTML so the value is inserted as TEXT and never parsed as HTML.',
+    };
+  m = line.match(/^(.*)\.html\((.+)\)(;?)$/i);
+  if (m)
+    return {
+      after: `${m[1]}.text(${m[2]})${m[3]}`,
+      note: 'Use .text() instead of .html() so the value is inserted as text, not HTML (jQuery).',
+    };
+  return null;
+}
+
 export function generatePatch({ finding = {}, snippet = '', guidance = '' } = {}) {
   const cls = (finding.cls || finding.tool || '')
     .replace(/^impact[-:]/, '')
@@ -48,6 +65,19 @@ export function generatePatch({ finding = {}, snippet = '', guidance = '' } = {}
   const before = String(snippet).replace(/\s+$/, '');
   if (!before.trim()) return null;
 
+  if (cls === 'xss' || cls === 'stored-dom-xss') {
+    const t = xssTransform(before.trim());
+    if (t)
+      return {
+        applicable: true,
+        cls,
+        before,
+        after: t.after,
+        note: t.note,
+        confidence: 'high',
+        disclaimer: SUGGEST_DISCLAIMER,
+      };
+  }
   if (cls === 'sqli' || cls === 'sqli-auth-bypass') {
     const t = sqliTransform(before.trim());
     if (t)

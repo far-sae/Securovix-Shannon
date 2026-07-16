@@ -1,0 +1,12 @@
+{
+  "id": "go-pprof",
+  "name": "Go net/http/pprof debug endpoint exposed",
+  "severity": "medium",
+  "requests": [{ "path": "/debug/pprof/" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "words": ["Types of profiles available"], "condition": "and" }
+  ],
+  "remediation": "Never register net/http/pprof on a public listener; gate it behind authentication or a private interface."
+}

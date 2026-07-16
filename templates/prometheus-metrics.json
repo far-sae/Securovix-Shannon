@@ -1,0 +1,12 @@
+{
+  "id": "prometheus-metrics",
+  "name": "Prometheus metrics endpoint exposed",
+  "severity": "low",
+  "requests": [{ "path": "/metrics" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "words": ["# HELP", "# TYPE"], "condition": "and" }
+  ],
+  "remediation": "Restrict /metrics to the monitoring network; it can leak internal hostnames, routes, build info, and request cardinality."
+}

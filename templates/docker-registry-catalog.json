@@ -1,0 +1,12 @@
+{
+  "id": "docker-registry-catalog",
+  "name": "Docker registry catalog exposed (unauthenticated)",
+  "severity": "high",
+  "requests": [{ "path": "/v2/_catalog" }],
+  "matchers-condition": "and",
+  "matchers": [
+    { "part": "status", "status": 200 },
+    { "part": "body", "regex": "\\{\\s*\"repositories\"\\s*:" }
+  ],
+  "remediation": "Require authentication on the registry (token/basic) and never expose /v2/ to the internet; restrict by network/firewall."
+}
