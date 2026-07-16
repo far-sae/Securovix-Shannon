@@ -27,6 +27,7 @@ import {
   saveUsers,
 } from './db.mjs';
 import { gatherLeads } from './leads.mjs';
+import { generatePatch } from './patch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -1764,6 +1765,46 @@ app.post('/api/agent/locate', (req, res) => {
     return res.status(413).json({ error: 'Code exceeds 1MB — paste the specific route/handler file.' });
   const locations = locateFinding({ finding, files: [{ path: filename || 'pasted-source', content: code }] });
   res.json({ ok: true, locations });
+});
+
+// PATCH GENERATOR — suggest a fix for a located line. Deterministic rewrite for the clean cases +
+// a targeted note otherwise; an LLM diff is layered on when a key is present. Always a SUGGESTION.
+async function llmPatch({ snippet, cls, key }) {
+  try {
+    const client = new Anthropic({ apiKey: key });
+    const model = process.env.SHANNON_QUICK_MODEL || process.env.SHANNON_MODEL || 'claude-haiku-4-5-20251001';
+    const msg = await client.messages.create({
+      model,
+      max_tokens: 300,
+      messages: [
+        {
+          role: 'user',
+          content: `Rewrite ONLY this code to fix a ${cls} vulnerability. Output just the corrected code (no prose, no fences):\n\n${snippet}`,
+        },
+      ],
+    });
+    return (
+      (msg.content || [])
+        .map((c) => c.text || '')
+        .join('')
+        .trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+app.post('/api/agent/patch', async (req, res) => {
+  const { finding, snippet } = req.body || {};
+  if (!finding || !snippet) return res.status(400).json({ error: 'Provide a finding and the code snippet.' });
+  const cls = String(finding.cls || finding.tool || '')
+    .replace(/^impact[-:]/, '')
+    .replace(/-extract$|-context$|-metadata$/, '');
+  const patch = generatePatch({ finding, snippet, guidance: detectionRule(cls) });
+  if (!patch) return res.json({ ok: true, patch: null });
+  const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
+  if (key) patch.llm = await llmPatch({ snippet, cls, key });
+  res.json({ ok: true, patch });
 });
 
 app.post('/api/scans', (req, res) => {

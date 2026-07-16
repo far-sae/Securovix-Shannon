@@ -1880,13 +1880,34 @@ async function agentLocate(){
   try{ data=await api('/agent/locate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({finding:f,code})}); }
   catch(e){ out.innerHTML=`<p style="color:var(--red)">${H(e.message||'Locate failed.')}</p>`; return; }
   const locs=data.locations||[];
+  AG_LOC={finding:f,locs};
   out.innerHTML=locs.length
-    ? `<div style="color:var(--t3);font-size:12px;margin-bottom:8px">${locs.length} candidate location${locs.length>1?'s':''} (ranked):</div>`+locs.map(l=>`
+    ? `<div style="color:var(--t3);font-size:12px;margin-bottom:8px">${locs.length} candidate location${locs.length>1?'s':''} (ranked):</div>`+locs.map((l,i)=>`
       <div style="border:1px solid var(--brd);border-radius:8px;padding:10px 12px;margin-bottom:8px">
         <div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--acc2)">${H(l.file)}:${l.line} <span style="color:var(--t3)">— ${H(l.why||'')}</span></div>
         <div style="color:var(--t2);margin-top:5px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all">${H(l.snippet||'')}</div>
+        <div style="margin-top:8px"><button class="btn btn-g" style="padding:6px 11px;font-size:12px" onclick="agentPatch(${i})">Suggest a fix</button></div>
+        <div id="ag-patch-${i}" style="margin-top:8px"></div>
       </div>`).join('')
     : `<p style="color:var(--t2);font-size:12.5px">No obvious sink located in this source — try pasting the specific route handler, or the file that queries the database / runs the command for this endpoint.</p>`;
+}
+let AG_LOC=null;
+async function agentPatch(i){
+  const f=AG_LOC&&AG_LOC.finding, snippet=AG_LOC&&AG_LOC.locs[i]&&AG_LOC.locs[i].snippet, out=$('ag-patch-'+i);
+  if(!f||!snippet||!out)return;
+  out.innerHTML='<span class="sp"></span>';
+  let data;
+  try{ data=await api('/agent/patch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({finding:f,snippet})}); }
+  catch(e){ out.innerHTML=`<p style="color:var(--red);font-size:12px">${H(e.message||'Patch failed.')}</p>`; return; }
+  const p=data.patch;
+  if(!p){ out.innerHTML='<p style="color:var(--t3);font-size:12px">No suggestion for this line.</p>'; return; }
+  const mono='font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all';
+  out.innerHTML=`<div style="border:1px solid var(--brd);border-radius:8px;padding:10px 12px;background:var(--s1)">
+    ${p.applicable&&p.after?`<div style="${mono};color:var(--red)">- ${H(p.before)}</div><div style="${mono};color:var(--grn)">+ ${H(p.after)}</div>`:`<div style="${mono};color:var(--t2)">${H(p.before)}</div>`}
+    <div style="color:var(--t2);font-size:12px;margin-top:8px;line-height:1.45"><span style="color:var(--acc2);font-weight:700">Fix:</span> ${H(p.note||'')}</div>
+    ${p.llm?`<div style="color:var(--t2);font-size:12px;margin-top:8px;border-top:1px dashed var(--brd);padding-top:8px"><span style="color:var(--acc2);font-weight:700">AI patch:</span><div style="${mono};margin-top:4px;color:var(--grn)">${H(p.llm)}</div></div>`:''}
+    <div style="color:#f59e0b;font-size:11px;margin-top:8px">&#9888; ${H(p.disclaimer||'')}</div>
+  </div>`;
 }
 
 // ===== DOMAINS (ownership verification) =====
