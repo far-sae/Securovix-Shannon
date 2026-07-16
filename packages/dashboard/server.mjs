@@ -27,7 +27,7 @@ import {
   saveUsers,
 } from './db.mjs';
 import { gatherLeads } from './leads.mjs';
-import { generatePatch } from './patch.mjs';
+import { applyLineFix, generatePatch } from './patch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -1804,6 +1804,12 @@ app.post('/api/agent/patch', async (req, res) => {
   if (!patch) return res.json({ ok: true, patch: null });
   const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
   if (key) patch.llm = await llmPatch({ snippet, cls, key });
+  // If we have a confident rewrite AND the caller passed the full file + line, apply it so they can
+  // copy the corrected file back (the usable step before an actual PR).
+  if (patch.applicable && patch.after && typeof req.body.code === 'string' && Number.isInteger(req.body.line)) {
+    const patchedFile = applyLineFix(req.body.code, req.body.line, patch.after);
+    if (patchedFile) patch.patchedFile = patchedFile;
+  }
   res.json({ ok: true, patch });
 });
 

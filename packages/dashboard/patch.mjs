@@ -64,3 +64,14 @@ export function generatePatch({ finding = {}, snippet = '', guidance = '' } = {}
   const note = NOTES[cls] || guidance || 'Apply input validation and least-privilege controls.';
   return { applicable: false, cls, before, after: null, note, confidence: 'guidance', disclaimer: SUGGEST_DISCLAIMER };
 }
+
+// Apply a one-line rewrite to the full source (preserving the original line's indentation) so the caller
+// gets the corrected file to paste back / copy. Returns null on an out-of-range line — never guesses.
+export function applyLineFix(code, line, after) {
+  if (typeof code !== 'string' || !Number.isInteger(line) || after == null) return null;
+  const lines = code.split(/\r?\n/);
+  if (line < 1 || line > lines.length) return null;
+  const indent = (lines[line - 1].match(/^\s*/) || [''])[0];
+  lines[line - 1] = indent + String(after).trim();
+  return lines.join('\n');
+}

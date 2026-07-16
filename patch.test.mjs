@@ -1,7 +1,7 @@
 // Tests for the patch generator — confident rewrite for the clean SQLi case, targeted notes otherwise.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { generatePatch } from './packages/dashboard/patch.mjs';
+import { applyLineFix, generatePatch } from './packages/dashboard/patch.mjs';
 
 test('generatePatch: SQLi string-concat → parameterized query (confident rewrite)', () => {
   const p = generatePatch({
@@ -51,4 +51,25 @@ test('generatePatch: uses server-supplied guidance when the class has no line-no
 
 test('generatePatch: empty snippet → null', () => {
   assert.equal(generatePatch({ finding: { cls: 'sqli' }, snippet: '   ' }), null);
+});
+
+test('applyLineFix: replaces the target line, preserves indentation, leaves others intact', () => {
+  const code = [
+    "app.get('/s', (req, res) => {",
+    "  const r = db.query('SELECT * FROM t WHERE q=' + req.query.q);",
+    '  res.json(r);',
+    '});',
+  ].join('\n');
+  const fixed = applyLineFix(code, 2, "const r = db.query('SELECT * FROM t WHERE q=?', [req.query.q]);");
+  const lines = fixed.split('\n');
+  assert.ok(lines[1].startsWith('  '), 'indentation preserved');
+  assert.ok(/\?', \[req\.query\.q\]/.test(lines[1]) && !/\+/.test(lines[1]));
+  assert.equal(lines[0], "app.get('/s', (req, res) => {");
+  assert.equal(lines[2], '  res.json(r);');
+});
+
+test('applyLineFix: out-of-range line or bad input → null (never guesses)', () => {
+  assert.equal(applyLineFix('a\nb', 9, 'x'), null);
+  assert.equal(applyLineFix('a\nb', 0, 'x'), null);
+  assert.equal(applyLineFix(null, 1, 'x'), null);
 });

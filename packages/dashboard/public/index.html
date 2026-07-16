@@ -1891,23 +1891,32 @@ async function agentLocate(){
       </div>`).join('')
     : `<p style="color:var(--t2);font-size:12.5px">No obvious sink located in this source — try pasting the specific route handler, or the file that queries the database / runs the command for this endpoint.</p>`;
 }
-let AG_LOC=null;
+let AG_LOC=null,AG_PATCHED={};
 async function agentPatch(i){
-  const f=AG_LOC&&AG_LOC.finding, snippet=AG_LOC&&AG_LOC.locs[i]&&AG_LOC.locs[i].snippet, out=$('ag-patch-'+i);
+  const f=AG_LOC&&AG_LOC.finding, loc=AG_LOC&&AG_LOC.locs[i], snippet=loc&&loc.snippet, out=$('ag-patch-'+i);
   if(!f||!snippet||!out)return;
   out.innerHTML='<span class="sp"></span>';
+  const code=(($('ag-fcode')||{}).value||'');
   let data;
-  try{ data=await api('/agent/patch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({finding:f,snippet})}); }
+  try{ data=await api('/agent/patch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({finding:f,snippet,code,line:loc.line})}); }
   catch(e){ out.innerHTML=`<p style="color:var(--red);font-size:12px">${H(e.message||'Patch failed.')}</p>`; return; }
   const p=data.patch;
   if(!p){ out.innerHTML='<p style="color:var(--t3);font-size:12px">No suggestion for this line.</p>'; return; }
   const mono='font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all';
+  if(p.patchedFile)AG_PATCHED[i]=p.patchedFile;
   out.innerHTML=`<div style="border:1px solid var(--brd);border-radius:8px;padding:10px 12px;background:var(--s1)">
     ${p.applicable&&p.after?`<div style="${mono};color:var(--red)">- ${H(p.before)}</div><div style="${mono};color:var(--grn)">+ ${H(p.after)}</div>`:`<div style="${mono};color:var(--t2)">${H(p.before)}</div>`}
     <div style="color:var(--t2);font-size:12px;margin-top:8px;line-height:1.45"><span style="color:var(--acc2);font-weight:700">Fix:</span> ${H(p.note||'')}</div>
     ${p.llm?`<div style="color:var(--t2);font-size:12px;margin-top:8px;border-top:1px dashed var(--brd);padding-top:8px"><span style="color:var(--acc2);font-weight:700">AI patch:</span><div style="${mono};margin-top:4px;color:var(--grn)">${H(p.llm)}</div></div>`:''}
+    ${p.patchedFile?`<div style="margin-top:8px"><button class="btn btn-p" style="padding:6px 11px;font-size:12px" onclick="copyPatched(${i})" id="ag-copy-${i}">Copy fixed file</button></div>`:''}
     <div style="color:#f59e0b;font-size:11px;margin-top:8px">&#9888; ${H(p.disclaimer||'')}</div>
   </div>`;
+}
+function copyPatched(i){
+  const txt=AG_PATCHED[i];if(!txt)return;
+  const done=()=>{const b=$('ag-copy-'+i);if(b){b.textContent='Copied ✓';setTimeout(()=>{if(b)b.textContent='Copy fixed file';},1600);}};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(()=>done());}
+  else{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(e){}ta.remove();done();}
 }
 
 // ===== DOMAINS (ownership verification) =====
