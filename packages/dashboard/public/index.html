@@ -1962,10 +1962,10 @@ function agentRun(){
   const t=($('ag-target')?.value||'').trim();if(!t)return;
   const btn=$('ag-run');if(btn)btn.disabled=true;
   if(AG_ES){try{AG_ES.close()}catch(e){}AG_ES=null;}
-  $('ag-run-out').innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin:4px 0 12px"><div style="font-size:15px;font-weight:700" id="ag-status">Agent working…</div><span class="sp" id="ag-spin"></span></div><div id="ag-tl" style="border:1px solid var(--brd);border-radius:10px;padding:4px 14px"></div><div id="ag-finds" style="margin-top:16px"></div><div id="ag-locate" style="margin-top:20px"></div>`;
+  $('ag-run-out').innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin:4px 0 12px"><div style="font-size:15px;font-weight:700" id="ag-status">Agent working…</div><span class="sp" id="ag-spin"></span></div><div id="ag-graph" style="margin:2px 0 10px"></div><div id="ag-tl" style="border:1px solid var(--brd);border-radius:10px;padding:4px 14px"></div><div id="ag-finds" style="margin-top:16px"></div><div id="ag-locate" style="margin-top:20px"></div>`;
   const fin=()=>{if(btn)btn.disabled=false;const sp=$('ag-spin');if(sp)sp.remove();AG_ES=null;};
   AG_ES=streamAgent(t,{
-    onStep:s=>appendStep(s,$('ag-tl')),
+    onStep:s=>{appendStep(s,$('ag-tl'));agentGraphStep(s);},
     onDone:run=>{fin();const st=$('ag-status');if(st)st.textContent='Agent run complete';finishRun(run,$('ag-finds'),true);renderLocate((run&&run.findings)||[]);},
     onError:(msg,nv)=>{fin();const st=$('ag-status');if(st)st.textContent='Agent stopped';const tl=$('ag-tl');if(tl)tl.innerHTML=`<div style="padding:10px;color:var(--red)">${H(msg)}${nv?` <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Verify ownership →</a>`:(msg.indexOf('Sign in')>=0?` <a href="#" onclick="go('cfg');return false" style="color:var(--acc2)">Sign in →</a>`:'')}</div>`;}
   });
@@ -1992,6 +1992,39 @@ async function agentBatch(){
   }
   if(btn)btn.disabled=false;
   const agg=$('ag-batch-agg');if(agg)agg.textContent=`Batch complete · ${targets.length} target${targets.length>1?'s':''} · ${totalProven} proven across all targets`;
+}
+// ── Live agent-graph visualization (purely visual — driven by the streamed steps) ──
+let AG_GRAPH_N=0,AG_HITS={};
+function agentGraphStep(s){
+  const host=$('ag-graph');if(!host||!s||!s.phase)return;
+  if(s.phase==='act'){const m=/across (\d+) parallel/.exec(s.detail||'');buildAgentGraph(host,Math.max(1,Math.min(8,m?+m[1]:4)));return;}
+  if(s.phase==='round'){buildAgentGraph(host,AG_GRAPH_N||4);return;}
+  if(s.phase==='confirm'||s.phase==='escalate'){const m=/\[agent (\d+)\]/.exec(s.detail||'');if(m)pulseAgent(host,+m[1],s.phase);return;}
+  if(s.phase==='report'){host.querySelectorAll('.agv-node').forEach(nd=>nd.classList.remove('agv-active'));const tg=host.querySelector('.agv-target');if(tg)tg.classList.add('agv-done');}
+}
+function buildAgentGraph(host,n){
+  AG_GRAPH_N=n;AG_HITS={};
+  const W=380,Hh=190,cx=W/2,cy=Hh/2,R=66;let edges='',nodes='';
+  for(let i=1;i<=n;i++){const a=(i-1)/n*Math.PI*2-Math.PI/2,x=cx+Math.cos(a)*R,y=cy+Math.sin(a)*R;
+    edges+=`<line class="agv-edge" id="agv-e${i}" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"></line>`;
+    nodes+=`<g class="agv-node agv-active" id="agv-a${i}" transform="translate(${x},${y})"><circle r="12"></circle><text y="4" text-anchor="middle">${i}</text><text class="agv-cnt" id="agv-c${i}" y="26" text-anchor="middle"></text></g>`;}
+  host.innerHTML=`<svg viewBox="0 0 ${W} ${Hh}" style="width:100%;max-width:${W}px;height:auto;display:block;margin:0 auto"><style>
+    .agv-edge{stroke:var(--brd);stroke-width:1.5}.agv-edge.agv-flash{stroke:#f59e0b;stroke-width:2.5}
+    .agv-node circle{fill:var(--s1);stroke:var(--brd2);stroke-width:1.5}.agv-node text{fill:var(--t2);font-size:10px;font-family:ui-monospace,monospace}.agv-cnt{fill:var(--t3);font-size:8px}
+    .agv-node.agv-hit circle{fill:var(--red);stroke:var(--red)}.agv-node.agv-hit>text{fill:#fff}
+    .agv-node.agv-imp circle{fill:#f59e0b;stroke:#f59e0b}
+    .agv-node.agv-active circle{animation:agvpulse 1.1s ease-in-out infinite}
+    .agv-target circle{fill:var(--acc2);stroke:var(--acc2)}.agv-target text{fill:#04110a;font-weight:700}.agv-target.agv-done circle{fill:var(--grn);stroke:var(--grn)}
+    @keyframes agvpulse{0%,100%{opacity:1}50%{opacity:.45}}</style>
+    ${edges}${nodes}<g class="agv-target"><circle cx="${cx}" cy="${cy}" r="17"></circle><text x="${cx}" y="${cy+4}" text-anchor="middle" style="font-size:9px">target</text></g></svg>
+    <div style="text-align:center;color:var(--t3);font-size:11px;margin-top:2px">${n} agent${n>1?'s':''} probing in parallel</div>`;
+}
+function pulseAgent(host,i,phase){
+  if(i<1||i>AG_GRAPH_N)return;
+  const node=host.querySelector('#agv-a'+i),edge=host.querySelector('#agv-e'+i);
+  if(edge){edge.classList.add('agv-flash');setTimeout(()=>{try{edge.classList.remove('agv-flash')}catch(e){}},600);}
+  if(node)node.classList.add(phase==='escalate'?'agv-imp':'agv-hit');
+  AG_HITS[i]=(AG_HITS[i]||0)+1;const c=host.querySelector('#agv-c'+i);if(c)c.textContent=AG_HITS[i]+' found';
 }
 function appendStep(s,tl){
   if(!s||!s.phase||!tl)return;
