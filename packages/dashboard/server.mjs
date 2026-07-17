@@ -50,6 +50,7 @@ import { openPullRequest } from './github-pr.mjs';
 import { gatherLeads } from './leads.mjs';
 import { diffToDelta, dueMonitors } from './monitor-schedule.mjs';
 import { applyLineFix, generatePatch } from './patch.mjs';
+import { runInSandbox, sandboxAvailable } from './sandbox.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -2076,6 +2077,115 @@ app.post('/api/agent/custom-check', async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: `Check failed: ${e.message}` });
   }
+});
+
+// EXPLOIT SANDBOX — run LLM-authored (or pasted) analysis code inside a HARDENED, network-isolated
+// Docker container (see sandbox.mjs). The code gets the target response Shannon safely fetched (no
+// network of its own); a matched result is a labeled POTENTIAL lead, never confirmed. Docker-gated.
+async function llmWriteCode(instruction, lang, key) {
+  try {
+    const client = new Anthropic({ apiKey: key });
+    const model = process.env.SHANNON_QUICK_MODEL || process.env.SHANNON_MODEL || 'claude-haiku-4-5-20251001';
+    const runtime = lang === 'node' ? 'JavaScript (Node 20)' : 'Python 3';
+    const readIn =
+      lang === 'node'
+        ? "Buffer.from(process.env.SX_INPUT||'','base64').toString()"
+        : "base64.b64decode(os.environ.get('SX_INPUT','')).decode('utf-8','ignore')";
+    const msg = await client.messages.create({
+      model,
+      max_tokens: 500,
+      messages: [
+        {
+          role: 'user',
+          content: `Write a short ${runtime} program (there is NO network — do not attempt requests) that reads the base64-encoded HTTP response from SX_INPUT (${readIn}) and checks for: ${instruction}. Print exactly ONE line of JSON to stdout: {"matched": true|false, "detail": "..."}. Output ONLY the code — no code fences, no prose.`,
+        },
+      ],
+    });
+    let code = (msg.content || [])
+      .map((c) => c.text || '')
+      .join('')
+      .trim();
+    code = code
+      .replace(/^```[a-z]*\n?/gim, '')
+      .replace(/```$/gm, '')
+      .trim();
+    return code || null;
+  } catch {
+    return null;
+  }
+}
+
+app.post('/api/agent/sandbox', async (req, res) => {
+  const { target, code, lang = 'python', instruction } = req.body || {};
+  if (!target) return res.status(400).json({ error: 'Provide a target.' });
+  let host;
+  try {
+    host = hostOf(target);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL.' });
+  }
+  if (!isLocalHost(host)) {
+    const user = getUser(req);
+    if (!user) return res.status(401).json({ error: 'Sign in first.' });
+    if (!isVerified(user.id, host))
+      return res.status(403).json({
+        error: `Verify ownership of ${registrable(host)} first (Domains page).`,
+        needsVerification: registrable(host),
+      });
+  }
+  if (!(await sandboxAvailable()))
+    return res
+      .status(400)
+      .json({
+        error:
+          'The code sandbox needs Docker on the host (for isolation). It is unavailable here — deploy where Docker is present, or use the AI custom check instead.',
+        unavailable: true,
+      });
+  let src = code;
+  if (!src && instruction) {
+    const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
+    if (!key)
+      return res
+        .status(400)
+        .json({ error: 'Add an Anthropic key to have the AI write the code, or paste code yourself.' });
+    src = await llmWriteCode(instruction, lang === 'node' ? 'node' : 'python', key);
+    if (!src) return res.status(502).json({ error: 'The AI could not write the code — try pasting it.' });
+  }
+  if (!src) return res.status(400).json({ error: 'Provide an instruction (AI) or paste code.' });
+  let input = '';
+  try {
+    setSessionHeaders({});
+    setScanOrigin(new URL(target).origin);
+    const r = await fetchT(target, {}, 12000);
+    input = `HTTP ${r.status}\n${String(r.body || '').slice(0, 100_000)}`;
+  } catch {}
+  const result = await runInSandbox({ code: src, lang: lang === 'node' ? 'node' : 'python', input });
+  let parsed = null;
+  const mm = (result.stdout || '').match(/\{[\s\S]*"matched"[\s\S]*?\}/);
+  if (mm) {
+    try {
+      parsed = JSON.parse(mm[0]);
+    } catch {}
+  }
+  const lead = parsed?.matched
+    ? {
+        kind: 'ai-sandbox',
+        tier: 'potential',
+        severity: 'info',
+        target,
+        note: `Sandbox check MATCHED (POTENTIAL — unproven): ${String(parsed.detail || '').slice(0, 200)}. Verify manually.`,
+      }
+    : null;
+  res.json({
+    ok: true,
+    code: src,
+    unavailable: !!result.unavailable,
+    timedOut: !!result.timedOut,
+    stdout: String(result.stdout || '').slice(0, 8000),
+    stderr: String(result.stderr || '').slice(0, 2000),
+    matched: !!parsed?.matched,
+    lead,
+  });
 });
 
 // CODE LOCATOR — bridge a proven finding to the likely vulnerable line in pasted source (first step

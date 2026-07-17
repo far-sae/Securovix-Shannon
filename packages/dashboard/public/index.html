@@ -1793,7 +1793,39 @@ async function pgAgent(){
         <div id="cc-out" style="margin-top:10px"></div>
       </div>
     </details>
+    <details style="margin-top:12px;max-width:660px">
+      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; Exploit sandbox (Docker-isolated code)</summary>
+      <div style="margin-top:10px">
+        <p style="color:var(--t3);font-size:12px;margin:0 0 8px;line-height:1.5">The AI writes analysis code (or paste your own); Shannon runs it in a <b style="color:var(--t0)">hardened, network-isolated Docker container</b> (no host access, no egress) against the response it fetched. A match is a <b style="color:#f59e0b">POTENTIAL</b> lead, never confirmed. Needs Docker on the host; AI mode needs a key.</p>
+        <input id="sb-instruction" placeholder="e.g. decode any JWT in the response and check alg=none" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box;margin-bottom:6px">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><select id="sb-lang" style="padding:9px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><option value="python">Python</option><option value="node">Node</option></select><span style="color:var(--t3);font-size:11px">reads the response from SX_INPUT (base64) → prints {"matched":…}</span></div>
+        <textarea id="sb-code" rows="4" placeholder="…or paste code here (leave blank to let the AI write it)" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;resize:vertical;font-family:ui-monospace,monospace;box-sizing:border-box"></textarea>
+        <div style="margin-top:6px"><button class="btn btn-p" onclick="runSandbox()">Run in sandbox</button></div>
+        <div id="sb-out" style="margin-top:10px"></div>
+      </div>
+    </details>
     <div id="ag-out" style="margin-top:24px"></div>
+  </div>`;
+}
+async function runSandbox(){
+  const target=($('ag-target')?.value||'').trim(),out=$('sb-out');if(!out)return;
+  if(!target){out.innerHTML='<span style="color:var(--red);font-size:12px">Enter a target above first.</span>';return;}
+  const instruction=($('sb-instruction')?.value||'').trim(),code=($('sb-code')?.value||'').trim(),lang=(($('sb-lang')||{}).value||'python');
+  const payload={target,lang};
+  if(code)payload.code=code; else if(instruction)payload.instruction=instruction;
+  else{out.innerHTML='<span style="color:var(--red);font-size:12px">Give an instruction (AI writes code) or paste code.</span>';return;}
+  out.innerHTML='<span class="sp"></span> running in isolated container…';
+  let r,j;
+  try{ r=await fetch('/api/agent/sandbox',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}); j=await r.json().catch(()=>({})); }
+  catch(e){ out.innerHTML=`<span style="color:var(--red);font-size:12px">${H(e.message||'Failed.')}</span>`; return; }
+  if(!r.ok){ out.innerHTML=`<span style="color:var(--red);font-size:12px">${H(j.error||('HTTP '+r.status))}${j.needsVerification?` <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Verify →</a>`:''}</span>`; return; }
+  const mono='font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all';
+  out.innerHTML=`<div style="font-size:12px">
+    <div style="font-weight:700;color:${j.matched?'#f59e0b':(j.timedOut?'var(--red)':'var(--grn)')}">${j.timedOut?'⏱ timed out':(j.matched?'&#9888; MATCHED — POTENTIAL (unproven)':'ran · no match')}</div>
+    ${j.matched&&j.lead?`<div style="color:var(--t2);margin-top:4px;line-height:1.45">${H(j.lead.note||'')}</div>`:''}
+    ${j.code?`<div style="color:var(--t3);font-size:11px;margin-top:8px">code the AI ran:</div><div style="${mono};color:var(--t3);max-height:120px;overflow:auto;border:1px solid var(--brd);border-radius:6px;padding:8px">${H(j.code)}</div>`:''}
+    <div style="color:var(--t3);font-size:11px;margin-top:6px">stdout:</div><div style="${mono};color:var(--t2);max-height:140px;overflow:auto;border:1px solid var(--brd);border-radius:6px;padding:8px">${H(j.stdout||'')||'(empty)'}</div>
+    ${j.stderr?`<div style="${mono};color:var(--red);font-size:11px;margin-top:6px;max-height:80px;overflow:auto">${H(j.stderr)}</div>`:''}
   </div>`;
 }
 async function runCustomCheck(){
