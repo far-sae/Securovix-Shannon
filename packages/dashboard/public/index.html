@@ -1826,6 +1826,7 @@ async function runSandbox(){
     ${j.code?`<div style="color:var(--t3);font-size:11px;margin-top:8px">code the AI ran:</div><div style="${mono};color:var(--t3);max-height:120px;overflow:auto;border:1px solid var(--brd);border-radius:6px;padding:8px">${H(j.code)}</div>`:''}
     <div style="color:var(--t3);font-size:11px;margin-top:6px">stdout:</div><div style="${mono};color:var(--t2);max-height:140px;overflow:auto;border:1px solid var(--brd);border-radius:6px;padding:8px">${H(j.stdout||'')||'(empty)'}</div>
     ${j.stderr?`<div style="${mono};color:var(--red);font-size:11px;margin-top:6px;max-height:80px;overflow:auto">${H(j.stderr)}</div>`:''}
+    ${j.image?`<div style="color:var(--t3);font-size:10px;margin-top:6px">ran in ${H(j.image)} (network-isolated)</div>`:''}
   </div>`;
 }
 async function runCustomCheck(){

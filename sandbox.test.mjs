@@ -2,7 +2,7 @@
 // assert every isolation flag is present in the docker argv.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildDockerArgs } from './packages/dashboard/sandbox.mjs';
+import { buildDockerArgs, sandboxImage } from './packages/dashboard/sandbox.mjs';
 
 test('buildDockerArgs: every isolation flag is present (no silent weakening)', () => {
   const args = buildDockerArgs({ image: 'python:3-slim', cmd: ['python3', '-'], name: 'sx1' });
@@ -28,4 +28,16 @@ test('buildDockerArgs: env is passed via -e (used to hand in the fetched respons
 test('buildDockerArgs: --rm and interactive stdin so the container is ephemeral and fed the code', () => {
   const args = buildDockerArgs({ image: 'x', cmd: ['sh'] });
   assert.ok(args.includes('--rm') && args.includes('-i'));
+});
+
+test('sandboxImage: hosted SHANNON_SANDBOX_IMAGE wins; per-language public fallback otherwise', () => {
+  const saved = process.env.SHANNON_SANDBOX_IMAGE;
+  delete process.env.SHANNON_SANDBOX_IMAGE;
+  assert.equal(sandboxImage('python'), 'python:3-slim');
+  assert.equal(sandboxImage('node'), 'node:20-slim');
+  process.env.SHANNON_SANDBOX_IMAGE = 'ghcr.io/me/shannon-sandbox:1';
+  assert.equal(sandboxImage('python'), 'ghcr.io/me/shannon-sandbox:1', 'one hosted image serves both runtimes');
+  assert.equal(sandboxImage('node'), 'ghcr.io/me/shannon-sandbox:1');
+  if (saved === undefined) delete process.env.SHANNON_SANDBOX_IMAGE;
+  else process.env.SHANNON_SANDBOX_IMAGE = saved;
 });

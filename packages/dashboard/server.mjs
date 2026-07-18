@@ -2179,6 +2179,7 @@ app.post('/api/agent/sandbox', async (req, res) => {
   res.json({
     ok: true,
     code: src,
+    image: result.image || null,
     unavailable: !!result.unavailable,
     timedOut: !!result.timedOut,
     stdout: String(result.stdout || '').slice(0, 8000),

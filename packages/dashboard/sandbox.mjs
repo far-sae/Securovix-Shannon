@@ -59,10 +59,14 @@ export async function sandboxAvailable() {
   return _dockerOk;
 }
 
-const IMAGES = {
-  python: { image: 'python:3-slim', cmd: ['python3', '-'] },
-  node: { image: 'node:20-slim', cmd: ['node', '-'] },
-};
+const CMDS = { python: ['python3', '-'], node: ['node', '-'] };
+
+// The sandbox image. A single HOSTED image (SHANNON_SANDBOX_IMAGE — build it from
+// packages/dashboard/sandbox/Dockerfile) can carry BOTH runtimes + offline analysis libs; otherwise
+// fall back to the public slim image per language so it still works out of the box.
+export function sandboxImage(lang = 'python') {
+  return process.env.SHANNON_SANDBOX_IMAGE || (lang === 'node' ? 'node:20-slim' : 'python:3-slim');
+}
 
 export async function runInSandbox({ code, lang = 'python', input = '', timeoutSecs = 20 } = {}) {
   if (!(await sandboxAvailable()))
@@ -72,11 +76,12 @@ export async function runInSandbox({ code, lang = 'python', input = '', timeoutS
       stdout: '',
       stderr: 'Docker is not available on this host — the code sandbox needs it for isolation.',
     };
-  const spec = IMAGES[lang] || IMAGES.python;
+  const cmd = CMDS[lang] || CMDS.python;
+  const image = sandboxImage(lang);
   const name = `sxsbx-${Math.random().toString(36).slice(2, 10)}`;
   const args = buildDockerArgs({
-    image: spec.image,
-    cmd: spec.cmd,
+    image,
+    cmd,
     name,
     env: { SX_INPUT: Buffer.from(String(input || '')).toString('base64') },
   });
@@ -112,7 +117,9 @@ export async function runInSandbox({ code, lang = 'python', input = '', timeoutS
       if (err.length < 20000) err += d;
     });
     p.on('error', (e) => finish({ ok: false, stdout: '', stderr: `docker spawn failed: ${e.message}` }));
-    p.on('close', (c) => finish({ ok: c === 0, code: c, stdout: out.slice(0, 200000), stderr: err.slice(0, 20000) }));
+    p.on('close', (c) =>
+      finish({ ok: c === 0, code: c, image, stdout: out.slice(0, 200000), stderr: err.slice(0, 20000) }),
+    );
     try {
       p.stdin.write(String(code || ''));
       p.stdin.end();
