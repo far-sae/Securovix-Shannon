@@ -1718,16 +1718,18 @@ async function pgAgent(){
   CID=null;sList();
   M.innerHTML=`<div class="pg" style="max-width:960px">
     <h1 class="h-display" style="font-size:30px">AI Agent</h1>
-    <p style="color:var(--t2);margin-top:8px;max-width:660px;line-height:1.55">Point the agent at a target you own. It crawls the app and builds an <b style="color:var(--t0)">understanding</b> — what it appears to be, where the risk concentrates, and a prioritized plan of what to test. The surface map + plan are deterministic (no API key needed); an AI narrative is added when a key is set. This is the reconnaissance the autonomous agent reasons from.</p>
-    <div style="display:flex;gap:10px;margin-top:20px;max-width:660px;flex-wrap:wrap">
-      <input id="ag-target" placeholder="https://staging.yoursite.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')agentUnderstand()" style="flex:1;min-width:260px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
-      <button class="btn btn-p" id="ag-go" onclick="agentUnderstand()">Understand target</button>
+    <p style="color:var(--t2);margin-top:6px;line-height:1.5;max-width:560px">Point it at a target you own — it maps the app, runs proof-based checks, and reports. <b style="color:var(--t0)">Zero false positives.</b></p>
+    <div style="display:flex;gap:10px;margin-top:18px;max-width:660px;flex-wrap:wrap">
+      <input id="ag-target" placeholder="https://staging.yoursite.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')agentUnderstand()" style="flex:1;min-width:240px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
+      <button class="btn btn-p" id="ag-go" onclick="agentUnderstand()">Analyze</button>
     </div>
-    <div style="color:var(--t3);font-size:12px;margin-top:8px">Only targets you've verified on the <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Domains</a> page (localhost is exempt).</div>
-    <details style="margin-top:12px;max-width:660px">
-      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; Authenticated scan (optional — reach logged-in surface)</summary>
+    <div style="color:var(--t3);font-size:12px;margin-top:6px">Verified targets only — see <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Domains</a>. Localhost is exempt.</div>
+    <div id="ag-out" style="margin-top:20px;max-width:660px"></div>
+    <div style="margin-top:22px;max-width:660px;color:var(--t3);font-size:11px;text-transform:uppercase;letter-spacing:.07em;font-weight:700">Options &amp; tools</div>
+    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
+      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Login / session <span style="color:var(--t3);font-weight:400">— reach logged-in pages</span></summary>
       <div style="margin-top:10px">
-        <p style="color:var(--t3);font-size:12px;margin:0 0 8px;line-height:1.5">Give a session cookie, OR login credentials (Shannon logs in and reuses the session). The login URL must be on the same domain as the target. Prefer a cookie so no password travels in the URL.</p>
+        
         <input id="ag-cookie" placeholder="session cookie, e.g. sid=abc123; theme=dark" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box">
         <div style="text-align:center;color:var(--t3);font-size:11px;margin:6px 0">— or —</div>
         <div style="display:grid;gap:6px">
@@ -1736,23 +1738,23 @@ async function pgAgent(){
         </div>
       </div>
     </details>
-    <details style="margin-top:16px;max-width:660px">
-      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; Batch mode — run the agent across many targets</summary>
+    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
+      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Batch <span style="color:var(--t3);font-weight:400">— many targets</span></summary>
       <textarea id="ag-batch" rows="4" placeholder="https://a.example&#10;https://b.example&#10;https://c.example" style="width:100%;margin-top:10px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0;resize:vertical;font-family:inherit;box-sizing:border-box"></textarea>
       <div style="display:flex;gap:10px;margin-top:8px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-p" id="ag-batch-go" onclick="agentBatch()">&#9654; Run agent on all targets</button>
-        <span style="color:var(--t3);font-size:12px">One URL per line · each a verified domain (localhost exempt) · runs sequentially.</span>
+        <span style="color:var(--t3);font-size:11px">One URL per line.</span>
       </div>
       <div id="ag-batch-out" style="margin-top:16px"></div>
     </details>
-    <details style="margin-top:12px;max-width:660px">
-      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none" onclick="setTimeout(agentHistory,0)">&#9656; Run history &amp; regressions</summary>
+    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
+      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none" onclick="setTimeout(agentHistory,0)">History <span style="color:var(--t3);font-weight:400">— compare runs</span></summary>
       <div id="ag-hist" style="margin-top:12px;font-size:13px;color:var(--t2)">Loading…</div>
     </details>
-    <details style="margin-top:12px;max-width:660px">
-      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none" onclick="setTimeout(agentMonitors,0)">&#9656; Continuous monitoring (scheduled scans + alerts)</summary>
+    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
+      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none" onclick="setTimeout(agentMonitors,0)">Monitoring <span style="color:var(--t3);font-weight:400">— scheduled + alerts</span></summary>
       <div style="margin-top:12px">
-        <p style="color:var(--t3);font-size:12px;margin:0 0 10px;line-height:1.5">Schedule the agent to re-scan a target you own on an interval. Each run diffs against the last; set a webhook (Slack/Discord/generic) to be alerted on NEW findings only.</p>
+        
         <div style="display:grid;gap:6px">
           <input id="mon-target" placeholder="https://staging.yoursite.com" spellcheck="false" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
           <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -1764,10 +1766,10 @@ async function pgAgent(){
         <div id="mon-list" style="margin-top:12px"></div>
       </div>
     </details>
-    <details style="margin-top:12px;max-width:660px">
-      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; Repeater — edit &amp; replay a request</summary>
+    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
+      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Repeater <span style="color:var(--t3);font-weight:400">— replay a request</span></summary>
       <div style="margin-top:10px">
-        <p style="color:var(--t3);font-size:12px;margin:0 0 8px;line-height:1.5">Craft a request to a target you own and see the raw response — for manual verification. Same ownership gate as scans; internal/metadata hosts are blocked.</p>
+        
         <div style="display:flex;gap:6px;margin-bottom:6px">
           <select id="rp-method" style="flex:0 0 auto;padding:9px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select>
           <input id="rp-url" placeholder="https://staging.yoursite.com/api/x?id=1" spellcheck="false" style="flex:1;min-width:0;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
@@ -1778,10 +1780,10 @@ async function pgAgent(){
         <div id="rp-out" style="margin-top:10px"></div>
       </div>
     </details>
-    <details style="margin-top:12px;max-width:660px">
-      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; AI custom check (safe — no code execution)</summary>
+    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
+      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">AI check <span style="color:var(--t3);font-weight:400">— potential leads</span></summary>
       <div style="margin-top:10px">
-        <p style="color:var(--t3);font-size:12px;margin:0 0 8px;line-height:1.5">Describe what to test — the AI authors a bounded HTTP check and Shannon runs it deterministically (SSRF-guarded, on the target above). A match is a <b style="color:#f59e0b">POTENTIAL</b> lead (unproven), never confirmed. No code runs on the server. AI mode needs a key; or specify a manual check.</p>
+        <p style="color:var(--t3);font-size:11px;margin:0 0 8px">AI writes a bounded check; matches are <b style="color:#f59e0b">potential</b> (unproven).</p>
         <input id="cc-instruction" placeholder="e.g. is /actuator/env exposed and does it leak secrets?" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box">
         <div style="text-align:center;color:var(--t3);font-size:11px;margin:6px 0">— or manual —</div>
         <div style="display:flex;gap:6px;margin-bottom:6px">
@@ -1793,10 +1795,10 @@ async function pgAgent(){
         <div id="cc-out" style="margin-top:10px"></div>
       </div>
     </details>
-    <details style="margin-top:12px;max-width:660px">
-      <summary style="cursor:pointer;color:var(--acc2);font-size:13px;user-select:none">&#9656; Exploit sandbox (Docker-isolated code)</summary>
+    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
+      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Sandbox <span style="color:var(--t3);font-weight:400">— isolated code</span></summary>
       <div style="margin-top:10px">
-        <p style="color:var(--t3);font-size:12px;margin:0 0 8px;line-height:1.5">The AI writes analysis code (or paste your own); Shannon runs it in a <b style="color:var(--t0)">hardened, network-isolated Docker container</b> (no host access, no egress) against the response it fetched. A match is a <b style="color:#f59e0b">POTENTIAL</b> lead, never confirmed. Needs Docker on the host; AI mode needs a key.</p>
+        <p style="color:var(--t3);font-size:11px;margin:0 0 8px">AI writes code; runs in an isolated Docker container (needs Docker). Matches are <b style="color:#f59e0b">potential</b>.</p>
         <input id="sb-instruction" placeholder="e.g. decode any JWT in the response and check alg=none" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box;margin-bottom:6px">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><select id="sb-lang" style="padding:9px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><option value="python">Python</option><option value="node">Node</option></select><span style="color:var(--t3);font-size:11px">reads the response from SX_INPUT (base64) → prints {"matched":…}</span></div>
         <textarea id="sb-code" rows="4" placeholder="…or paste code here (leave blank to let the AI write it)" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;resize:vertical;font-family:ui-monospace,monospace;box-sizing:border-box"></textarea>
@@ -1804,7 +1806,6 @@ async function pgAgent(){
         <div id="sb-out" style="margin-top:10px"></div>
       </div>
     </details>
-    <div id="ag-out" style="margin-top:24px"></div>
   </div>`;
 }
 async function runSandbox(){
