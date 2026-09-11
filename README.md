@@ -36,6 +36,7 @@ and proves it is now **blocked (403)** — attack *and* defense in one pass.
 | **DNS / attack surface** | Subdomain enumeration (crt.sh) + **subdomain-takeover** (dangling CNAME + service fingerprint) |
 | **Cloud** | Publicly-listable, site-referenced storage buckets (S3 / GCS / Azure) |
 | **Network** (opt-in) | Unauthenticated Redis / Memcached / Elasticsearch / anonymous FTP |
+| **LLM attack surface** | **Prompt injection — direct & indirect (2nd-order), proof-based & zero-FP.** Discovers where an LLM sits behind the HTTP surface, then confirms injection only when the model emits a *computed* marker (arithmetic / reversed-nonce oracle) absent from a control — no LLM-judge. Chains a benign, read-only **system-prompt-leak** impact proof. Mapped to the **OWASP LLM Top 10 (2025)**. See [`docs/research/llm-attack-surface.md`](docs/research/llm-attack-surface.md). |
 
 ### Platform intelligence (layered on top of raw findings)
 

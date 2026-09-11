@@ -23,6 +23,12 @@ export function analyzeSurface(surface = {}) {
   );
   const postForms = forms.filter((f) => (f.method || 'get').toLowerCase() === 'post');
   const gql = apis.filter((p) => /graphql|graphiql/i.test(p));
+  // LLM attack surface: params/paths that commonly front a language model (chat, ask, summarize, ...).
+  const llmP = match(params, /^(prompt|message|msg|ask|question|chat|query|input|text|content)$/i);
+  const llmPaths = uniq(
+    (surface.pages || []).map((p) => p.url).filter((u) => /\/(chat|ask|assistant|summar|copilot|agent|ai)\b/i.test(u)),
+  );
+  const hasLlm = llmP.length > 0 || llmPaths.length > 0;
 
   const plan = [];
   const add = (severity, cls, why, targets) =>
@@ -50,6 +56,12 @@ export function analyzeSurface(surface = {}) {
   );
   add('high', 'GraphQL abuse (introspection / batching)', 'a GraphQL endpoint is exposed', gql);
   add(
+    'high',
+    'Prompt injection (LLM01) — direct & indirect',
+    'an AI / chat feature is exposed; test whether attacker text overrides the model (proof-based, zero-FP)',
+    llmPaths.concat(postForms.filter((f) => (f.params || []).some((p) => /prompt|message|content|comment|note/i.test(p))).map((f) => f.url)),
+  );
+  add(
     'medium',
     'CSRF',
     'state-changing POST forms — check for anti-CSRF tokens',
@@ -71,6 +83,7 @@ export function analyzeSurface(surface = {}) {
   if (gql.length) traits.push('uses GraphQL');
   if (idP.length) traits.push('addresses objects by id (an IDOR surface)');
   if (urlP.length) traits.push('accepts URL parameters (an SSRF surface)');
+  if (hasLlm) traits.push('exposes an AI / LLM feature (a prompt-injection surface)');
 
   return {
     origin: surface.origin,

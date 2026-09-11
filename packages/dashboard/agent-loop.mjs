@@ -8,8 +8,8 @@
 // The agent decides WHAT to run; the engine decides what's REAL (every finding keeps its benign proof).
 import { analyzeSurface } from './agent-understand.mjs';
 
-const GET_PROBES = ['sqli', 'xss', 'ssrf', 'nosql', 'crlf', 'open-redirect'];
-const FORM_PROBES = ['csrf', 'mass-assignment', 'auth-testing'];
+const GET_PROBES = ['sqli', 'xss', 'ssrf', 'nosql', 'crlf', 'open-redirect', 'llm-prompt-injection'];
+const FORM_PROBES = ['csrf', 'mass-assignment', 'auth-testing', 'llm-indirect-injection'];
 const ORIGIN_PROBES = ['security-headers', 'secrets-exposure', 'cors-misconfig', 'templates'];
 const API_PROBES = ['api-data-exposure'];
 
