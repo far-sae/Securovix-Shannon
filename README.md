@@ -49,6 +49,11 @@ and proves it is now **blocked (403)** — attack *and* defense in one pass.
   generic-webhook alerts fired **only** on *newly appeared* exposures.
 - **AI reasoning** (key-gated) — the LLM *proposes* privileged field names / attack ideas; the
   engine *deterministically verifies* each before it can become a finding.
+- **Multi-agent security team** — a blackboard-coordinated team of role-specialized agents (recon ·
+  exploit pool · remediation · report) that runs a full engagement hands-off with autonomous handoffs,
+  rendered as a live "graph of agents." Agents orchestrate; the deterministic engine still confirms
+  every finding, so zero-FP holds across the whole team. See
+  [`docs/research/multi-agent-security-team.md`](docs/research/multi-agent-security-team.md).
 
 ---
 

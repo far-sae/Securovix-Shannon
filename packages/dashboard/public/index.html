@@ -1748,6 +1748,15 @@ async function pgAgent(){
       <div id="ag-batch-out" style="margin-top:16px"></div>
     </details>
     <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
+      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Security team <span style="color:var(--t3);font-weight:400">— autonomous multi-agent engagement</span></summary>
+      <p style="color:var(--t3);font-size:12px;line-height:1.6;margin:10px 0 6px">A team of role-specialized agents coordinates over a shared blackboard and hands off work autonomously: <strong style="color:var(--t2)">recon</strong> maps the surface, an <strong style="color:var(--t2)">exploit pool</strong> claims and proves findings (zero-FP), <strong style="color:var(--t2)">remediation</strong> proposes fixes, and <strong style="color:var(--t2)">report</strong> consolidates. Uses the target in the box above.</p>
+      <div style="display:flex;gap:10px;margin-top:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-p" id="ag-team-go" onclick="teamRun()">&#9673; Deploy the security team</button>
+        <span style="color:var(--t3);font-size:11px">Same ownership gate as scanning.</span>
+      </div>
+      <div id="ag-team-out" style="margin-top:16px"></div>
+    </details>
+    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
       <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none" onclick="setTimeout(agentHistory,0)">History <span style="color:var(--t3);font-weight:400">— compare runs</span></summary>
       <div id="ag-hist" style="margin-top:12px;font-size:13px;color:var(--t2)">Loading…</div>
     </details>
@@ -2026,6 +2035,72 @@ async function agentBatch(){
   }
   if(btn)btn.disabled=false;
   const agg=$('ag-batch-agg');if(agg)agg.textContent=`Batch complete · ${targets.length} target${targets.length>1?'s':''} · ${totalProven} proven across all targets`;
+}
+// ── Multi-agent SECURITY TEAM: stream the blackboard-coordinated run + a role-typed handoff graph ──
+let TEAM_ES=null;
+function teamRun(){
+  const t=($('ag-target')?.value||'').trim();if(!t){go('agent');return;}
+  const btn=$('ag-team-go');if(btn)btn.disabled=true;
+  if(TEAM_ES){try{TEAM_ES.close()}catch(e){}TEAM_ES=null;}
+  const out=$('ag-team-out');
+  out.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin:4px 0 12px"><div style="font-size:15px;font-weight:700" id="tm-status">The security team is working…</div><span class="sp" id="tm-spin"></span></div><div id="tm-graph" style="margin:2px 0 10px"></div><div id="tm-tl" style="border:1px solid var(--brd);border-radius:10px;padding:4px 14px"></div><div id="tm-finds" style="margin-top:16px"></div><div id="tm-fixes" style="margin-top:16px"></div>`;
+  buildTeamGraph($('tm-graph'),4);
+  const fin=()=>{if(btn)btn.disabled=false;const sp=$('tm-spin');if(sp)sp.remove();TEAM_ES=null;};
+  const es=new EventSource('/api/agent/team/stream?target='+encodeURIComponent(t)+(typeof agentAuthQuery==='function'?agentAuthQuery():''));
+  TEAM_ES=es;let done=false;
+  es.onmessage=e=>{let s=null;try{s=JSON.parse(e.data)}catch(x){}if(!s)return;appendStep(s,$('tm-tl'));pulseTeam($('tm-graph'),s);};
+  es.addEventListener('done',e=>{done=true;try{es.close()}catch(x){}fin();let team=null;try{team=JSON.parse(e.data).team}catch(x){}
+    const st=$('tm-status');if(st)st.textContent='Security team run complete';
+    if(team){ if(team.graph)buildTeamGraph($('tm-graph'),(team.stats&&team.stats.agents)||4,team.graph);
+      finishRun({findings:team.findings||[],leads:[],stats:team.stats||{}},$('tm-finds'));
+      renderTeamFixes(team.fixes||[],$('tm-fixes')); }
+  });
+  es.addEventListener('error',e=>{if(done)return;done=true;try{es.close()}catch(x){}fin();let msg='The team stopped or the connection dropped.',nv=null;try{if(e.data){const m=JSON.parse(e.data);msg=m.message||msg;nv=m.needsVerification;}}catch(x){}const tl=$('tm-tl');if(tl)tl.innerHTML=`<div style="padding:10px;color:var(--red)">${H(msg)}${nv?` <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Verify ownership →</a>`:''}</div>`;const st=$('tm-status');if(st)st.textContent='Security team stopped';});
+}
+function renderTeamFixes(fixes,el){
+  if(!el)return;if(!fixes.length){el.innerHTML='';return;}
+  el.innerHTML=`<h3 style="font-size:15px;margin:6px 0 10px">Suggested fixes <span style="color:var(--t3);font-weight:400">(${fixes.length}) — review before applying</span></h3>`+
+    fixes.map(f=>`<div style="border:1px solid var(--brd);border-radius:8px;padding:10px 12px;margin-bottom:8px"><div style="font-size:12px;font-weight:700;color:var(--t1)">${H(f.cls||'finding')}</div><div style="color:var(--t2);font-size:13px;margin-top:4px;line-height:1.5">${H((f.patch&&(f.patch.note||f.patch.guidance))||f.label||'suggested fix')}</div></div>`).join('');
+}
+// Role-typed team graph: recon · coordinator · exploit×N · remediation · report, arranged as a flow.
+let TEAM_NODES={};
+function buildTeamGraph(host,n,graph){
+  if(!host)return;n=Math.max(1,Math.min(8,n||4));TEAM_NODES={};
+  const W=560,cols=[['recon','Recon'],['coordinator','Coord'],['exploit','Exploit'],['remediation','Remediation'],['report','Report']];
+  const colX=i=>60+i*((W-120)/(cols.length-1));const midY=110;
+  let edges='',nodes='';
+  // backbone edges between role columns
+  for(let i=0;i<cols.length-1;i++){edges+=`<line class="tmv-edge" x1="${colX(i)}" y1="${midY}" x2="${colX(i+1)}" y2="${midY}"></line>`;}
+  const N=(id,x,y,label,r)=>{TEAM_NODES[id]={x,y};return `<g class="tmv-node" id="tmv-${id}" transform="translate(${x},${y})"><circle r="${r||15}"></circle><text y="4" text-anchor="middle">${H(label)}</text></g>`;}
+  nodes+=N('recon',colX(0),midY,'R');
+  nodes+=N('coordinator',colX(1),midY,'C');
+  // exploit pool stacked vertically at column 2
+  const ex=[];for(let i=1;i<=n;i++){const y=midY-((n-1)*22)/2+(i-1)*22;const x=colX(2);TEAM_NODES['exploit-'+i]={x,y};ex.push(`<g class="tmv-node tmv-exploit" id="tmv-exploit-${i}" transform="translate(${x},${y})"><circle r="11"></circle><text y="3" text-anchor="middle" style="font-size:9px">${i}</text></g>`);edges+=`<line class="tmv-edge" x1="${colX(1)}" y1="${midY}" x2="${x}" y2="${y}"></line>`;edges+=`<line class="tmv-edge" x1="${x}" y1="${y}" x2="${colX(3)}" y2="${midY}"></line>`;}
+  nodes+=ex.join('');
+  nodes+=N('remediation',colX(3),midY,'Rem');
+  nodes+=N('report',colX(4),midY,'Rep');
+  host.innerHTML=`<svg viewBox="0 0 ${W} 220" style="width:100%;max-width:${W}px;height:auto;display:block;margin:0 auto"><style>
+    .tmv-edge{stroke:var(--brd);stroke-width:1.5}.tmv-edge.tmv-flash{stroke:#f59e0b;stroke-width:2.5}
+    .tmv-node circle{fill:var(--s1);stroke:var(--brd2);stroke-width:1.5}.tmv-node text{fill:var(--t2);font-size:10px;font-family:ui-monospace,monospace}
+    .tmv-node.tmv-on circle{fill:var(--acc2);stroke:var(--acc2)}.tmv-node.tmv-on>text{fill:#04110a;font-weight:700}
+    .tmv-node.tmv-hit circle{fill:var(--red);stroke:var(--red)}.tmv-node.tmv-hit>text{fill:#fff}
+    .tmv-node.tmv-imp circle{fill:#f59e0b;stroke:#f59e0b}
+    .tmv-node.tmv-active circle{animation:tmvpulse 1.1s ease-in-out infinite}
+    @keyframes tmvpulse{0%,100%{opacity:1}50%{opacity:.5}}
+    .tmv-lbl{fill:var(--t3);font-size:9px;font-family:ui-monospace,monospace}</style>
+    ${edges}${nodes}
+    ${cols.map((c,i)=>`<text class="tmv-lbl" x="${colX(i)}" y="200" text-anchor="middle">${H(c[1])}</text>`).join('')}
+    </svg><div style="text-align:center;color:var(--t3);font-size:11px;margin-top:2px">${graph?`${(graph.edges||[]).length} handoffs · ${(graph.nodes||[]).length} agents`:'blackboard-coordinated team'}</div>`;
+}
+function tmOn(host,id){const nd=host&&host.querySelector('#tmv-'+id);if(nd){host.querySelectorAll('.tmv-node').forEach(x=>x.classList.remove('tmv-active'));nd.classList.add('tmv-on','tmv-active');}}
+function pulseTeam(host,s){
+  if(!host||!s||!s.phase)return;
+  if(s.phase==='recon'){tmOn(host,'recon');return;}
+  if(s.phase==='plan'){tmOn(host,'coordinator');return;}
+  if(s.phase==='act'){host.querySelectorAll('.tmv-exploit').forEach(x=>x.classList.add('tmv-active'));return;}
+  if(s.phase==='confirm'||s.phase==='escalate'){const m=/exploit-(\d+)/.exec(s.agent||s.detail||'');if(m){const nd=host.querySelector('#tmv-exploit-'+m[1]);if(nd)nd.classList.add(s.phase==='escalate'?'tmv-imp':'tmv-hit');}return;}
+  if(s.phase==='remediate'){tmOn(host,'remediation');return;}
+  if(s.phase==='report'){tmOn(host,'report');return;}
 }
 // ── Live agent-graph visualization (purely visual — driven by the streamed steps) ──
 let AG_GRAPH_N=0,AG_HITS={};

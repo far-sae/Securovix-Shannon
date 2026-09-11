@@ -23,6 +23,7 @@ import {
 } from '../../purple-engine.mjs';
 import { diffRuns } from './agent-history.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
+import { runSecurityTeam } from './agent-team.mjs';
 import { toJson, toMarkdown, toSarif } from './agent-report.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import { locateFinding } from './code-locate.mjs';
@@ -1802,6 +1803,66 @@ app.get('/api/agent/run/stream', async (req, res) => {
     send({ run }, 'done');
   } catch (e) {
     send({ message: `Agent run failed: ${e.message}` }, 'error');
+  }
+  res.end();
+});
+
+// MULTI-AGENT SECURITY TEAM: a blackboard-coordinated team of role agents (recon · exploit pool ·
+// remediation · report) that run the whole engagement hands-off. Reuses the same ownership gate,
+// crawl, and zero-FP probers; remediation is guidance-level (black-box scan → no source tree), so
+// fixes are labeled suggested. Returns findings + suggested fixes + report + a handoff graph.
+function teamDeps(target, headers) {
+  const base = agentDeps(target, headers); // probe, escalate, recrawl, fetchText
+  return {
+    ...base,
+    locate: async () => null, // black-box: no source tree to point at (Code Scan takes pasted source)
+    patch: async (finding) => generatePatch({ finding, guidance: detectionRule(finding.cls) }),
+    report: async (run, meta) => ({ markdown: toMarkdown({ findings: run.findings || [], leads: [] }, meta || {}) }),
+    files: [],
+  };
+}
+
+app.post('/api/agent/team', async (req, res) => {
+  const r = await agentGateAndCrawl(req);
+  if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
+  try {
+    const out = await runSecurityTeam({ surface: r.surface, deps: teamDeps(r.target, r.headers), roster: { exploitAgents: 4 } });
+    out.savedId = persistRun(req, r.target, { stats: out.stats, findings: out.findings, leads: [] });
+    res.json({ ok: true, team: out });
+  } catch (e) {
+    res.status(500).json({ error: `Security team run failed: ${e.message}` });
+  }
+});
+
+// Streamed live over SSE so the dashboard watches the team coordinate step by step (same transport
+// contract as /api/agent/run/stream: GET, same-origin cookie auth, target as a query param).
+app.get('/api/agent/team/stream', async (req, res) => {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  const send = (obj, event) => {
+    if (event) res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+  const r = await agentGateAndCrawl(req, req.query.target);
+  if (r.error) {
+    send({ message: r.error, needsVerification: r.needsVerification }, 'error');
+    return res.end();
+  }
+  try {
+    const out = await runSecurityTeam({
+      surface: r.surface,
+      deps: teamDeps(r.target, r.headers),
+      roster: { exploitAgents: 4 },
+      onEvent: (e) => send(e),
+    });
+    out.savedId = persistRun(req, r.target, { stats: out.stats, findings: out.findings, leads: [] });
+    send({ team: out }, 'done');
+  } catch (e) {
+    send({ message: `Security team run failed: ${e.message}` }, 'error');
   }
   res.end();
 });
