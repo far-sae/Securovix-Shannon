@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { test } from 'node:test';
 import { applyLlmJudgment, classify } from './defender/classify.mjs';
+import { httpProxyConnector } from './defender/connectors.mjs';
 import { applyResponse, makeRateLimiter } from './defender/respond.mjs';
 import { buildCompositeFilter } from './purple-engine.mjs';
 
@@ -184,4 +186,79 @@ test('respond: omitting mode entirely defaults to monitor (never enforces)', () 
   assert.equal(r.enforced, false);
   assert.equal(r.action, 'alert');
   assert.deepEqual(calls, ['alert'], 'default mode must not enforce');
+});
+
+// Minimal upstream "customer app" for proxy tests (loopback only, no network).
+async function upstream(
+  handler = (_req, res) => {
+    res.writeHead(200);
+    res.end('upstream-ok');
+  },
+) {
+  const srv = http.createServer(handler);
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  return { origin: `http://127.0.0.1:${srv.address().port}`, close: () => new Promise((r) => srv.close(r)) };
+}
+
+// ---------- http proxy connector ----------
+test('connector: forwards a benign request to the upstream app', async () => {
+  const app = await upstream();
+  const seen = [];
+  const c = await httpProxyConnector({
+    origin: app.origin,
+    onEvent: (e) => {
+      seen.push(e);
+      return { block: false };
+    },
+  });
+  const res = await fetch(`${c.meta.url}/products?page=2`);
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), 'upstream-ok');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].source, 'http-proxy');
+  assert.equal(seen[0].url, '/products?page=2');
+  await c.stop();
+  await app.close();
+});
+test('connector: returns 403 and does NOT reach upstream when told to block', async () => {
+  let hits = 0;
+  const app = await upstream((_req, res) => {
+    hits++;
+    res.writeHead(200);
+    res.end('upstream-ok');
+  });
+  const c = await httpProxyConnector({ origin: app.origin, onEvent: () => ({ block: true }) });
+  const res = await fetch(`${c.meta.url}/?q={{7*7}}`);
+  assert.equal(res.status, 403);
+  assert.equal(hits, 0, 'attack never reached the protected app');
+  await c.stop();
+  await app.close();
+});
+test('connector: FAILS OPEN — a throwing decision forwards rather than breaking the app', async () => {
+  const app = await upstream();
+  const c = await httpProxyConnector({
+    origin: app.origin,
+    onEvent: () => {
+      throw new Error('classifier exploded');
+    },
+  });
+  const res = await fetch(`${c.meta.url}/checkout`);
+  assert.equal(res.status, 200, 'must never fail closed');
+  await c.stop();
+  await app.close();
+});
+test('connector: captures the request body in the event', async () => {
+  const app = await upstream();
+  const seen = [];
+  const c = await httpProxyConnector({
+    origin: app.origin,
+    onEvent: (e) => {
+      seen.push(e);
+    },
+  });
+  await fetch(`${c.meta.url}/login`, { method: 'POST', body: 'user=admin&note=hi' });
+  assert.equal(seen[0].method, 'POST');
+  assert.equal(seen[0].body, 'user=admin&note=hi');
+  await c.stop();
+  await app.close();
 });
