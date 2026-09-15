@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyLlmJudgment, classify } from './defender/classify.mjs';
+import { applyResponse, makeRateLimiter } from './defender/respond.mjs';
 import { buildCompositeFilter } from './purple-engine.mjs';
 
 // ---------- composite signature matcher ----------
@@ -83,4 +84,74 @@ test('classify: FAILS OPEN — a throwing matcher can never block traffic', () =
   assert.equal(v.confidence, 'benign');
   assert.equal(v.recommendedAction, 'observe');
   assert.match(v.signal, /boom/);
+});
+
+// ---------- responder ----------
+const blockVerdict = {
+  attack: true,
+  cls: 'rce-ssti',
+  confidence: 'confirmed',
+  signal: 's',
+  recommendedAction: 'block-inline',
+};
+const benignVerdict = { attack: false, cls: null, confidence: 'benign', signal: 's', recommendedAction: 'observe' };
+
+test('respond: MONITOR mode never enforces — it alerts instead', () => {
+  const calls = [];
+  const r = applyResponse(
+    blockVerdict,
+    {},
+    { mode: 'monitor', deps: { alert: () => calls.push('alert'), enforce: () => calls.push('enforce') } },
+  );
+  assert.equal(r.enforced, false);
+  assert.equal(r.action, 'alert');
+  assert.deepEqual(calls, ['alert'], 'alerted but did not enforce');
+});
+test('respond: ENFORCE mode blocks and calls the enforcer', () => {
+  const calls = [];
+  const r = applyResponse(
+    blockVerdict,
+    {},
+    { mode: 'enforce', deps: { alert: () => calls.push('alert'), enforce: (a) => calls.push(`enforce:${a}`) } },
+  );
+  assert.equal(r.enforced, true);
+  assert.equal(r.action, 'block-inline');
+  assert.deepEqual(calls, ['alert', 'enforce:block-inline']);
+});
+test('respond: a benign verdict does nothing at all', () => {
+  const calls = [];
+  const r = applyResponse(benignVerdict, {}, { mode: 'enforce', deps: { alert: () => calls.push('alert') } });
+  assert.equal(r.action, 'observe');
+  assert.equal(r.enforced, false);
+  assert.deepEqual(calls, []);
+});
+test('respond: a throwing enforcer never propagates (defender must not crash)', () => {
+  assert.doesNotThrow(() =>
+    applyResponse(
+      blockVerdict,
+      {},
+      {
+        mode: 'enforce',
+        deps: {
+          enforce: () => {
+            throw new Error('firewall down');
+          },
+        },
+      },
+    ),
+  );
+});
+test('respond: rate limiting suppresses action storms', () => {
+  const r = applyResponse(blockVerdict, {}, { mode: 'enforce', allow: () => false, deps: {} });
+  assert.equal(r.enforced, false);
+  assert.match(r.reason, /rate limited/);
+});
+test('rate limiter: allows up to max per window, then refuses', () => {
+  let t = 0;
+  const allow = makeRateLimiter({ max: 2, windowMs: 1000, now: () => t });
+  assert.equal(allow(), true);
+  assert.equal(allow(), true);
+  assert.equal(allow(), false, 'budget spent');
+  t = 1001;
+  assert.equal(allow(), true, 'window rolled over');
 });
