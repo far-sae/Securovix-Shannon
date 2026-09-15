@@ -73,3 +73,14 @@ test('LLM judgment: absent opinion is a no-op', () => {
   const base = classify(httpEvent('/products'));
   assert.deepEqual(applyLlmJudgment(base, null), base);
 });
+test('classify: FAILS OPEN — a throwing matcher can never block traffic', () => {
+  const v = classify(httpEvent('/?q={{7*7}}'), {
+    match: () => {
+      throw new Error('boom');
+    },
+  });
+  assert.equal(v.attack, false);
+  assert.equal(v.confidence, 'benign');
+  assert.equal(v.recommendedAction, 'observe');
+  assert.match(v.signal, /boom/);
+});

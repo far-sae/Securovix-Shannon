@@ -15,13 +15,13 @@ const benign = (signal = 'no deterministic signature matched') => ({
   recommendedAction: 'observe',
 });
 
-export function classify(event) {
+export function classify(event, { match = matchClass } = {}) {
   if (!event || event.source !== 'http-proxy') return benign('source carries no HTTP signature surface');
   let cls = null;
   try {
-    cls = matchClass(event.url || '', event.body || '');
-  } catch {
-    return benign('classifier error — failing open');
+    cls = match(event.url || '', event.body || '');
+  } catch (err) {
+    return benign(`classifier error — failing open: ${err?.message || err}`);
   }
   if (!cls) return benign();
   return {
