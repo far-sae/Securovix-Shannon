@@ -9,6 +9,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import express from 'express';
 import { parse as parseYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
+import { httpProxyConnector } from '../../defender/connectors.mjs';
+import { runDefender } from '../../defender/agent.mjs';
 import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import { sendMonitorAlert } from '../../monitor.mjs';
@@ -2678,6 +2680,103 @@ function yamlDump(obj, indent = 0) {
 app.get('/healthz', (_req, res) =>
   res.json({ ok: true, db: isSupabase() ? 'supabase' : 'fs', uptime: process.uptime() }),
 );
+
+// ── Live Defender ───────────────────────────────────────────────────────────────────────────────
+// A connected system is protected inline by a filtering reverse proxy. Ownership verification is
+// mandatory (you may not point a blocker at a host you do not own) and monitor mode is the default.
+const defenders = new Map(); // id -> { system, runtime, sseClients, events }
+
+function defBroadcast(entry, payload) {
+  const line = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const c of entry.sseClients) {
+    try {
+      c.write(line);
+    } catch {}
+  }
+}
+
+app.post('/api/defender/connect', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+
+  const { origin } = req.body || {};
+  if (!origin) return res.status(400).json({ error: 'origin required' });
+
+  let host;
+  try {
+    host = hostOf(origin);
+  } catch {
+    return res.status(400).json({ error: 'invalid origin URL' });
+  }
+  if (!isLocalHost(host) && !isVerified(user.id, host)) {
+    return res.status(403).json({ error: 'needsVerification', host });
+  }
+
+  const id = `def-${Math.random().toString(16).slice(2, 10)}`;
+  const system = { id, userId: user.id, kind: 'web', origin, mode: 'monitor', createdAt: new Date().toISOString() };
+  const entry = { system, runtime: null, sseClients: [], events: [] };
+  defenders.set(id, entry);
+
+  const runtime = await runDefender({
+    connect: ({ onEvent }) => httpProxyConnector({ origin, onEvent }),
+    mode: 'monitor',
+    deps: {},
+    onUpdate: (d) => {
+      entry.events.push(d);
+      if (entry.events.length > 500) entry.events.shift();
+      defBroadcast(entry, { type: 'defense', ...d });
+    },
+  });
+  entry.runtime = runtime;
+
+  res.json({ id, mode: 'monitor', proxyUrl: runtime.meta.url, origin, graph: runtime.graph });
+});
+
+app.get('/api/defender/list', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+  const rows = [...defenders.values()]
+    .filter((e) => e.system.userId === user.id)
+    .map((e) => ({ ...e.system, proxyUrl: e.runtime?.meta?.url || null, stats: e.runtime?.stats?.() || { events: 0, defenses: 0 } }));
+  res.json({ systems: rows });
+});
+
+app.post('/api/defender/:id/mode', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+  const entry = defenders.get(req.params.id);
+  if (!entry || entry.system.userId !== user.id) return res.status(404).json({ error: 'not found' });
+  const mode = entry.runtime.setMode(req.body?.mode);
+  entry.system.mode = mode;
+  defBroadcast(entry, { type: 'mode', mode });
+  res.json({ id: entry.system.id, mode });
+});
+
+app.post('/api/defender/:id/disconnect', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+  const entry = defenders.get(req.params.id);
+  if (!entry || entry.system.userId !== user.id) return res.status(404).json({ error: 'not found' });
+  try {
+    await entry.runtime?.stop?.();
+  } catch {}
+  defenders.delete(req.params.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/defender/:id/events', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).end();
+  const entry = defenders.get(req.params.id);
+  if (!entry || entry.system.userId !== user.id) return res.status(404).end();
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+  res.write(`data: ${JSON.stringify({ type: 'hello', mode: entry.system.mode, stats: entry.runtime.stats() })}\n\n`);
+  entry.sseClients.push(res);
+  req.on('close', () => {
+    const i = entry.sseClients.indexOf(res);
+    if (i >= 0) entry.sseClients.splice(i, 1);
+  });
+});
 
 (async () => {
   try {
