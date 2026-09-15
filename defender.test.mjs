@@ -262,3 +262,57 @@ test('connector: captures the request body in the event', async () => {
   await c.stop();
   await app.close();
 });
+
+import { defenderAgent, runDefender } from './defender/agent.mjs';
+import { makeBlackboard } from './packages/dashboard/agent-team.mjs';
+
+// ---------- defender agent ----------
+test('agent: an attack in ENFORCE mode blocks and posts a defense fact', () => {
+  const bb = makeBlackboard();
+  const handle = defenderAgent(bb, { getMode: () => 'enforce', deps: {} });
+  const out = handle(httpEvent('/?q={{7*7}}'));
+  assert.equal(out.block, true);
+  assert.equal(bb.all('attack-event').length, 1);
+  assert.equal(bb.all('defense').length, 1);
+  assert.equal(bb.all('defense')[0].data.verdict.cls, 'rce-ssti');
+});
+test('agent: the same attack in MONITOR mode records but does NOT block', () => {
+  const bb = makeBlackboard();
+  const handle = defenderAgent(bb, { getMode: () => 'monitor', deps: {} });
+  assert.equal(handle(httpEvent('/?q={{7*7}}')).block, false);
+  assert.equal(bb.all('defense').length, 1, 'still recorded for the operator');
+});
+test('agent: benign traffic posts an event but no defense fact', () => {
+  const bb = makeBlackboard();
+  const handle = defenderAgent(bb, { getMode: () => 'enforce', deps: {} });
+  assert.equal(handle(httpEvent('/products?page=2')).block, false);
+  assert.equal(bb.all('attack-event').length, 1);
+  assert.equal(bb.all('defense').length, 0);
+});
+test('runDefender: end-to-end — blocks a live attack, forwards benign traffic, tracks stats', async () => {
+  const app = await upstream();
+  const d = await runDefender({
+    connect: ({ onEvent }) => httpProxyConnector({ origin: app.origin, onEvent }),
+    mode: 'enforce',
+  });
+  assert.equal((await fetch(`${d.meta.url}/products`)).status, 200);
+  assert.equal((await fetch(`${d.meta.url}/?q={{7*7}}`)).status, 403);
+  assert.equal(d.stats().events, 2);
+  assert.equal(d.stats().defenses, 1);
+  assert.ok(d.timeline.length >= 1, 'timeline narrates the defense');
+  assert.ok(d.graph.nodes.length >= 3, 'handoff graph present for the UI');
+  await d.stop();
+  await app.close();
+});
+test('runDefender: setMode flips enforcement live', async () => {
+  const app = await upstream();
+  const d = await runDefender({
+    connect: ({ onEvent }) => httpProxyConnector({ origin: app.origin, onEvent }),
+    mode: 'monitor',
+  });
+  assert.equal((await fetch(`${d.meta.url}/?q={{7*7}}`)).status, 200, 'monitor lets it through');
+  d.setMode('enforce');
+  assert.equal((await fetch(`${d.meta.url}/?q={{7*7}}`)).status, 403, 'enforce now blocks');
+  await d.stop();
+  await app.close();
+});
