@@ -1722,105 +1722,154 @@ function view(id){CID=id;sList();go('scan',id)}
 // ===== AI AGENT (understand a target — recon/planning agent) =====
 async function pgAgent(){
   CID=null;sList();
-  M.innerHTML=`<div class="pg" style="max-width:960px">
-    <h1 class="h-display" style="font-size:30px">AI Agent</h1>
-    <p style="color:var(--t2);margin-top:6px;line-height:1.5;max-width:560px">Point it at a target you own — it maps the app, runs proof-based checks, and reports. <b style="color:var(--t0)">Zero false positives.</b></p>
-    <div style="display:flex;gap:10px;margin-top:18px;max-width:660px;flex-wrap:wrap">
-      <input id="ag-target" placeholder="https://staging.yoursite.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')agentUnderstand()" style="flex:1;min-width:240px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
+  M.innerHTML=`<style>
+    .agpg{max-width:1180px}
+    .agpg h1{font-size:26px;margin:0 0 6px;line-height:1.15}
+    .agpg .ag-sub{color:var(--t2);line-height:1.55;max-width:620px;margin:0 0 18px;font-size:13.5px}
+    .agpg input,.agpg textarea,.agpg select{padding:10px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:9px;color:var(--t0);font-size:12.5px;outline:0;box-sizing:border-box;font-family:inherit;width:100%}
+    .agpg textarea{resize:vertical;font-family:ui-monospace,monospace}
+    .agpg .ag-run{display:flex;gap:10px;flex-wrap:wrap;max-width:720px}
+    .agpg .ag-run input{flex:1;min-width:260px;width:auto}
+    .agpg .ag-run .btn{flex:0 0 auto}
+    .agpg .ag-note{color:var(--t3);font-size:12px;margin-top:9px}
+    .agpg .ag-results:not(:empty){margin:24px 0 0}
+    .agpg .ag-grouphdr{color:var(--t3);font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:32px 0 12px}
+    .agpg .ag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;align-items:start}
+    .agpg .ag-card{border:1px solid var(--brd);border-radius:12px;padding:15px 17px}
+    .agpg .ag-card>summary{cursor:pointer;color:var(--t0);font-size:13.5px;font-weight:600;user-select:none;list-style:none;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+    .agpg .ag-card>summary::-webkit-details-marker{display:none}
+    .agpg .ag-card>summary::after{content:'+';color:var(--t3);font-weight:400;font-size:16px;line-height:1}
+    .agpg .ag-card[open]>summary::after{content:'−'}
+    .agpg .ag-card .hint{color:var(--t3);font-weight:400;font-size:11.5px;display:block;margin-top:3px}
+    .agpg .ag-body{margin-top:13px;display:grid;gap:8px}
+    .agpg .ag-row{display:flex;gap:6px;flex-wrap:wrap}
+    .agpg .ag-row>*{flex:1;min-width:120px}
+    .agpg .ag-row>.narrow{flex:0 0 auto;min-width:0;width:auto}
+    .agpg .ag-or{text-align:center;color:var(--t3);font-size:11px;margin:1px 0}
+    .agpg .ag-desc{color:var(--t3);font-size:11.5px;line-height:1.6;margin:0}
+    .agpg .ag-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:3px}
+    @media(max-width:560px){.agpg .ag-grid{grid-template-columns:1fr}}
+  </style>
+  <div class="pg agpg">
+    <h1>AI Agent</h1>
+    <p class="ag-sub">Point it at a target you own — it maps the app, runs proof-based checks, and reports. <b style="color:var(--t0)">Zero false positives.</b></p>
+
+    <div class="ag-run">
+      <input id="ag-target" placeholder="https://staging.yoursite.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')agentUnderstand()">
       <button class="btn btn-p" id="ag-go" onclick="agentUnderstand()">Analyze</button>
     </div>
-    <div style="color:var(--t3);font-size:12px;margin-top:6px">Verified targets only — see <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Domains</a>. Localhost is exempt.</div>
-    <div id="ag-out" style="margin-top:20px;max-width:660px"></div>
-    <div style="margin-top:22px;max-width:660px;color:var(--t3);font-size:11px;text-transform:uppercase;letter-spacing:.07em;font-weight:700">Options &amp; tools</div>
-    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
-      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Login / session <span style="color:var(--t3);font-weight:400">— reach logged-in pages</span></summary>
-      <div style="margin-top:10px">
-        
-        <input id="ag-cookie" placeholder="session cookie, e.g. sid=abc123; theme=dark" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box">
-        <div style="text-align:center;color:var(--t3);font-size:11px;margin:6px 0">— or —</div>
-        <div style="display:grid;gap:6px">
-          <input id="ag-loginurl" placeholder="login URL, e.g. https://site.com/login" spellcheck="false" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
-          <div style="display:flex;gap:6px"><input id="ag-user" placeholder="username" spellcheck="false" style="flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><input id="ag-pass" type="password" placeholder="password" style="flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"></div>
-        </div>
-      </div>
-    </details>
-    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
-      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Batch <span style="color:var(--t3);font-weight:400">— many targets</span></summary>
-      <textarea id="ag-batch" rows="4" placeholder="https://a.example&#10;https://b.example&#10;https://c.example" style="width:100%;margin-top:10px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0;resize:vertical;font-family:inherit;box-sizing:border-box"></textarea>
-      <div style="display:flex;gap:10px;margin-top:8px;align-items:center;flex-wrap:wrap">
-        <button class="btn btn-p" id="ag-batch-go" onclick="agentBatch()">&#9654; Run agent on all targets</button>
-        <span style="color:var(--t3);font-size:11px">One URL per line.</span>
-      </div>
-      <div id="ag-batch-out" style="margin-top:16px"></div>
-    </details>
-    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
-      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Security team <span style="color:var(--t3);font-weight:400">— autonomous multi-agent engagement</span></summary>
-      <p style="color:var(--t3);font-size:12px;line-height:1.6;margin:10px 0 6px">A team of role-specialized agents coordinates over a shared blackboard and hands off work autonomously: <strong style="color:var(--t2)">recon</strong> maps the surface, an <strong style="color:var(--t2)">exploit pool</strong> claims and proves findings (zero-FP), <strong style="color:var(--t2)">remediation</strong> proposes fixes, and <strong style="color:var(--t2)">report</strong> consolidates. Uses the target in the box above.</p>
-      <div style="display:flex;gap:10px;margin-top:8px;align-items:center;flex-wrap:wrap">
-        <button class="btn btn-p" id="ag-team-go" onclick="teamRun()">&#9673; Deploy the security team</button>
-        <span style="color:var(--t3);font-size:11px">Same ownership gate as scanning.</span>
-      </div>
-      <div id="ag-team-out" style="margin-top:16px"></div>
-    </details>
-    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
-      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none" onclick="setTimeout(agentHistory,0)">History <span style="color:var(--t3);font-weight:400">— compare runs</span></summary>
-      <div id="ag-hist" style="margin-top:12px;font-size:13px;color:var(--t2)">Loading…</div>
-    </details>
-    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
-      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none" onclick="setTimeout(agentMonitors,0)">Monitoring <span style="color:var(--t3);font-weight:400">— scheduled + alerts</span></summary>
-      <div style="margin-top:12px">
-        
-        <div style="display:grid;gap:6px">
-          <input id="mon-target" placeholder="https://staging.yoursite.com" spellcheck="false" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            <select id="mon-interval" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;flex:1;min-width:110px"><option value="1">every 1h</option><option value="6">every 6h</option><option value="12">every 12h</option><option value="24" selected>daily</option><option value="168">weekly</option></select>
-            <input id="mon-webhook" placeholder="Alert webhook (optional)" spellcheck="false" style="padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;flex:2;min-width:200px">
+    <div class="ag-note">Verified targets only — see <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Domains</a>. Localhost is exempt.</div>
+
+    <div id="ag-out" class="ag-results"></div>
+
+    <div class="ag-grouphdr">Run</div>
+    <div class="ag-grid">
+      <details class="ag-card">
+        <summary><span>Login / session<span class="hint">Reach logged-in pages</span></span></summary>
+        <div class="ag-body">
+          <input id="ag-cookie" placeholder="session cookie, e.g. sid=abc123; theme=dark" spellcheck="false">
+          <div class="ag-or">— or —</div>
+          <input id="ag-loginurl" placeholder="login URL, e.g. https://site.com/login" spellcheck="false">
+          <div class="ag-row">
+            <input id="ag-user" placeholder="username" spellcheck="false">
+            <input id="ag-pass" type="password" placeholder="password">
           </div>
-          <div style="display:flex;gap:8px;align-items:center"><button class="btn btn-p" onclick="addMonitor()">Add monitor</button><span id="mon-msg" style="font-size:12px;color:var(--grn)"></span></div>
         </div>
-        <div id="mon-list" style="margin-top:12px"></div>
-      </div>
-    </details>
-    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
-      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Repeater <span style="color:var(--t3);font-weight:400">— replay a request</span></summary>
-      <div style="margin-top:10px">
-        
-        <div style="display:flex;gap:6px;margin-bottom:6px">
-          <select id="rp-method" style="flex:0 0 auto;padding:9px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select>
-          <input id="rp-url" placeholder="https://staging.yoursite.com/api/x?id=1" spellcheck="false" style="flex:1;min-width:0;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
+      </details>
+
+      <details class="ag-card">
+        <summary><span>Batch<span class="hint">Many targets at once</span></span></summary>
+        <div class="ag-body">
+          <textarea id="ag-batch" rows="4" placeholder="https://a.example&#10;https://b.example&#10;https://c.example" spellcheck="false"></textarea>
+          <div class="ag-actions">
+            <button class="btn btn-p" id="ag-batch-go" onclick="agentBatch()">&#9654; Run on all targets</button>
+            <span style="color:var(--t3);font-size:11px">One URL per line.</span>
+          </div>
+          <div id="ag-batch-out"></div>
         </div>
-        <textarea id="rp-headers" rows="3" placeholder="Headers, one per line&#10;Cookie: sid=abc123&#10;Content-Type: application/json" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;resize:vertical;font-family:ui-monospace,monospace;box-sizing:border-box;margin-bottom:6px"></textarea>
-        <textarea id="rp-body" rows="2" placeholder="Request body (POST/PUT/PATCH)" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;resize:vertical;font-family:ui-monospace,monospace;box-sizing:border-box"></textarea>
-        <div style="margin-top:6px"><button class="btn btn-p" onclick="repeaterSend()">Send</button></div>
-        <div id="rp-out" style="margin-top:10px"></div>
-      </div>
-    </details>
-    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
-      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">AI check <span style="color:var(--t3);font-weight:400">— potential leads</span></summary>
-      <div style="margin-top:10px">
-        <p style="color:var(--t3);font-size:11px;margin:0 0 8px">AI writes a bounded check; matches are <b style="color:#f59e0b">potential</b> (unproven).</p>
-        <input id="cc-instruction" placeholder="e.g. is /actuator/env exposed and does it leak secrets?" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box">
-        <div style="text-align:center;color:var(--t3);font-size:11px;margin:6px 0">— or manual —</div>
-        <div style="display:flex;gap:6px;margin-bottom:6px">
-          <select id="cc-method" style="flex:0 0 auto;padding:9px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select>
-          <input id="cc-path" placeholder="/path?x=1" spellcheck="false" style="flex:1;min-width:0;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0">
+      </details>
+
+      <details class="ag-card">
+        <summary><span>Security team<span class="hint">Autonomous multi-agent engagement</span></span></summary>
+        <div class="ag-body">
+          <p class="ag-desc">Role-specialized agents coordinate over a shared blackboard and hand off autonomously: <strong style="color:var(--t2)">recon</strong> maps the surface, an <strong style="color:var(--t2)">exploit pool</strong> claims and proves findings (zero-FP), <strong style="color:var(--t2)">remediation</strong> proposes fixes, <strong style="color:var(--t2)">report</strong> consolidates. Uses the target above.</p>
+          <div class="ag-actions">
+            <button class="btn btn-p" id="ag-team-go" onclick="teamRun()">&#9673; Deploy the security team</button>
+            <span style="color:var(--t3);font-size:11px">Same ownership gate.</span>
+          </div>
+          <div id="ag-team-out"></div>
         </div>
-        <input id="cc-contains" placeholder='response must contain… e.g. password' spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box">
-        <div style="margin-top:6px"><button class="btn btn-p" onclick="runCustomCheck()">Run check</button></div>
-        <div id="cc-out" style="margin-top:10px"></div>
-      </div>
-    </details>
-    <details style="margin-top:8px;max-width:660px;border:1px solid var(--brd);border-radius:8px;padding:6px 12px">
-      <summary style="cursor:pointer;color:var(--t0);font-size:13px;font-weight:600;user-select:none">Sandbox <span style="color:var(--t3);font-weight:400">— isolated code</span></summary>
-      <div style="margin-top:10px">
-        <p style="color:var(--t3);font-size:11px;margin:0 0 8px">AI writes code; runs in an isolated Docker container (needs Docker). Matches are <b style="color:#f59e0b">potential</b>.</p>
-        <input id="sb-instruction" placeholder="e.g. decode any JWT in the response and check alg=none" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;box-sizing:border-box;margin-bottom:6px">
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><select id="sb-lang" style="padding:9px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0"><option value="python">Python</option><option value="node">Node</option></select><span style="color:var(--t3);font-size:11px">reads the response from SX_INPUT (base64) → prints {"matched":…}</span></div>
-        <textarea id="sb-code" rows="4" placeholder="…or paste code here (leave blank to let the AI write it)" spellcheck="false" style="width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:8px;color:var(--t0);font-size:12px;outline:0;resize:vertical;font-family:ui-monospace,monospace;box-sizing:border-box"></textarea>
-        <div style="margin-top:6px"><button class="btn btn-p" onclick="runSandbox()">Run in sandbox</button></div>
-        <div id="sb-out" style="margin-top:10px"></div>
-      </div>
-    </details>
+      </details>
+    </div>
+
+    <div class="ag-grouphdr">Investigate</div>
+    <div class="ag-grid">
+      <details class="ag-card">
+        <summary><span>Repeater<span class="hint">Replay a single request</span></span></summary>
+        <div class="ag-body">
+          <div class="ag-row">
+            <select id="rp-method" class="narrow"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select>
+            <input id="rp-url" placeholder="https://staging.yoursite.com/api/x?id=1" spellcheck="false">
+          </div>
+          <textarea id="rp-headers" rows="3" placeholder="Headers, one per line&#10;Cookie: sid=abc123&#10;Content-Type: application/json" spellcheck="false"></textarea>
+          <textarea id="rp-body" rows="2" placeholder="Request body (POST/PUT/PATCH)" spellcheck="false"></textarea>
+          <div class="ag-actions"><button class="btn btn-p" onclick="repeaterSend()">Send</button></div>
+          <div id="rp-out"></div>
+        </div>
+      </details>
+
+      <details class="ag-card">
+        <summary><span>AI check<span class="hint">Potential leads, unproven</span></span></summary>
+        <div class="ag-body">
+          <p class="ag-desc">AI writes a bounded check; matches are <b style="color:#f59e0b">potential</b>, not proven.</p>
+          <input id="cc-instruction" placeholder="e.g. is /actuator/env exposed and does it leak secrets?" spellcheck="false">
+          <div class="ag-or">— or manual —</div>
+          <div class="ag-row">
+            <select id="cc-method" class="narrow"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select>
+            <input id="cc-path" placeholder="/path?x=1" spellcheck="false">
+          </div>
+          <input id="cc-contains" placeholder="response must contain… e.g. password" spellcheck="false">
+          <div class="ag-actions"><button class="btn btn-p" onclick="runCustomCheck()">Run check</button></div>
+          <div id="cc-out"></div>
+        </div>
+      </details>
+
+      <details class="ag-card">
+        <summary><span>Sandbox<span class="hint">Isolated code execution</span></span></summary>
+        <div class="ag-body">
+          <p class="ag-desc">AI writes code; runs in an isolated Docker container (needs Docker). Matches are <b style="color:#f59e0b">potential</b>.</p>
+          <input id="sb-instruction" placeholder="e.g. decode any JWT in the response and check alg=none" spellcheck="false">
+          <div class="ag-row">
+            <select id="sb-lang" class="narrow"><option value="python">Python</option><option value="node">Node</option></select>
+            <span style="color:var(--t3);font-size:11px;align-self:center">reads SX_INPUT (base64), prints matched</span>
+          </div>
+          <textarea id="sb-code" rows="4" placeholder="…or paste code here (leave blank to let the AI write it)" spellcheck="false"></textarea>
+          <div class="ag-actions"><button class="btn btn-p" onclick="runSandbox()">Run in sandbox</button></div>
+          <div id="sb-out"></div>
+        </div>
+      </details>
+    </div>
+
+    <div class="ag-grouphdr">Track</div>
+    <div class="ag-grid">
+      <details class="ag-card">
+        <summary onclick="setTimeout(agentHistory,0)"><span>History<span class="hint">Compare runs over time</span></span></summary>
+        <div class="ag-body"><div id="ag-hist" style="font-size:13px;color:var(--t2)">Loading…</div></div>
+      </details>
+
+      <details class="ag-card">
+        <summary onclick="setTimeout(agentMonitors,0)"><span>Monitoring<span class="hint">Scheduled scans + alerts</span></span></summary>
+        <div class="ag-body">
+          <input id="mon-target" placeholder="https://staging.yoursite.com" spellcheck="false">
+          <div class="ag-row">
+            <select id="mon-interval"><option value="1">every 1h</option><option value="6">every 6h</option><option value="12">every 12h</option><option value="24" selected>daily</option><option value="168">weekly</option></select>
+            <input id="mon-webhook" placeholder="Alert webhook (optional)" spellcheck="false">
+          </div>
+          <div class="ag-actions"><button class="btn btn-p" onclick="addMonitor()">Add monitor</button><span id="mon-msg" style="font-size:12px;color:var(--grn)"></span></div>
+          <div id="mon-list"></div>
+        </div>
+      </details>
+    </div>
   </div>`;
 }
 async function runSandbox(){
