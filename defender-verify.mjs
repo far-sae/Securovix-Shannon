@@ -23,6 +23,7 @@ const BENIGN = ['/products?page=2&sort=price', '/api/users/42'];
 
 let pass = 0;
 let blocked = 0;
+const before = reached; // capture BEFORE any request is sent, so the delta covers the attack phase too
 for (const a of ATTACKS) if ((await fetch(d.meta.url + a)).status === 403) blocked++;
 if (blocked === ATTACKS.length) {
   pass++;
@@ -31,7 +32,6 @@ if (blocked === ATTACKS.length) {
   console.log(`FAIL  blocked only ${blocked}/${ATTACKS.length}`);
 }
 
-const before = reached;
 let ok = 0;
 for (const b of BENIGN) if ((await fetch(d.meta.url + b)).status === 200) ok++;
 if (ok === BENIGN.length) {
@@ -49,11 +49,13 @@ if (reached - before === BENIGN.length) {
 }
 
 d.setMode('monitor');
-if ((await fetch(`${d.meta.url}/?q={{7*7}}`)).status === 200) {
+const eventsBefore = d.stats().events;
+const monitorRes = await fetch(`${d.meta.url}/?q={{7*7}}`);
+if (monitorRes.status === 200 && d.stats().events > eventsBefore) {
   pass++;
   console.log('PASS  monitor mode observes without blocking');
 } else {
-  console.log('FAIL  monitor mode blocked traffic');
+  console.log('FAIL  monitor mode blocked traffic or failed to observe it');
 }
 
 if (d.stats().defenses >= ATTACKS.length) {
