@@ -1387,6 +1387,20 @@ function startProxy(origin, filter, onBlock) {
   );
 }
 
+// Build one matcher from every blockable class's WAF filter. Returns the matched class or null.
+// This is the deterministic blocking authority reused by the live Defender.
+function buildCompositeFilter() {
+  const entries = Object.entries(PROBERS).filter(([, p]) => p.blockable && typeof p.filter === 'function');
+  return (url, body) => {
+    for (const [cls, p] of entries) {
+      try {
+        if (p.filter(url || '', body || '')) return cls;
+      } catch {}
+    }
+    return null;
+  };
+}
+
 function detectionRule(cls) {
   const R = {
     'rce-ssti':
@@ -1725,7 +1739,7 @@ export async function runExploitDefend({ target, classes, label, workspaceDir })
 
 export const ALL_CLASSES = Object.keys(PROBERS);
 // Exported for unit tests (pure helpers).
-export { detectionRule, fetchT, injectParam, injReq, mergeCookies, PROBERS, setParam, targetUrlOf };
+export { buildCompositeFilter, detectionRule, fetchT, injectParam, injReq, mergeCookies, PROBERS, setParam, targetUrlOf };
 
 // WHOLE-APP: crawl the target to discover pages/params/forms/APIs, then run every prober
 // across the discovered surface (auth headers applied to all requests), aggregate, defend, report.
