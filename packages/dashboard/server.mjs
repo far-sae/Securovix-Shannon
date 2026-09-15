@@ -9,8 +9,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import express from 'express';
 import { parse as parseYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
-import { httpProxyConnector } from '../../defender/connectors.mjs';
 import { runDefender } from '../../defender/agent.mjs';
+import { httpProxyConnector } from '../../defender/connectors.mjs';
 import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import { sendMonitorAlert } from '../../monitor.mjs';
@@ -2708,6 +2708,20 @@ app.post('/api/defender/connect', async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'invalid origin URL' });
   }
+
+  // hostOf() tolerates a schemeless origin by internally guessing https://, but httpProxyConnector
+  // parses the raw origin with `new URL(origin)` and needs an explicit, real http(s) scheme — never
+  // guess one here, since guessing would proxy to an endpoint the user did not actually choose.
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return res.status(400).json({ error: 'invalid origin URL — include the scheme, e.g. https://app.example.com' });
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return res.status(400).json({ error: 'origin must be an http(s) URL' });
+  }
+
   if (!isLocalHost(host) && !isVerified(user.id, host)) {
     return res.status(403).json({ error: 'needsVerification', host });
   }
@@ -2717,16 +2731,22 @@ app.post('/api/defender/connect', async (req, res) => {
   const entry = { system, runtime: null, sseClients: [], events: [] };
   defenders.set(id, entry);
 
-  const runtime = await runDefender({
-    connect: ({ onEvent }) => httpProxyConnector({ origin, onEvent }),
-    mode: 'monitor',
-    deps: {},
-    onUpdate: (d) => {
-      entry.events.push(d);
-      if (entry.events.length > 500) entry.events.shift();
-      defBroadcast(entry, { type: 'defense', ...d });
-    },
-  });
+  let runtime;
+  try {
+    runtime = await runDefender({
+      connect: ({ onEvent }) => httpProxyConnector({ origin, onEvent }),
+      mode: 'monitor',
+      deps: {},
+      onUpdate: (d) => {
+        entry.events.push(d);
+        if (entry.events.length > 500) entry.events.shift();
+        defBroadcast(entry, { type: 'defense', ...d });
+      },
+    });
+  } catch (err) {
+    defenders.delete(id);
+    return res.status(500).json({ error: 'failed to start defender', detail: String(err?.message || err) });
+  }
   entry.runtime = runtime;
 
   res.json({ id, mode: 'monitor', proxyUrl: runtime.meta.url, origin, graph: runtime.graph });
@@ -2746,6 +2766,7 @@ app.post('/api/defender/:id/mode', (req, res) => {
   if (!user) return res.status(401).json({ error: 'auth required' });
   const entry = defenders.get(req.params.id);
   if (!entry || entry.system.userId !== user.id) return res.status(404).json({ error: 'not found' });
+  if (!entry.runtime) return res.status(409).json({ error: 'defender not running' });
   const mode = entry.runtime.setMode(req.body?.mode);
   entry.system.mode = mode;
   defBroadcast(entry, { type: 'mode', mode });
@@ -2760,6 +2781,12 @@ app.post('/api/defender/:id/disconnect', async (req, res) => {
   try {
     await entry.runtime?.stop?.();
   } catch {}
+  for (const c of entry.sseClients) {
+    try {
+      c.end();
+    } catch {}
+  }
+  entry.sseClients.length = 0;
   defenders.delete(req.params.id);
   res.json({ ok: true });
 });
