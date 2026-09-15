@@ -5,6 +5,17 @@
 // swallowed — a broken enforcer must never take the defender down with it.
 const ENFORCING = new Set(['block-inline', 'block-ip', 'isolate']);
 
+// Invoke a responder without ever letting its failure reach the defender: a synchronous throw is
+// caught, and a rejected promise from an async responder gets a rejection handler attached (never
+// awaited) so it cannot become an unhandled rejection and kill the process.
+function safeCall(fn, ...args) {
+  if (typeof fn !== 'function') return;
+  try {
+    const r = fn(...args);
+    if (r && typeof r.then === 'function') r.then(undefined, () => {});
+  } catch {}
+}
+
 export function makeRateLimiter({ max = 20, windowMs = 60_000, now = () => Date.now() } = {}) {
   const hits = [];
   return () => {
@@ -23,16 +34,12 @@ export function applyResponse(verdict, ctx = {}, opts = {}) {
   if (wanted === 'observe') return { action: 'observe', enforced: false, wanted, reason: 'no action required' };
   if (!allow()) return { action: 'observe', enforced: false, wanted, reason: 'rate limited' };
 
-  try {
-    deps.alert?.(verdict, ctx);
-  } catch {}
+  safeCall(deps.alert, verdict, ctx);
 
   if (!ENFORCING.has(wanted)) return { action: 'alert', enforced: false, wanted, reason: 'alert only' };
   if (mode !== 'enforce')
     return { action: 'alert', enforced: false, wanted, reason: 'monitor mode — enforcement withheld' };
 
-  try {
-    deps.enforce?.(wanted, verdict, ctx);
-  } catch {}
+  safeCall(deps.enforce, wanted, verdict, ctx);
   return { action: wanted, enforced: true, wanted, reason: 'enforced' };
 }

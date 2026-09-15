@@ -155,3 +155,33 @@ test('rate limiter: allows up to max per window, then refuses', () => {
   t = 1001;
   assert.equal(allow(), true, 'window rolled over');
 });
+test('respond: an async-throwing responder never becomes an unhandled rejection', async () => {
+  const r = applyResponse(
+    blockVerdict,
+    {},
+    {
+      mode: 'enforce',
+      deps: {
+        alert: async () => {
+          throw new Error('webhook down');
+        },
+        enforce: async () => {
+          throw new Error('firewall down');
+        },
+      },
+    },
+  );
+  assert.equal(r.enforced, true, 'still returns synchronously');
+  await new Promise((resolve) => setImmediate(resolve)); // let the rejections settle
+});
+test('respond: omitting mode entirely defaults to monitor (never enforces)', () => {
+  const calls = [];
+  const r = applyResponse(
+    blockVerdict,
+    {},
+    { deps: { alert: () => calls.push('alert'), enforce: () => calls.push('enforce') } },
+  );
+  assert.equal(r.enforced, false);
+  assert.equal(r.action, 'alert');
+  assert.deepEqual(calls, ['alert'], 'default mode must not enforce');
+});
