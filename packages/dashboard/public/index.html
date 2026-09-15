@@ -2383,8 +2383,6 @@ async function removeDomain(d){
 }
 
 // ===== DEFENDER =====
-let DEF_ID = null, DEF_EVT = null;
-
 function pgDefender() {
   CID = null; sList();
   M.innerHTML = `
@@ -2458,12 +2456,11 @@ async function defToggleMode(id, mode) {
 }
 
 function defStream(id) {
-  if (DEF_EVT) { DEF_EVT.close(); DEF_EVT = null; }
-  DEF_ID = id;
+  if (EVT) { EVT.close(); EVT = null; }
   const live = $('def-live');
   live.innerHTML = '<em>Listening…</em>';
-  DEF_EVT = new EventSource(`/api/defender/${id}/events`);
-  DEF_EVT.onmessage = (m) => {
+  EVT = new EventSource(`/api/defender/${id}/events`);
+  EVT.onmessage = (m) => {
     const d = JSON.parse(m.data);
     if (d.type === 'hello') return;
     if (d.type === 'mode') { defLoad(); return; }
