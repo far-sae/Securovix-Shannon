@@ -16,6 +16,22 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 
+// The engine loads the repo's .env itself (purple-engine.mjs), but the dashboard never did — so
+// SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY were absent at runtime and this module silently fell
+// back to the local JSON files. The visible symptom was that an already-verified domain looked
+// unverified (its record lives in Supabase), so every Defender connect and scan launch was refused.
+// This must run BEFORE the config constants below are evaluated; it does, because server.mjs
+// imports this module, and an imported module's body is evaluated before the importer's.
+// Platform-provided env (Railway) still wins: we never overwrite a variable that is already set.
+try {
+  for (const line of readFileSync(new URL('../../.env', import.meta.url), 'utf-8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+  }
+} catch {
+  /* no .env file — env comes from the platform instead */
+}
+
 // ---- File-system fallback (and where we write secrets locally) ----
 const SHANNON_HOME = join(os.homedir(), '.shannon');
 const USERS_PATH = join(SHANNON_HOME, 'users.json');
