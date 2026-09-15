@@ -12,6 +12,28 @@ import { makeBlackboard } from '../packages/dashboard/agent-team.mjs';
 import { classify } from './classify.mjs';
 import { applyResponse, makeRateLimiter } from './respond.mjs';
 
+// Non-benign traffic must not grow without bound either. Restricting inline blocking to an
+// allowlist deliberately widened "non-benign" to every DETECTED class — and xss matches any HTML
+// tag while sqli matches a bare apostrophe — so on a real app with a search box or a CMS, a large
+// share of ordinary requests are alert-only detections. The blackboard is append-only and shared
+// with the offensive team, so the bound has to live here: retain a trimmed event, and only up to
+// MAX_FACTS of them. The counters stay exact regardless, so stats never lie.
+const MAX_FACTS = 1000;
+const MAX_FACT_BODY = 512;
+
+const trimEvent = (event) => ({
+  at: event.at,
+  source: event.source,
+  srcIp: event.srcIp,
+  method: event.method,
+  url: event.url,
+  // Headers dropped, body truncated: the operator needs the request line and enough payload to
+  // recognise the attack — not a full retained copy of every request that ever matched.
+  body: typeof event.body === 'string' ? event.body.slice(0, MAX_FACT_BODY) : event.body,
+  connId: event.connId,
+  raw: event.raw,
+});
+
 export function defenderAgent(bb, { getMode = () => 'monitor', deps = {}, allow, counters } = {}) {
   const count = counters || { events: 0, defenses: 0 };
   function handle(event) {
@@ -19,10 +41,13 @@ export function defenderAgent(bb, { getMode = () => 'monitor', deps = {}, allow,
     const verdict = classify(event);
     const result = applyResponse(verdict, { event }, { mode: getMode(), deps, allow });
     if (verdict.attack || result.action !== 'observe') {
-      // Only a non-benign request becomes a durable fact — and then it is worth recording in full.
-      bb.post('attack-event', event, 'connector');
-      bb.post('defense', { event, verdict, result }, 'defender');
       count.defenses++;
+      // Only a non-benign request becomes a durable fact, trimmed and capped.
+      if (count.defenses <= MAX_FACTS) {
+        const trimmed = trimEvent(event);
+        bb.post('attack-event', trimmed, 'connector');
+        bb.post('defense', { event: trimmed, verdict, result }, 'defender');
+      }
     }
     return { block: result.enforced && result.action === 'block-inline' };
   }

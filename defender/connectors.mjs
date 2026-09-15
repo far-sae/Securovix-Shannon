@@ -117,8 +117,14 @@ export function httpProxyConnector({ origin, port = 0, host = '127.0.0.1', onEve
 
     req.on('end', () => {
       if (oversize) return; // forwarded unclassified; req.pipe() ends the upstream request
-      const body = Buffer.concat(chunks).toString();
+      const bodyBuf = Buffer.concat(chunks);
       chunks = [];
+      // Classify on a text view, but forward the ORIGINAL BYTES. Decoding a binary body as UTF-8
+      // and re-encoding it replaces every non-UTF-8 byte with U+FFFD — and because we also re-frame
+      // content-length, the corruption is self-consistent, so the protected app never notices its
+      // uploads/gzip/protobuf arrived mangled. latin1 is a byte-preserving view: one char per byte,
+      // so ASCII signatures still match and nothing is lost on the wire.
+      const body = bodyBuf.toString('latin1');
       const event = {
         at: new Date().toISOString(),
         source: 'http-proxy',
@@ -144,8 +150,8 @@ export function httpProxyConnector({ origin, port = 0, host = '127.0.0.1', onEve
         return;
       }
 
-      const fwd = openUpstream(upstreamHeaders(body));
-      if (body) fwd.write(body);
+      const fwd = openUpstream(upstreamHeaders(bodyBuf));
+      if (bodyBuf.length) fwd.write(bodyBuf);
       fwd.end();
     });
   });
