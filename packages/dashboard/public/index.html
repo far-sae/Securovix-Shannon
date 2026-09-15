@@ -737,6 +737,7 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
     <button onclick="go('agent')" id="n-agent" aria-label="AI Agent"><span aria-hidden="true">&#9673;</span> AI Agent</button>
     <button onclick="go('code')" id="n-code" aria-label="Code Scan"><span aria-hidden="true">&#9876;</span> Code Scan</button>
     <button onclick="go('cfg')" id="n-cfg" aria-label="Settings"><span aria-hidden="true">&#9881;</span> Settings</button>
+    <button onclick="go('defender')" id="n-defender">Defender</button>
   </nav>
   <div class="slist" id="slist"><div class="slist-h">Past Scans</div></div>
 </aside>
@@ -1687,7 +1688,7 @@ function go(p,d){
   if(POLL){clearInterval(POLL);POLL=null}
   if(EVT){EVT.close();EVT=null}
   closeDrawer();
-  ({dash:pgDash,new:pgNew,domains:pgDomains,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling})[p]?.(d);
+  ({dash:pgDash,new:pgNew,domains:pgDomains,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
 }
 async function api(u,o){
   const r=await fetch('/api'+u,o);
@@ -2379,6 +2380,99 @@ async function removeDomain(d){
   try{ await api('/verify/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain:d})}); }
   catch(e){ alert(e.message); }
   pgDomains();
+}
+
+// ===== DEFENDER =====
+let DEF_ID = null, DEF_EVT = null;
+
+function pgDefender() {
+  CID = null; sList();
+  M.innerHTML = `
+    <div class="pg">
+      <h1 class="h-display">Defender</h1>
+      <p class="sub">Connect a system you own. Shannon watches every request, confirms attacks with the
+      same zero-false-positive signatures the engine uses, and can block them before they land.</p>
+
+      <div class="crd">
+        <h3>Connect a web app</h3>
+        <p>Your app's URL must be a domain you've verified on the Domains page.</p>
+        <input id="def-origin" placeholder="https://app.example.com" style="width:100%;margin:8px 0">
+        <button class="btn btn-p" onclick="defConnect()">Connect</button>
+        <div id="def-connect-out"></div>
+      </div>
+
+      <div class="crd">
+        <h3>Protected systems</h3>
+        <div id="def-list">Loading…</div>
+      </div>
+
+      <div class="crd">
+        <h3>Live activity</h3>
+        <div id="def-live"><em>Connect a system to see live defenses.</em></div>
+      </div>
+    </div>`;
+  defLoad();
+}
+
+async function defLoad() {
+  try {
+    const { systems } = await api('/defender/list');
+    $('def-list').innerHTML = systems.length
+      ? systems.map((s) => `
+        <div class="crd" style="margin:8px 0">
+          <b>${H(s.origin)}</b><br>
+          <small>Route your traffic through: <code>${H(s.proxyUrl || '—')}</code></small><br>
+          <small>Mode: <b>${H(s.mode)}</b> · events ${s.stats.events} · defenses ${s.stats.defenses}</small><br>
+          <button class="btn" onclick="defToggleMode('${s.id}','${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">
+            Switch to ${s.mode === 'enforce' ? 'Monitor-only' : 'Enforce (block attacks)'}
+          </button>
+          <button class="btn" onclick="defStream('${s.id}')">Watch live</button>
+        </div>`).join('')
+      : '<em>No systems connected yet.</em>';
+  } catch (e) {
+    $('def-list').innerHTML = `<span class="err">${H(e.message || 'failed to load')}</span>`;
+  }
+}
+
+async function defConnect() {
+  const origin = $('def-origin').value.trim();
+  const out = $('def-connect-out');
+  out.innerHTML = '<span class="sp"></span> Connecting…';
+  try {
+    const r = await api('/defender/connect', { method: 'POST', body: JSON.stringify({ origin }) });
+    out.innerHTML = `<p>Connected in <b>monitor-only</b> mode. Route traffic through
+      <code>${H(r.proxyUrl)}</code>, then switch to Enforce when you're ready to block.</p>`;
+    defLoad();
+    defStream(r.id);
+  } catch (e) {
+    out.innerHTML = e.status === 403
+      ? '<span class="err">You must verify ownership of that domain first (Domains page).</span>'
+      : `<span class="err">${H(e.message || 'connect failed')}</span>`;
+  }
+}
+
+async function defToggleMode(id, mode) {
+  if (mode === 'enforce' && !confirm('Enforce mode will BLOCK requests Shannon confirms as attacks. Continue?')) return;
+  await api(`/defender/${id}/mode`, { method: 'POST', body: JSON.stringify({ mode }) });
+  defLoad();
+}
+
+function defStream(id) {
+  if (DEF_EVT) { DEF_EVT.close(); DEF_EVT = null; }
+  DEF_ID = id;
+  const live = $('def-live');
+  live.innerHTML = '<em>Listening…</em>';
+  DEF_EVT = new EventSource(`/api/defender/${id}/events`);
+  DEF_EVT.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.type === 'hello') return;
+    if (d.type === 'mode') { defLoad(); return; }
+    if (live.querySelector('em')) live.innerHTML = '';
+    const row = document.createElement('div');
+    row.innerHTML = `<code>${H(d.event.method)} ${H(d.event.url)}</code> —
+      <b>${H(d.verdict.cls || 'benign')}</b> — ${H(d.result.action)}${d.result.enforced ? ' <b>(blocked)</b>' : ''}`;
+    live.prepend(row);
+  };
 }
 
 // ===== DASHBOARD =====
