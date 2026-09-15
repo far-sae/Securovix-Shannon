@@ -7,6 +7,12 @@ import { buildCompositeFilter } from '../purple-engine.mjs';
 
 const matchClass = buildCompositeFilter();
 
+// Classes whose signatures are specific enough to enforce against live production traffic.
+// Everything else is still detected and surfaced to the operator, but only as an alert:
+// the engine's other filters exist to re-test a replayed exploit, and match ordinary traffic
+// (a bare apostrophe, any HTML tag, a newline in a textarea, an OAuth redirect) far too readily.
+export const DEFENSE_CLASSES = ['path-traversal', 'nosql', 'llm-prompt-injection'];
+
 const benign = (signal = 'no deterministic signature matched') => ({
   attack: false,
   cls: null,
@@ -24,12 +30,16 @@ export function classify(event, { match = matchClass } = {}) {
     return benign(`classifier error — failing open: ${err?.message || err}`);
   }
   if (!cls) return benign();
+  // Detection is never narrowed — the operator sees every confirmed match. Only the *inline*
+  // block is restricted to DEFENSE_CLASSES; anything else is alert-only so ordinary production
+  // traffic is never 403'd by a signature that was written to re-test a replayed exploit.
+  const enforceable = DEFENSE_CLASSES.includes(cls);
   return {
     attack: true,
     cls,
     confidence: 'confirmed',
-    signal: `signature match: ${cls}`,
-    recommendedAction: 'block-inline',
+    signal: `signature match: ${cls}${enforceable ? '' : ' (detect-only class — not enforced inline)'}`,
+    recommendedAction: enforceable ? 'block-inline' : 'alert',
   };
 }
 

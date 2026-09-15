@@ -737,7 +737,7 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
     <button onclick="go('agent')" id="n-agent" aria-label="AI Agent"><span aria-hidden="true">&#9673;</span> AI Agent</button>
     <button onclick="go('code')" id="n-code" aria-label="Code Scan"><span aria-hidden="true">&#9876;</span> Code Scan</button>
     <button onclick="go('cfg')" id="n-cfg" aria-label="Settings"><span aria-hidden="true">&#9881;</span> Settings</button>
-    <button onclick="go('defender')" id="n-defender">Defender</button>
+    <button onclick="go('defender')" id="n-defender" aria-label="Defender"><span aria-hidden="true">&#9730;</span> Defender</button>
   </nav>
   <div class="slist" id="slist"><div class="slist-h">Past Scans</div></div>
 </aside>
@@ -1692,7 +1692,12 @@ function go(p,d){
 }
 async function api(u,o){
   const r=await fetch('/api'+u,o);
-  if(!r.ok){const e=new Error('HTTP '+r.status);e.status=r.status;throw e}
+  if(!r.ok){
+    const e=new Error('HTTP '+r.status);e.status=r.status;
+    // Keep .message as-is (existing callers render it); expose the server's reason as .detail.
+    try{const b=await r.json();if(b&&b.error)e.detail=b.error}catch{}
+    throw e
+  }
   return r.json();
 }
 let LOAD_STATE='idle',LOAD_ERR=null;
@@ -2388,12 +2393,21 @@ function pgDefender() {
   M.innerHTML = `
     <div class="pg">
       <h1 class="h-display">Defender</h1>
-      <p class="sub">Connect a system you own. Shannon watches every request, confirms attacks with the
-      same zero-false-positive signatures the engine uses, and can block them before they land.</p>
+      <p class="sub">Connect a system you own. Shannon sits inline in front of it and matches the
+      <b>URL and body</b> of every request (not headers or cookies) against the engine's deterministic
+      attack signatures. In Enforce mode it blocks inline only for a conservative set of signature
+      classes — path traversal, NoSQL injection and LLM prompt injection — whose patterns are specific
+      enough for live traffic. Everything else it detects is <b>surfaced as an alert</b> and forwarded,
+      because those signatures were written to re-test a replayed exploit and would otherwise match
+      ordinary requests.</p>
 
       <div class="crd">
         <h3>Connect a web app</h3>
         <p>Your app's URL must be a domain you've verified on the Domains page.</p>
+        <p class="sub">The filtering proxy listens on <b>loopback (127.0.0.1) on the machine running
+        this dashboard</b> over plain HTTP with no TLS — so this slice suits a dashboard running on your
+        own machine. Its port is ephemeral and <b>changes every time the dashboard restarts</b>, and
+        connected defenders are held in memory only: <b>a restart loses them and you must reconnect</b>.</p>
         <input id="def-origin" placeholder="https://app.example.com" style="width:100%;margin:8px 0">
         <button class="btn btn-p" onclick="defConnect()">Connect</button>
         <div id="def-connect-out"></div>
@@ -2419,16 +2433,19 @@ async function defLoad() {
       ? systems.map((s) => `
         <div class="crd" style="margin:8px 0">
           <b>${H(s.origin)}</b><br>
-          <small>Route your traffic through: <code>${H(s.proxyUrl || '—')}</code></small><br>
+          <small>Route your traffic through: <code>${H(s.proxyUrl || '—')}</code>
+          (loopback only, plain HTTP; this port changes on every dashboard restart)</small><br>
           <small>Mode: <b>${H(s.mode)}</b> · events ${s.stats.events} · defenses ${s.stats.defenses}</small><br>
           <button class="btn" onclick="defToggleMode('${s.id}','${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">
             Switch to ${s.mode === 'enforce' ? 'Monitor-only' : 'Enforce (block attacks)'}
           </button>
           <button class="btn" onclick="defStream('${s.id}')">Watch live</button>
+          <button class="btn" onclick="defDisconnect('${s.id}')">Disconnect</button>
+          <div class="def-row-err" id="def-err-${s.id}"></div>
         </div>`).join('')
       : '<em>No systems connected yet.</em>';
   } catch (e) {
-    $('def-list').innerHTML = `<span class="err">${H(e.message || 'failed to load')}</span>`;
+    $('def-list').innerHTML = `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
   }
 }
 
@@ -2445,13 +2462,42 @@ async function defConnect() {
   } catch (e) {
     out.innerHTML = e.status === 403
       ? '<span class="err">You must verify ownership of that domain first (Domains page).</span>'
-      : `<span class="err">${H(e.message || 'connect failed')}</span>`;
+      : `<span class="err">${H(e.detail || e.message || 'connect failed')}</span>`;
   }
 }
 
 async function defToggleMode(id, mode) {
-  if (mode === 'enforce' && !confirm('Enforce mode will BLOCK requests Shannon confirms as attacks. Continue?')) return;
-  await api(`/defender/${id}/mode`, { method: 'POST', body: JSON.stringify({ mode }) });
+  if (mode === 'enforce' && !confirm(
+    'Enforce mode will return 403 to any request matching Shannon\'s path-traversal, NoSQL-injection or '
+    + 'LLM-prompt-injection signatures — including, if a signature is imprecise for your app, legitimate '
+    + 'traffic. Review your monitor-mode activity first to see what would have been blocked. Continue?'
+  )) return;
+  try {
+    await api(`/defender/${id}/mode`, { method: 'POST', body: JSON.stringify({ mode }) });
+  } catch (e) {
+    const box = $(`def-err-${id}`);
+    const msg = e.detail || e.message || 'could not change mode';
+    if (box) box.innerHTML = `<span class="err">${H(msg)}</span>`;
+    else alert(msg);
+    return;
+  }
+  defLoad();
+}
+
+async function defDisconnect(id) {
+  if (!confirm('Disconnect this defender? Traffic routed through its proxy URL will stop being served.')) return;
+  try {
+    await api(`/defender/${id}/disconnect`, { method: 'POST' });
+  } catch (e) {
+    const box = $(`def-err-${id}`);
+    const msg = e.detail || e.message || 'could not disconnect';
+    if (box) box.innerHTML = `<span class="err">${H(msg)}</span>`;
+    else alert(msg);
+    return;
+  }
+  if (EVT) { EVT.close(); EVT = null; }
+  const live = $('def-live');
+  if (live) live.innerHTML = '<em>Connect a system to see live defenses.</em>';
   defLoad();
 }
 
@@ -2469,6 +2515,7 @@ function defStream(id) {
     row.innerHTML = `<code>${H(d.event.method)} ${H(d.event.url)}</code> —
       <b>${H(d.verdict.cls || 'benign')}</b> — ${H(d.result.action)}${d.result.enforced ? ' <b>(blocked)</b>' : ''}`;
     live.prepend(row);
+    while (live.childElementCount > 200) live.lastElementChild.remove();
   };
 }
 

@@ -27,19 +27,40 @@ export function makeRateLimiter({ max = 20, windowMs = 60_000, now = () => Date.
   };
 }
 
+// RATE LIMITING SCOPE: the budget exists to stop *storms of out-of-band side-effects* — webhook
+// alerts, and the expensive non-inline enforcement actions (block-ip, isolate) that mutate state
+// somewhere else. It must NEVER gate the inline {block} decision: returning the 403 an attacker
+// already earned is O(1), has no storm cost, and a spent budget silently forwarding confirmed
+// attacks to the protected app is a far worse failure than a noisy alert channel.
 export function applyResponse(verdict, ctx = {}, opts = {}) {
   const { mode = 'monitor', deps = {}, allow = () => true } = opts;
   const wanted = verdict?.recommendedAction || 'observe';
 
   if (wanted === 'observe') return { action: 'observe', enforced: false, wanted, reason: 'no action required' };
-  if (!allow()) return { action: 'observe', enforced: false, wanted, reason: 'rate limited' };
 
-  safeCall(deps.alert, verdict, ctx);
+  const inline = wanted === 'block-inline';
+  // One budget unit is consumed per actionable verdict; it buys the alert (and, for non-inline
+  // actions, the enforcement call). The inline decision below ignores the outcome entirely.
+  const budgeted = allow() !== false;
+  if (budgeted) safeCall(deps.alert, verdict, ctx);
 
-  if (!ENFORCING.has(wanted)) return { action: 'alert', enforced: false, wanted, reason: 'alert only' };
+  if (!ENFORCING.has(wanted))
+    return { action: 'alert', enforced: false, wanted, reason: budgeted ? 'alert only' : 'alert only — rate limited' };
   if (mode !== 'enforce')
     return { action: 'alert', enforced: false, wanted, reason: 'monitor mode — enforcement withheld' };
 
+  if (inline) {
+    safeCall(deps.enforce, wanted, verdict, ctx);
+    return {
+      action: wanted,
+      enforced: true,
+      wanted,
+      reason: budgeted ? 'enforced' : 'enforced — alert suppressed by rate limit',
+    };
+  }
+
+  // Non-inline enforcement (block-ip / isolate) is an out-of-band side-effect: it IS rate limited.
+  if (!budgeted) return { action: 'observe', enforced: false, wanted, reason: 'rate limited' };
   safeCall(deps.enforce, wanted, verdict, ctx);
   return { action: wanted, enforced: true, wanted, reason: 'enforced' };
 }

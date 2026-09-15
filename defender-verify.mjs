@@ -18,7 +18,10 @@ const d = await runDefender({
   mode: 'enforce',
 });
 
-const ATTACKS = ['/?q={{7*7}}', '/search?q=<script>alert(1)</script>'];
+// Payloads must be in DEFENSE_CLASSES (defender/classify.mjs) to be blocked inline: SSTI/XSS
+// signatures are still DETECTED but are alert-only, because they also match ordinary traffic
+// (an i18n {{placeholder}}, a CMS <p> tag) and must never 403 a customer's live requests.
+const ATTACKS = ['/files?path=../../../etc/passwd', '/api/users?id[$ne]=1'];
 const BENIGN = ['/products?page=2&sort=price', '/api/users/42'];
 
 let pass = 0;
@@ -50,7 +53,7 @@ if (reached - before === BENIGN.length) {
 
 d.setMode('monitor');
 const eventsBefore = d.stats().events;
-const monitorRes = await fetch(`${d.meta.url}/?q={{7*7}}`);
+const monitorRes = await fetch(`${d.meta.url}${ATTACKS[0]}`);
 if (monitorRes.status === 200 && d.stats().events > eventsBefore) {
   pass++;
   console.log('PASS  monitor mode observes without blocking');

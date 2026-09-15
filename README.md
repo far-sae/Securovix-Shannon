@@ -55,11 +55,21 @@ and proves it is now **blocked (403)** — attack *and* defense in one pass.
   every finding, so zero-FP holds across the whole team. See
   [`docs/research/multi-agent-security-team.md`](docs/research/multi-agent-security-team.md).
 - **Live Defender (blue team)** — connect a system you own on the **Defender** page and Shannon sits
-  inline in front of it: every request is matched against the same deterministic signatures the proof
-  engine uses, confirmed attacks are blocked (403) before they reach your app, and each defense is
-  posted to a live blackboard with a narrated timeline. **Monitor-only by default** (it never blocks
-  until you switch to Enforce) and **fail-open** (a classifier error forwards traffic, never breaks
-  your app). The LLM layer may raise an alert or explain, but can never cause a block.
+  inline in front of it as a filtering reverse proxy, matching the **URL and body** of every request
+  (not headers or cookies) against the engine's deterministic attack signatures. Unlike the offensive
+  engine — where a finding is zero-FP because it was *proven by execution* — a live request is judged
+  by signature alone, so **inline blocking is restricted to a conservative allowlist of classes**
+  (`path-traversal`, `nosql`, `llm-prompt-injection`) whose patterns are specific enough for
+  production traffic; **every other class is detected and alerted on, then forwarded**, because those
+  signatures exist to re-test a replayed exploit and would otherwise match ordinary requests (a bare
+  apostrophe, an HTML tag, a newline in a textarea). Each non-benign request is posted to a live
+  blackboard as a defense fact and streamed to the dashboard's activity feed. **Monitor-only by
+  default** (it never blocks until you switch to Enforce) and **fail-open** (a classifier error
+  forwards traffic, never breaks your app). The LLM layer may raise an alert or explain, but can
+  never cause a block. *This slice:* the proxy listens on **loopback (127.0.0.1) on the dashboard
+  host** over plain HTTP with no TLS — so it suits a dashboard running on your own machine — its port
+  is ephemeral and **changes on every restart**, and connected defenders are in-memory only, so a
+  restart loses them and they must be reconnected.
 
 ---
 

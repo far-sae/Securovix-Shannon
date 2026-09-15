@@ -2685,6 +2685,10 @@ app.get('/healthz', (_req, res) =>
 // A connected system is protected inline by a filtering reverse proxy. Ownership verification is
 // mandatory (you may not point a blocker at a host you do not own) and monitor mode is the default.
 const defenders = new Map(); // id -> { system, runtime, sseClients, events }
+// Each connected defender holds an open listening socket for the process lifetime, so connects
+// are capped per user and a second defender for the same origin is refused outright.
+const MAX_DEFENDERS_PER_USER = 5;
+const DEF_REPLAY = 50; // events replayed to a new SSE client so the feed is not blank on connect
 
 function defBroadcast(entry, payload) {
   const line = `data: ${JSON.stringify(payload)}\n\n`;
@@ -2724,6 +2728,23 @@ app.post('/api/defender/connect', async (req, res) => {
 
   if (!isLocalHost(host) && !isVerified(user.id, host)) {
     return res.status(403).json({ error: 'needsVerification', host });
+  }
+
+  const mine = [...defenders.values()].filter((e) => e.system.userId === user.id);
+  if (mine.length >= MAX_DEFENDERS_PER_USER) {
+    return res.status(409).json({
+      error: `you already have ${mine.length} connected defenders (limit ${MAX_DEFENDERS_PER_USER}) — disconnect one first`,
+    });
+  }
+  const dupe = mine.some((e) => {
+    try {
+      return new URL(e.system.origin).origin === parsed.origin;
+    } catch {
+      return false;
+    }
+  });
+  if (dupe) {
+    return res.status(409).json({ error: 'that origin already has a defender connected — disconnect it first' });
   }
 
   const id = `def-${Math.random().toString(16).slice(2, 10)}`;
@@ -2797,7 +2818,14 @@ app.get('/api/defender/:id/events', (req, res) => {
   const entry = defenders.get(req.params.id);
   if (!entry || entry.system.userId !== user.id) return res.status(404).end();
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-  res.write(`data: ${JSON.stringify({ type: 'hello', mode: entry.system.mode, stats: entry.runtime.stats() })}\n\n`);
+  const stats = entry.runtime?.stats?.() || { events: 0, defenses: 0 };
+  res.write(`data: ${JSON.stringify({ type: 'hello', mode: entry.system.mode, stats })}\n\n`);
+  // Replay recent defenses so a client that connects between attacks sees history, not a blank feed.
+  for (const d of entry.events.slice(-DEF_REPLAY)) {
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'defense', replay: true, ...d })}\n\n`);
+    } catch {}
+  }
   entry.sseClients.push(res);
   req.on('close', () => {
     const i = entry.sseClients.indexOf(res);
