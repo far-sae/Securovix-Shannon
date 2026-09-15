@@ -2391,24 +2391,40 @@ async function removeDomain(d){
 function pgDefender() {
   CID = null; sList();
   M.innerHTML = `
-    <div class="pg">
-      <h1 class="h-display">Defender</h1>
-      <p class="sub">Connect a system you own. Shannon sits inline in front of it and matches the
-      <b>URL and body</b> of every request (not headers or cookies) against the engine's deterministic
-      attack signatures. In Enforce mode it blocks inline only for a conservative set of signature
-      classes — path traversal, NoSQL injection and LLM prompt injection — whose patterns are specific
-      enough for live traffic. Everything else it detects is <b>surfaced as an alert</b> and forwarded,
-      because those signatures were written to re-test a replayed exploit and would otherwise match
-      ordinary requests.</p>
+    <style>
+      .defpg h1{font-size:21px;line-height:1.2;margin:0 0 3px}
+      .defpg .lead{font-size:13px;opacity:.7;margin:0 0 16px}
+      .defpg h3{font-size:13px;letter-spacing:.02em;margin:0 0 9px}
+      .defpg .crd{padding:14px 16px}
+      .defpg .steps{margin:0;padding-left:17px;font-size:12.5px;line-height:1.75}
+      .defpg .fine{font-size:11px;line-height:1.55;opacity:.55;margin:11px 0 0}
+      .defpg input{width:100%;margin:2px 0 9px;font-size:13px;padding:8px 10px}
+      .defpg .row{font-size:12.5px}
+      .defpg .row code{font-size:11.5px}
+    </style>
+    <div class="pg defpg">
+      <h1>Defender</h1>
+      <p class="lead">Blocks live attacks on a system you own.</p>
+
+      <div class="crd">
+        <h3>How it works</h3>
+        <ol class="steps">
+          <li><b>Verify</b> the domain is yours — Domains page.</li>
+          <li><b>Connect</b> it here; Shannon gives you a proxy URL.</li>
+          <li><b>Route</b> your app's traffic through that URL.</li>
+          <li><b>Watch</b> in Monitor, then switch to Enforce to start blocking.</li>
+        </ol>
+        <p class="fine">Matches each request's URL and body (not headers or cookies) against the
+        engine's signatures. Enforce blocks only path-traversal, NoSQL and LLM-prompt-injection —
+        everything else is alerted and forwarded, since those signatures would also match ordinary
+        requests. The proxy is loopback-only plain HTTP on this dashboard's host, its port changes
+        on restart, and connected defenders are lost on restart.</p>
+      </div>
 
       <div class="crd">
         <h3>Connect a web app</h3>
-        <p>Your app's URL must be a domain you've verified on the Domains page.</p>
-        <p class="sub">The filtering proxy listens on <b>loopback (127.0.0.1) on the machine running
-        this dashboard</b> over plain HTTP with no TLS — so this slice suits a dashboard running on your
-        own machine. Its port is ephemeral and <b>changes every time the dashboard restarts</b>, and
-        connected defenders are held in memory only: <b>a restart loses them and you must reconnect</b>.</p>
-        <input id="def-origin" placeholder="https://app.example.com" style="width:100%;margin:8px 0">
+        <input id="def-origin" placeholder="https://app.example.com" autocomplete="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter')defConnect()">
         <button class="btn btn-p" onclick="defConnect()">Connect</button>
         <div id="def-connect-out"></div>
       </div>
@@ -2452,6 +2468,19 @@ async function defLoad() {
 async function defConnect() {
   const origin = $('def-origin').value.trim();
   const out = $('def-connect-out');
+  // Guard here rather than round-tripping: an empty box looks filled because of the placeholder,
+  // and a scheme-less host is rejected on purpose (guessing http vs https for a blocking proxy
+  // would point it at an endpoint the user never chose).
+  if (!origin) {
+    out.innerHTML = '<span class="err">Enter your app\'s URL, e.g. https://app.example.com</span>';
+    $('def-origin').focus();
+    return;
+  }
+  if (!/^https?:\/\//i.test(origin)) {
+    out.innerHTML = `<span class="err">Include the scheme — try <b>https://${H(origin)}</b></span>`;
+    $('def-origin').focus();
+    return;
+  }
   out.innerHTML = '<span class="sp"></span> Connecting…';
   try {
     const r = await api('/defender/connect', { method: 'POST', body: JSON.stringify({ origin }) });
