@@ -1723,31 +1723,43 @@ function view(id){CID=id;sList();go('scan',id)}
 async function pgAgent(){
   CID=null;sList();
   M.innerHTML=`<style>
-    .agpg{max-width:1180px}
-    .agpg h1{font-size:26px;margin:0 0 6px;line-height:1.15}
-    .agpg .ag-sub{color:var(--t2);line-height:1.55;max-width:620px;margin:0 0 18px;font-size:13.5px}
-    .agpg input,.agpg textarea,.agpg select{padding:10px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:9px;color:var(--t0);font-size:12.5px;outline:0;box-sizing:border-box;font-family:inherit;width:100%}
-    .agpg textarea{resize:vertical;font-family:ui-monospace,monospace}
-    .agpg .ag-run{display:flex;gap:10px;flex-wrap:wrap;max-width:720px}
-    .agpg .ag-run input{flex:1;min-width:260px;width:auto}
+    /* Readability: the page background is #0b0b0b, so a bare border (--brd #292929) gives cards
+       ~1.5:1 against it — they read as nothing. And --t3 (#737373) on that background is ~4.0:1,
+       under the 4.5:1 AA floor for small text, which is what made this page tiring to read.
+       Cards get a real raised surface, fields a distinct well, and body text >=7:1. */
+    .agpg{--srf:#232329;--fld:#0e0e10;--line:#46464e;--tx:#ededf0;--tx2:#b8b8be;max-width:1180px;color:var(--tx)}
+    /* Lift the dim global tokens for THIS page only. The result renderers (sandbox stdout, monitor
+       rows, run history) inject their own markup using --t2/--t3/--brd, so overriding the variables
+       here fixes that generated content too, instead of patching each template. */
+    .agpg{--t2:#d2d2d8;--t3:#b0b0b6;--brd:#46464e;--brd2:#55555f}
+    .agpg h1{font-size:27px;margin:0 0 7px;line-height:1.15;color:#fff}
+    .agpg .ag-sub{color:var(--tx2);line-height:1.6;max-width:640px;margin:0 0 20px;font-size:14px}
+    .agpg input,.agpg textarea,.agpg select{padding:11px 13px;background:var(--fld);border:1px solid var(--line);border-radius:9px;color:var(--tx);font-size:13.5px;outline:0;box-sizing:border-box;font-family:inherit;width:100%}
+    .agpg input::placeholder,.agpg textarea::placeholder{color:#8f8f96}
+    .agpg input:focus,.agpg textarea:focus,.agpg select:focus{border-color:var(--acc2);box-shadow:0 0 0 3px rgba(221,255,94,.13)}
+    .agpg textarea{resize:vertical;font-family:ui-monospace,monospace;line-height:1.55}
+    .agpg .ag-run{display:flex;gap:10px;flex-wrap:wrap;max-width:740px}
+    .agpg .ag-run input{flex:1;min-width:260px;width:auto;font-size:14.5px;padding:12px 14px}
     .agpg .ag-run .btn{flex:0 0 auto}
-    .agpg .ag-note{color:var(--t3);font-size:12px;margin-top:9px}
-    .agpg .ag-results:not(:empty){margin:24px 0 0}
-    .agpg .ag-grouphdr{color:var(--t3);font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin:32px 0 12px}
-    .agpg .ag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;align-items:start}
-    .agpg .ag-card{border:1px solid var(--brd);border-radius:12px;padding:15px 17px}
-    .agpg .ag-card>summary{cursor:pointer;color:var(--t0);font-size:13.5px;font-weight:600;user-select:none;list-style:none;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+    .agpg .ag-note{color:var(--tx2);font-size:12.5px;margin-top:10px;line-height:1.5}
+    .agpg .ag-results:not(:empty){margin:26px 0 0}
+    .agpg .ag-grouphdr{color:var(--tx2);font-size:11.5px;text-transform:uppercase;letter-spacing:.09em;font-weight:700;margin:34px 0 13px}
+    .agpg .ag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start}
+    .agpg .ag-card{border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:var(--srf)}
+    .agpg .ag-card:hover{border-color:#5f5f6b}
+    .agpg .ag-card>summary{cursor:pointer;color:#fff;font-size:14px;font-weight:600;user-select:none;list-style:none;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
     .agpg .ag-card>summary::-webkit-details-marker{display:none}
-    .agpg .ag-card>summary::after{content:'+';color:var(--t3);font-weight:400;font-size:16px;line-height:1}
+    .agpg .ag-card>summary::after{content:'+';color:var(--tx2);font-weight:400;font-size:17px;line-height:1}
     .agpg .ag-card[open]>summary::after{content:'−'}
-    .agpg .ag-card .hint{color:var(--t3);font-weight:400;font-size:11.5px;display:block;margin-top:3px}
-    .agpg .ag-body{margin-top:13px;display:grid;gap:8px}
-    .agpg .ag-row{display:flex;gap:6px;flex-wrap:wrap}
+    .agpg .ag-card .hint{color:var(--tx2);font-weight:400;font-size:12.5px;display:block;margin-top:4px;line-height:1.45}
+    .agpg .ag-body{margin-top:14px;display:grid;gap:9px}
+    .agpg .ag-row{display:flex;gap:7px;flex-wrap:wrap}
     .agpg .ag-row>*{flex:1;min-width:120px}
     .agpg .ag-row>.narrow{flex:0 0 auto;min-width:0;width:auto}
-    .agpg .ag-or{text-align:center;color:var(--t3);font-size:11px;margin:1px 0}
-    .agpg .ag-desc{color:var(--t3);font-size:11.5px;line-height:1.6;margin:0}
-    .agpg .ag-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:3px}
+    .agpg .ag-or{text-align:center;color:var(--tx2);font-size:12px;margin:2px 0}
+    .agpg .ag-desc{color:var(--tx2);font-size:12.5px;line-height:1.65;margin:0}
+    .agpg .ag-fine{color:var(--tx2);font-size:12px;line-height:1.5}
+    .agpg .ag-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px}
     @media(max-width:560px){.agpg .ag-grid{grid-template-columns:1fr}}
   </style>
   <div class="pg agpg">
@@ -1783,7 +1795,7 @@ async function pgAgent(){
           <textarea id="ag-batch" rows="4" placeholder="https://a.example&#10;https://b.example&#10;https://c.example" spellcheck="false"></textarea>
           <div class="ag-actions">
             <button class="btn btn-p" id="ag-batch-go" onclick="agentBatch()">&#9654; Run on all targets</button>
-            <span style="color:var(--t3);font-size:11px">One URL per line.</span>
+            <span class="ag-fine">One URL per line.</span>
           </div>
           <div id="ag-batch-out"></div>
         </div>
@@ -1792,10 +1804,10 @@ async function pgAgent(){
       <details class="ag-card">
         <summary><span>Security team<span class="hint">Autonomous multi-agent engagement</span></span></summary>
         <div class="ag-body">
-          <p class="ag-desc">Role-specialized agents coordinate over a shared blackboard and hand off autonomously: <strong style="color:var(--t2)">recon</strong> maps the surface, an <strong style="color:var(--t2)">exploit pool</strong> claims and proves findings (zero-FP), <strong style="color:var(--t2)">remediation</strong> proposes fixes, <strong style="color:var(--t2)">report</strong> consolidates. Uses the target above.</p>
+          <p class="ag-desc">Role-specialized agents coordinate over a shared blackboard and hand off autonomously: <strong style="color:var(--tx)">recon</strong> maps the surface, an <strong style="color:var(--tx)">exploit pool</strong> claims and proves findings (zero-FP), <strong style="color:var(--tx)">remediation</strong> proposes fixes, <strong style="color:var(--tx)">report</strong> consolidates. Uses the target above.</p>
           <div class="ag-actions">
             <button class="btn btn-p" id="ag-team-go" onclick="teamRun()">&#9673; Deploy the security team</button>
-            <span style="color:var(--t3);font-size:11px">Same ownership gate.</span>
+            <span class="ag-fine">Same ownership gate.</span>
           </div>
           <div id="ag-team-out"></div>
         </div>
@@ -1841,7 +1853,7 @@ async function pgAgent(){
           <input id="sb-instruction" placeholder="e.g. decode any JWT in the response and check alg=none" spellcheck="false">
           <div class="ag-row">
             <select id="sb-lang" class="narrow"><option value="python">Python</option><option value="node">Node</option></select>
-            <span style="color:var(--t3);font-size:11px;align-self:center">reads SX_INPUT (base64), prints matched</span>
+            <span class="ag-fine" style="align-self:center">reads SX_INPUT (base64), prints matched</span>
           </div>
           <textarea id="sb-code" rows="4" placeholder="…or paste code here (leave blank to let the AI write it)" spellcheck="false"></textarea>
           <div class="ag-actions"><button class="btn btn-p" onclick="runSandbox()">Run in sandbox</button></div>
@@ -1854,7 +1866,7 @@ async function pgAgent(){
     <div class="ag-grid">
       <details class="ag-card">
         <summary onclick="setTimeout(agentHistory,0)"><span>History<span class="hint">Compare runs over time</span></span></summary>
-        <div class="ag-body"><div id="ag-hist" style="font-size:13px;color:var(--t2)">Loading…</div></div>
+        <div class="ag-body"><div id="ag-hist" style="font-size:13px;color:var(--tx2)">Loading…</div></div>
       </details>
 
       <details class="ag-card">
