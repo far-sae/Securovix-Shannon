@@ -1,0 +1,13 @@
+{
+  "name": "@securovix/defender-edge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Public multi-tenant filtering reverse proxy. Routes by Host header to each customer's origin, blocking confirmed attacks inline.",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

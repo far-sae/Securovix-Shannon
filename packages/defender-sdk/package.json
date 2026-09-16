@@ -1,0 +1,15 @@
+{
+  "name": "@securovix/defender",
+  "version": "0.1.0",
+  "description": "Drop-in request inspection for Express/Connect apps. Detects and optionally blocks attacks in-process, and reports detections to your Securovix dashboard.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./signatures.mjs": "./signatures.mjs"
+  },
+  "files": ["index.mjs", "signatures.mjs", "README.md"],
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "keywords": ["security", "waf", "express", "middleware", "securovix", "shannon"]
+}

@@ -758,3 +758,143 @@ test('self-defense: SELF_SKIP covers the payload-carrying tool APIs', () => {
   assert.ok(SELF_SKIP.some((r) => r.test('/api/code-scan/multi/start')));
   assert.ok(!SELF_SKIP.some((r) => r.test('/api/auth/login')), 'auth is public surface — inspect it');
 });
+
+import { createEdgeServer, routes as edgeRoutes } from './packages/defender-edge/server.mjs';
+import { shannonDefender } from './packages/defender-sdk/index.mjs';
+// ---------- standalone signatures (shared by dashboard, SDK and edge) ----------
+import { ENFORCE_CLASSES, inspect } from './packages/defender-sdk/signatures.mjs';
+
+test('signatures: enforceable classes are exactly the conservative set', () => {
+  assert.deepEqual(ENFORCE_CLASSES, ['path-traversal', 'nosql', 'llm-prompt-injection']);
+});
+test('signatures: work with no dependency on the scanner engine', () => {
+  assert.equal(inspect('/files?path=../../etc/passwd', '').enforce, true);
+  assert.equal(inspect('/api/u?id[$ne]=1', '').enforce, true);
+  assert.equal(inspect('/products?page=2&sort=price', '').attack, false);
+});
+test('signatures: detect-only classes are reported but never enforceable', () => {
+  const v = inspect('/search?q=<script>alert(1)</script>', '');
+  assert.equal(v.attack, true, 'still detected');
+  assert.equal(v.cls, 'xss');
+  assert.equal(v.enforce, false, 'but never enforceable');
+});
+test('signatures: a shadowing class cannot suppress enforcement', () => {
+  const v = inspect("/files?path=../../etc/passwd&name=O'Brien", '');
+  assert.equal(v.enforce, true);
+  assert.equal(v.cls, 'path-traversal');
+});
+
+// ---------- SDK middleware (@securovix/defender) ----------
+test('sdk: MONITOR detects without blocking; ENFORCE blocks', () => {
+  const mon = shannonDefender({ mode: 'monitor' });
+  const a = runMw(mon.middleware ? mon.middleware : mon, mkReq('GET', '/f?path=../../etc/passwd'));
+  assert.equal(a.res.code, null);
+  assert.equal(a.nexted, true);
+  assert.equal(mon.stats().detections, 1);
+  mon.stop();
+
+  const enf = shannonDefender({ mode: 'enforce' });
+  const b = runMw(enf, mkReq('GET', '/f?path=../../etc/passwd'));
+  assert.equal(b.res.code, 403);
+  assert.equal(b.nexted, false);
+  assert.equal(enf.stats().blocked, 1);
+  enf.stop();
+});
+test('sdk: a detect-only signature never blocks, even in enforce mode', () => {
+  const d = shannonDefender({ mode: 'enforce' });
+  const { res, nexted } = runMw(d, mkReq('POST', '/signup', { name: "O'Brien" }));
+  assert.equal(res.code, null, 'an apostrophe must never block a signup');
+  assert.equal(nexted, true);
+  assert.equal(d.stats().blocked, 0);
+  d.stop();
+});
+test('sdk: skip patterns are honoured and nothing is reported without an api key', async () => {
+  const d = shannonDefender({ mode: 'enforce', skip: [/^\/internal\//] });
+  const { res, nexted } = runMw(d, mkReq('GET', '/internal/x?path=../../etc/passwd'));
+  assert.equal(res.code, null);
+  assert.equal(nexted, true);
+  await d.flush(); // no apiKey configured — must be a no-op, not a network error
+  assert.equal(d.stats().reported, 0);
+  d.stop();
+});
+test('sdk: FAILS OPEN if inspection throws', () => {
+  const d = shannonDefender({ mode: 'enforce' });
+  const bad = {
+    method: 'GET',
+    url: '/x',
+    get path() {
+      throw new Error('boom');
+    },
+  };
+  const { res, nexted } = runMw(d, bad);
+  assert.equal(res.code, null);
+  assert.equal(nexted, true);
+  d.stop();
+});
+
+// ---------- edge proxy (public, Host-routed) ----------
+// `fetch` refuses to set Host (a forbidden header), and Host is exactly what routes these requests,
+// so these go through http.request instead.
+const rawGet = (port, path, hostHeader) =>
+  new Promise((resolve, reject) => {
+    const r = http.request({ host: '127.0.0.1', port, path, method: 'GET', headers: { host: hostHeader } }, (res) => {
+      let b = '';
+      res.on('data', (d) => {
+        b += d;
+      });
+      res.on('end', () => resolve({ status: res.statusCode, body: b }));
+    });
+    r.on('error', reject);
+    r.end();
+  });
+
+test('edge: routes by Host, blocks attacks in enforce, forwards ordinary traffic', async () => {
+  let reached = 0;
+  const app = await upstream((_req, res) => {
+    reached++;
+    res.writeHead(200);
+    res.end('origin-ok');
+  });
+  edgeRoutes.set('app.customer.test', { origin: app.origin, mode: 'enforce' });
+  const edge = createEdgeServer();
+  await new Promise((r) => edge.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${edge.address().port}`;
+  try {
+    const port = edge.address().port;
+    const ok = await rawGet(port, '/pricing', 'app.customer.test');
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body, 'origin-ok');
+
+    const blocked = await rawGet(port, '/files?path=../../etc/passwd', 'app.customer.test');
+    assert.equal(blocked.status, 403);
+    assert.equal(reached, 1, 'the attack never reached the origin');
+
+    const unknown = await rawGet(port, '/', 'nobody.test');
+    assert.equal(unknown.status, 502, 'an unrouted host has nowhere to go');
+  } finally {
+    edgeRoutes.delete('app.customer.test');
+    await new Promise((r) => edge.close(r));
+    await app.close();
+  }
+});
+test('edge: monitor mode observes without blocking', async () => {
+  let reached = 0;
+  const app = await upstream((_req, res) => {
+    reached++;
+    res.writeHead(200);
+    res.end('origin-ok');
+  });
+  edgeRoutes.set('watch.customer.test', { origin: app.origin, mode: 'monitor' });
+  const edge = createEdgeServer();
+  await new Promise((r) => edge.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${edge.address().port}`;
+  try {
+    const r = await rawGet(edge.address().port, '/files?path=../../etc/passwd', 'watch.customer.test');
+    assert.equal(r.status, 200, 'monitor never blocks');
+    assert.equal(reached, 1);
+  } finally {
+    edgeRoutes.delete('watch.customer.test');
+    await new Promise((r) => edge.close(r));
+    await app.close();
+  }
+});

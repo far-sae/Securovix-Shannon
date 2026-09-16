@@ -2738,6 +2738,105 @@ app.post('/api/defender/self/mode', (req, res) => {
   res.json({ mode });
 });
 
+// ── SDK reporting (@securovix/defender running in a customer's own app) ─────────────────────────
+// The key carries its own user id and is verified by HMAC, so there is no key table to keep in sync
+// and no lookup on the hot path — the same trick domainToken() already uses. Rotating
+// SHANNON_SESSION_SECRET invalidates every key, which is the (documented) revocation story for v1.
+function defenderApiKey(userId) {
+  const sig = _crypto.createHmac('sha256', SESSION_SECRET).update(`defender-key:${userId}`).digest('hex');
+  return `sk_${userId}_${sig.slice(0, 32)}`;
+}
+function verifyDefenderKey(key) {
+  const m = /^sk_([A-Za-z0-9]+)_([a-f0-9]{32})$/.exec(String(key || ''));
+  if (!m) return null;
+  return defenderApiKey(m[1]) === key ? m[1] : null;
+}
+
+// Reported detections, newest first, per user. In memory and capped: this is an activity feed, not
+// the system of record, and it must not become an unbounded retention hole (see the blackboard).
+const sdkReports = new Map();
+const SDK_REPORT_MAX = 200;
+
+app.post('/api/defender/report', (req, res) => {
+  const userId = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+  if (!userId) return res.status(401).json({ error: 'invalid api key' });
+  const incoming = Array.isArray(req.body?.detections) ? req.body.detections : [];
+  if (!incoming.length) return res.json({ accepted: 0 });
+
+  const list = sdkReports.get(userId) || [];
+  for (const d of incoming.slice(0, SDK_REPORT_MAX)) {
+    list.unshift({
+      at: typeof d.at === 'string' ? d.at : new Date().toISOString(),
+      method: String(d.method || '').slice(0, 10),
+      url: String(d.url || '').slice(0, 300),
+      cls: String(d.cls || '').slice(0, 60),
+      enforced: d.enforced === true,
+      srcIp: d.srcIp ? String(d.srcIp).slice(0, 64) : null,
+    });
+  }
+  if (list.length > SDK_REPORT_MAX) list.length = SDK_REPORT_MAX;
+  sdkReports.set(userId, list);
+  res.json({ accepted: incoming.length });
+});
+
+app.get('/api/defender/sdk', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+  res.json({ apiKey: defenderApiKey(user.id), reports: (sdkReports.get(user.id) || []).slice(0, 25) });
+});
+
+// ── Edge routes (consumed by packages/defender-edge) ────────────────────────────────────────────
+// hostname → origin for the public multi-tenant proxy. In memory for now, and the edge deliberately
+// ignores an empty list so a dashboard restart cannot 502 live customer traffic; the durable source
+// for production is the edge's own SHANNON_EDGE_ROUTES. Moving this into Supabase is the next step.
+const edgeRoutes = new Map(); // host -> { origin, mode, userId }
+
+app.get('/api/defender/edge/routes', (req, res) => {
+  const userId = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+  if (!userId) return res.status(401).json({ error: 'invalid api key' });
+  const list = [...edgeRoutes.entries()]
+    .filter(([, v]) => v.userId === userId)
+    .map(([host, v]) => ({ host, origin: v.origin, mode: v.mode }));
+  res.json({ routes: list });
+});
+
+app.post('/api/defender/edge/routes', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+  const { host, origin, mode } = req.body || {};
+  if (!host || !origin) return res.status(400).json({ error: 'host and origin are required' });
+
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return res.status(400).json({ error: 'invalid origin URL — include the scheme, e.g. https://origin.example.com' });
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return res.status(400).json({ error: 'origin must be an http(s) URL' });
+  }
+
+  // Same gate as everything else: you may not put a blocking proxy in front of a host you have not
+  // proven you own, and you may not point one at an origin you do not own either.
+  const h = String(host).toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+  if (!isLocalHost(h) && !isVerified(user.id, h)) {
+    return res.status(403).json({ error: 'needsVerification', host: h });
+  }
+
+  edgeRoutes.set(h, { origin, mode: mode === 'enforce' ? 'enforce' : 'monitor', userId: user.id });
+  res.json({ host: h, origin, mode: mode === 'enforce' ? 'enforce' : 'monitor' });
+});
+
+app.delete('/api/defender/edge/routes/:host', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+  const h = String(req.params.host || '').toLowerCase();
+  const cur = edgeRoutes.get(h);
+  if (!cur || cur.userId !== user.id) return res.status(404).json({ error: 'not found' });
+  edgeRoutes.delete(h);
+  res.json({ ok: true });
+});
+
 // ── Live Defender ───────────────────────────────────────────────────────────────────────────────
 // A connected system is protected inline by a filtering reverse proxy. Ownership verification is
 // mandatory (you may not point a blocker at a host you do not own) and monitor mode is the default.

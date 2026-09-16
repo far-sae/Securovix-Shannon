@@ -2505,6 +2505,11 @@ function pgDefender() {
       </div>
 
       <div class="crd">
+        <h3>Protect another app</h3>
+        <div id="def-sdk">Checking…</div>
+      </div>
+
+      <div class="crd">
         <h3>Protected systems</h3>
         <div id="def-list">Loading…</div>
       </div>
@@ -2516,6 +2521,33 @@ function pgDefender() {
     </div>`;
   defLoad();
   defSelfLoad();
+  defSdkLoad();
+}
+
+async function defSdkLoad() {
+  const el = $('def-sdk');
+  if (!el) return;
+  try {
+    const s = await api('/defender/sdk');
+    const snippet = "import { shannonDefender } from '@securovix/defender';\n\n"
+      + 'app.use(shannonDefender({\n'
+      + `  apiKey: '${s.apiKey}',\n`
+      + `  endpoint: '${location.origin}',\n`
+      + "  mode: 'monitor',   // switch to 'enforce' once you're happy\n"
+      + '}));';
+    const rows = s.reports.length
+      ? s.reports.map((r) => `<div><code>${H(r.method)} ${H(r.url)}</code> — <b>${H(r.cls || '—')}</b>${r.enforced ? ' <b>(blocked)</b>' : ''}</div>`).join('')
+      : '<span class="fine">Nothing reported yet.</span>';
+    el.innerHTML = `<p class="fine" style="margin:0 0 8px">Add this to any Express app you own. It inspects
+      requests inside your app — no DNS change, no proxy, and if Securovix is down your site keeps serving.</p>
+      <pre style="background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:10px;overflow:auto;font-size:11.5px;margin:0 0 8px">${H(snippet)}</pre>
+      <p class="fine" style="margin:0 0 8px">Keep that key secret — it identifies your account. Rotating
+      <code>SHANNON_SESSION_SECRET</code> invalidates it.</p>
+      <div><b>Reported detections</b></div>
+      <div>${rows}</div>`;
+  } catch (e) {
+    el.innerHTML = `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
+  }
 }
 
 async function defSelfLoad() {
