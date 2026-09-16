@@ -593,8 +593,9 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
 .set-save-msg::before{content:"";display:none;width:6px;height:6px;border-radius:50%;background:var(--grn);box-shadow:0 0 8px rgba(74,222,128,.7)}
 .set-save-msg.shown::before{display:inline-block}
 .settings-security{margin-bottom:18px}.settings-security-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:14px;align-items:center}.settings-security-grid .sec-check{border:0;padding:0}.settings-security-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.settings-security-actions .btn{padding:8px 10px;font-size:11px}
+.mfa-overlay{position:fixed;inset:0;z-index:180;background:rgba(3,5,3,.78);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto}.mfa-modal{width:min(680px,100%);max-height:calc(100vh - 48px);overflow:auto;background:linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid var(--brd2);border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.65)}.mfa-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px;border-bottom:1px solid var(--brd)}.mfa-title{display:flex;gap:12px;align-items:center}.mfa-title-mark{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--acc);background:var(--glow);border:1px solid rgba(212,247,69,.22)}.mfa-title h2{font-family:'Inter',system-ui,sans-serif;font-size:18px;color:var(--t0);margin:0}.mfa-title p{font-size:11.5px;color:var(--t3);margin:4px 0 0}.mfa-close{border:0;background:transparent;color:var(--t3);font-size:24px;line-height:1;cursor:pointer;padding:3px}.mfa-body{padding:24px}.mfa-state{display:flex;gap:14px;padding:16px;border:1px solid var(--brd2);background:var(--s2);border-radius:14px;margin-bottom:18px}.mfa-state-mark{width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:var(--grn-bg);color:var(--grn);font-weight:800;flex:0 0 auto}.mfa-state.warn .mfa-state-mark{background:var(--ylw-bg);color:var(--ylw)}.mfa-state b{color:var(--t0);font-size:13px}.mfa-state p{color:var(--t2);font-size:11.5px;line-height:1.55;margin:4px 0 0}.mfa-field{margin-top:14px}.mfa-field label{display:block;color:var(--t1);font-size:11.5px;font-weight:700;margin-bottom:7px}.mfa-input{width:100%;border:1px solid var(--brd2);border-radius:10px;background:var(--bg);color:var(--t0);padding:11px 12px;font:12.5px 'JetBrains Mono',monospace;outline:0}.mfa-input:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--glow)}.mfa-actions{display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap;margin-top:20px}.mfa-error{color:var(--red);font-size:11.5px;min-height:17px;margin-top:9px}.mfa-enroll{display:grid;grid-template-columns:250px minmax(0,1fr);gap:24px;align-items:center}.mfa-qr{background:#fff;padding:10px;border-radius:16px;width:250px;height:250px;display:block}.mfa-steps{display:grid;gap:13px}.mfa-step{display:flex;gap:10px;color:var(--t2);font-size:12px;line-height:1.5}.mfa-step-num{width:22px;height:22px;border-radius:50%;background:var(--glow);border:1px solid rgba(212,247,69,.22);color:var(--acc);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:10px;flex:0 0 auto}.mfa-secret{margin-top:6px;padding:9px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--acc2);font:11px 'JetBrains Mono',monospace;word-break:break-all}.mfa-codes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.mfa-code{background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:9px;text-align:center;color:var(--acc2);font:11.5px 'JetBrains Mono',monospace}.mfa-note{color:var(--t3);font-size:11px;line-height:1.55}.mfa-danger{border-top:1px solid var(--brd);margin-top:22px;padding-top:18px}.mfa-danger h3{font-size:12px;color:var(--red);margin:0 0 5px}.mfa-danger p{font-size:11px;color:var(--t3);margin:0}
 @media(max-width:1000px){.settings-security-grid{grid-template-columns:1fr 1fr}.settings-security-actions{justify-content:flex-start}}
-@media(max-width:620px){.set-hero{padding:22px 20px}.set-section{padding:18px 16px}.set-cta{align-items:stretch;flex-direction:column}.set-cta .btn{width:100%}.settings-security-grid{grid-template-columns:1fr}.prov-input{padding-right:94px}.settings-security-actions .btn{flex:1}}
+@media(max-width:620px){.set-hero{padding:22px 20px}.set-section{padding:18px 16px}.set-cta{align-items:stretch;flex-direction:column}.set-cta .btn{width:100%}.settings-security-grid{grid-template-columns:1fr}.prov-input{padding-right:94px}.settings-security-actions .btn{flex:1}.mfa-overlay{padding:10px;align-items:flex-start}.mfa-modal{max-height:none;margin:10px 0}.mfa-head,.mfa-body{padding:18px}.mfa-enroll{grid-template-columns:1fr}.mfa-qr{width:min(250px,100%);height:auto;margin:auto}.mfa-actions .btn{flex:1}.mfa-codes{grid-template-columns:1fr}}
 
 /* ============================================================
    DESIGN POLISH LAYER — global motion, depth, and feel
@@ -5921,19 +5922,60 @@ async function authLogout(){
   location.reload();
 }
 
+let MFA_RECOVERY_CODES=[];
+function mfaShell(body,subtitle='Authenticator app and recovery codes'){
+  document.getElementById('mfa-modal')?.remove();
+  const ov=document.createElement('div');ov.id='mfa-modal';ov.className='mfa-overlay';
+  ov.innerHTML=`<section class="mfa-modal" role="dialog" aria-modal="true" aria-labelledby="mfa-title"><header class="mfa-head"><div class="mfa-title"><span class="mfa-title-mark">${ico('shield-check')}</span><div><h2 id="mfa-title">Multi-factor authentication</h2><p>${H(subtitle)}</p></div></div><button class="mfa-close" onclick="mfaClose()" aria-label="Close">×</button></header><div class="mfa-body">${body}</div></section>`;
+  ov.addEventListener('click',e=>{if(e.target===ov)mfaClose()});document.body.appendChild(ov);
+  document.addEventListener('keydown',mfaEscape);return ov;
+}
+function mfaEscape(e){if(e.key==='Escape')mfaClose()}
+function mfaClose(){document.getElementById('mfa-modal')?.remove();document.removeEventListener('keydown',mfaEscape);MFA_RECOVERY_CODES=[]}
+function mfaRefreshPage(){injectUserPill();if(document.getElementById('n-cfg')?.classList.contains('on'))pgCfg()}
+function mfaError(error){const el=document.getElementById('mfa-error');if(el)el.textContent=error?.detail||error?.message||String(error)}
+function mfaBusy(on,label='Working…'){document.querySelectorAll('#mfa-modal button').forEach(b=>b.disabled=on);const el=document.getElementById('mfa-primary');if(on&&el){el.dataset.label=el.textContent;el.textContent=label}else if(el?.dataset.label){el.textContent=el.dataset.label;delete el.dataset.label}}
 async function authMfaManage(){
-  try{
-    if(CURRENT_USER.mfaEnabled){
-      const code=prompt('Enter a current authenticator code to disable MFA.');if(!code)return;
-      await api('/auth/mfa',{method:'DELETE',body:JSON.stringify({code})});CURRENT_USER.mfaEnabled=false;injectUserPill();alert('MFA disabled.');return;
-    }
-    const setup=await api('/auth/mfa/setup',{method:'POST'});
-    prompt('Add this TOTP setup URI to your authenticator app, then copy the six-digit code.',setup.uri);
-    const code=prompt('Enter the six-digit code from your authenticator app.');if(!code)return;
-    const enabled=await api('/auth/mfa/enable',{method:'POST',body:JSON.stringify({code})});
-    CURRENT_USER.mfaEnabled=true;injectUserPill();
-    alert('MFA enabled. Save these one-time recovery codes now:\n\n'+enabled.recoveryCodes.join('\n'));
-  }catch(e){alert(e.detail||e.message)}
+  try{const status=await api('/auth/mfa/status');mfaRenderStatus(status)}catch(e){alert(e.detail||e.message)}
+}
+function mfaRenderStatus(status){
+  if(!status.enabled){
+    const pending=status.pending?'<div class="mfa-state warn"><span class="mfa-state-mark">!</span><div><b>Enrollment was not completed</b><p>The previous setup will be replaced with a fresh QR code.</p></div></div>':'';
+    mfaShell(`${pending}<div class="mfa-state warn"><span class="mfa-state-mark">!</span><div><b>MFA is currently off</b><p>Add a second sign-in factor to protect scans, findings, integrations, and organization administration if a password is compromised.</p></div></div>${status.passwordReauthenticationRequired?'<div class="mfa-field"><label for="mfa-password">Current password</label><input class="mfa-input" id="mfa-password" type="password" autocomplete="current-password" placeholder="Confirm your identity"></div>':'<p class="mfa-note">Your federated identity is already authenticated. Continue to enroll an authenticator app.</p>'}<div class="mfa-error" id="mfa-error"></div><div class="mfa-actions"><button class="btn btn-g" onclick="mfaClose()">Not now</button><button class="btn btn-p" id="mfa-primary" onclick="mfaBeginSetup()">Create QR code</button></div>`,'Protect your Securovix account');
+    setTimeout(()=>document.getElementById(status.passwordReauthenticationRequired?'mfa-password':'mfa-primary')?.focus(),0);return;
+  }
+  const since=status.enabledAt?new Date(status.enabledAt).toLocaleDateString(): 'active';
+  mfaShell(`<div class="mfa-state"><span class="mfa-state-mark">✓</span><div><b>MFA is enabled</b><p>Authenticator protection is ${H(since)}. ${status.recoveryCodesRemaining} one-time recovery code${status.recoveryCodesRemaining===1?' remains':'s remain'}.</p></div></div><div class="mfa-field"><label for="mfa-code">Authenticator or recovery code</label><input class="mfa-input" id="mfa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or xxxx-xxxx-xxxx-xxxx"></div><div class="mfa-error" id="mfa-error"></div><div class="mfa-actions"><button class="btn btn-g" onclick="mfaClose()">Close</button><button class="btn btn-g" id="mfa-primary" onclick="mfaRegenerateCodes()">Replace recovery codes</button></div><div class="mfa-danger"><h3>Disable MFA</h3><p>This removes authenticator protection and signs out other sessions.</p><div class="mfa-actions"><button class="btn btn-g" style="color:var(--red)" onclick="mfaDisable()">Disable MFA</button></div></div>`,'Account protection is active');
+  setTimeout(()=>document.getElementById('mfa-code')?.focus(),0);
+}
+async function mfaBeginSetup(){
+  const password=document.getElementById('mfa-password')?.value||'';mfaBusy(true,'Creating…');
+  try{const setup=await api('/auth/mfa/setup',{method:'POST',body:JSON.stringify({password})});mfaShowSetup(setup)}catch(e){mfaBusy(false);mfaError(e)}
+}
+function mfaShowSetup(setup){
+  const shown=String(setup.secret||'').replace(/(.{4})/g,'$1 ').trim();
+  mfaShell(`<div class="mfa-enroll"><img class="mfa-qr" src="${H(setup.qrDataUrl)}" alt="Authenticator enrollment QR code"><div class="mfa-steps"><div class="mfa-step"><span class="mfa-step-num">1</span><div>Open Google Authenticator, Microsoft Authenticator, 1Password, Authy, or another TOTP app.</div></div><div class="mfa-step"><span class="mfa-step-num">2</span><div>Scan the QR code. If scanning is unavailable, enter this secret manually:<div class="mfa-secret" id="mfa-secret">${H(shown)}</div><button class="btn btn-g" style="margin-top:7px;padding:5px 8px;font-size:10px" onclick="mfaCopyText('${H(setup.secret)}',this)">Copy secret</button></div></div><div class="mfa-step"><span class="mfa-step-num">3</span><div>Enter the current six-digit code to confirm setup.</div></div></div></div><div class="mfa-field"><label for="mfa-code">Six-digit authenticator code</label><input class="mfa-input" id="mfa-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="123456"></div><p class="mfa-note">This enrollment expires in 15 minutes. Your secret is encrypted before being stored.</p><div class="mfa-error" id="mfa-error"></div><div class="mfa-actions"><button class="btn btn-g" onclick="mfaCancelSetup()">Cancel setup</button><button class="btn btn-p" id="mfa-primary" onclick="mfaEnable()">Verify and enable</button></div>`,'Scan the QR code with your authenticator');
+  setTimeout(()=>document.getElementById('mfa-code')?.focus(),0);
+}
+async function mfaCancelSetup(){try{await api('/auth/mfa/setup',{method:'DELETE'});mfaClose()}catch(e){mfaError(e)}}
+async function mfaEnable(){
+  const code=document.getElementById('mfa-code')?.value.trim();if(!code){mfaError('Enter the six-digit code from your authenticator app.');return}mfaBusy(true,'Verifying…');
+  try{const out=await api('/auth/mfa/enable',{method:'POST',body:JSON.stringify({code})});CURRENT_USER.mfaEnabled=true;mfaRefreshPage();mfaShowRecoveryCodes(out.recoveryCodes,'MFA is now enabled')}catch(e){mfaBusy(false);mfaError(e)}
+}
+function mfaShowRecoveryCodes(codes,title){
+  MFA_RECOVERY_CODES=Array.isArray(codes)?codes:[];
+  mfaShell(`<div class="mfa-state"><span class="mfa-state-mark">✓</span><div><b>${H(title)}</b><p>Each recovery code works once. Store them in a password manager or another secure offline location.</p></div></div><div class="mfa-codes">${MFA_RECOVERY_CODES.map(c=>`<div class="mfa-code">${H(c)}</div>`).join('')}</div><div class="mfa-actions" style="justify-content:flex-start"><button class="btn btn-g" onclick="mfaCopyRecovery(this)">Copy all</button><button class="btn btn-g" onclick="mfaDownloadRecovery()">Download .txt</button></div><label class="mfa-step" style="margin-top:18px;cursor:pointer"><input type="checkbox" id="mfa-saved" onchange="document.getElementById('mfa-done').disabled=!this.checked"><span>I saved these recovery codes. I understand they will not be shown again.</span></label><div class="mfa-actions"><button class="btn btn-p" id="mfa-done" disabled onclick="mfaClose()">Done</button></div>`,'Save your recovery codes now');
+}
+async function mfaCopyText(text,button){try{await navigator.clipboard.writeText(text);if(button){const old=button.textContent;button.textContent='Copied';setTimeout(()=>button.textContent=old,1200)}}catch{mfaError('Copy failed. Select and copy the value manually.') }}
+function mfaCopyRecovery(button){mfaCopyText(MFA_RECOVERY_CODES.join('\n'),button)}
+function mfaDownloadRecovery(){const text=`Securovix Shannon MFA recovery codes\nAccount: ${CURRENT_USER.email}\nCreated: ${new Date().toISOString()}\n\n${MFA_RECOVERY_CODES.join('\n')}\n`;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/plain'}));a.download='securovix-mfa-recovery-codes.txt';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+async function mfaRegenerateCodes(){
+  const code=document.getElementById('mfa-code')?.value.trim();if(!code){mfaError('Enter a current six-digit authenticator code.');return}if(!confirm('Replace all existing recovery codes? Old codes will stop working immediately.'))return;mfaBusy(true,'Replacing…');
+  try{const out=await api('/auth/mfa/recovery-codes',{method:'POST',body:JSON.stringify({code})});mfaShowRecoveryCodes(out.recoveryCodes,'Recovery codes replaced')}catch(e){mfaBusy(false);mfaError(e)}
+}
+async function mfaDisable(){
+  const code=document.getElementById('mfa-code')?.value.trim();if(!code){mfaError('Enter an authenticator or recovery code first.');return}if(!confirm('Disable MFA for this account? Other sessions will be signed out.'))return;mfaBusy(true,'Disabling…');
+  try{await api('/auth/mfa',{method:'DELETE',body:JSON.stringify({code})});CURRENT_USER.mfaEnabled=false;mfaClose();mfaRefreshPage();alert('MFA has been disabled. Other sessions were signed out.')}catch(e){mfaBusy(false);mfaError(e)}
 }
 
 function renderAuthScreen(){

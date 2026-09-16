@@ -9,6 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import express from 'express';
+import QRCode from 'qrcode';
 import { parse as parseYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
 import { runDefender } from '../../defender/agent.mjs';
@@ -645,7 +646,7 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ ok: true, user: publicUser(u) });
 });
 
-app.post('/api/auth/mfa/login', (req, res) => {
+app.post('/api/auth/mfa/login', async (req, res) => {
   if (limited(req, res, 'mfa-login', 10, 15 * 60 * 1000)) return;
   const challenge = verifyChallenge(req.body?.challenge, 'mfa-login');
   const user = challenge ? loadUsers()[challenge.uid] : null;
@@ -659,6 +660,7 @@ app.post('/api/auth/mfa/login', (req, res) => {
     if (remaining) {
       user.mfaRecoveryCodes = remaining;
       saveUsers(loadUsers());
+      await waitForUserWrites();
       verified = true;
     }
   }
@@ -787,41 +789,121 @@ app.post('/api/auth/invitations/accept', async (req, res) => {
   res.json({ ok: true, user: publicUser(user), organization: getOrganization(record.orgId) });
 });
 
-app.post('/api/auth/mfa/setup', (req, res) => {
+app.get('/api/auth/mfa/status', (req, res) => {
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  let enrollment = null;
+  try { enrollment = decryptSecret(user.mfaSecretEnc); } catch {}
+  const pending = !!(!user.mfaEnabled && enrollment?.pending && Date.now() - Number(enrollment.createdAt || 0) < 15 * 60_000);
+  res.json({
+    enabled: user.mfaEnabled === true,
+    pending,
+    recoveryCodesRemaining: user.mfaEnabled ? (user.mfaRecoveryCodes || []).length : 0,
+    enabledAt: user.mfaEnabled ? Number(enrollment?.enabledAt || 0) || null : null,
+    passwordReauthenticationRequired: !!user.passwordHash,
+  });
+});
+
+app.post('/api/auth/mfa/setup', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  if (limited(req, res, `mfa-manage:${user.id}`, 10, 15 * 60 * 1000)) return;
+  if (user.mfaEnabled) return res.status(409).json({ error: 'MFA is already enabled.' });
+  if (user.passwordHash && !verifyPassword(String(req.body?.password || ''), user.passwordHash, user.salt)) {
+    return res.status(401).json({ error: 'Enter your current password to start MFA enrollment.' });
+  }
   const secret = newTotpSecret();
   user.mfaSecretEnc = encryptSecret({ secret, pending: true, createdAt: Date.now() });
   user.mfaEnabled = false;
   user.mfaRecoveryCodes = [];
   saveUsers(loadUsers());
-  res.json({ secret, uri: totpUri({ secret, email: user.email }) });
+  await waitForUserWrites();
+  const uri = totpUri({ secret, email: user.email });
+  const qrDataUrl = await QRCode.toDataURL(uri, {
+    errorCorrectionLevel: 'M',
+    margin: 2,
+    width: 260,
+    color: { dark: '#111710', light: '#ffffff' },
+  });
+  res.json({ secret, uri, qrDataUrl, expiresInSeconds: 900 });
 });
 
-app.post('/api/auth/mfa/enable', (req, res) => {
+app.delete('/api/auth/mfa/setup', async (req, res) => {
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Authentication required.' });
-  let secret;
-  try { secret = decryptSecret(user.mfaSecretEnc)?.secret; } catch {}
+  if (user.mfaEnabled) return res.status(409).json({ error: 'MFA is already enabled.' });
+  user.mfaSecretEnc = null;
+  user.mfaRecoveryCodes = [];
+  saveUsers(loadUsers());
+  await waitForUserWrites();
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/mfa/enable', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  if (limited(req, res, `mfa-enable:${user.id}`, 10, 15 * 60 * 1000)) return;
+  let enrollment;
+  try { enrollment = decryptSecret(user.mfaSecretEnc); } catch {}
+  if (!enrollment?.pending || Date.now() - Number(enrollment.createdAt || 0) >= 15 * 60_000) {
+    user.mfaSecretEnc = null;
+    saveUsers(loadUsers());
+    await waitForUserWrites();
+    return res.status(400).json({ error: 'MFA enrollment expired. Start again to create a new QR code.' });
+  }
+  const secret = enrollment.secret;
   if (!secret || !verifyTotp(secret, req.body?.code)) return res.status(400).json({ error: 'Invalid authentication code.' });
   const recoveryCodes = createRecoveryCodes();
   user.mfaSecretEnc = encryptSecret({ secret, pending: false, enabledAt: Date.now() });
   user.mfaEnabled = true;
   user.mfaRecoveryCodes = hashRecoveryCodes(recoveryCodes);
+  user.sessionInvalidBefore = Date.now();
   saveUsers(loadUsers());
-  res.json({ ok: true, recoveryCodes });
+  await waitForUserWrites();
+  setSessionCookie(res, user.id);
+  const ctx = requestContext(req);
+  if (ctx) audit(ctx, 'authentication.mfa_enabled', 'user', user.id, { recoveryCodes: recoveryCodes.length });
+  res.json({ ok: true, recoveryCodes, recoveryCodesRemaining: recoveryCodes.length });
 });
 
-app.delete('/api/auth/mfa', (req, res) => {
+app.post('/api/auth/mfa/recovery-codes', async (req, res) => {
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  if (limited(req, res, `mfa-recovery:${user.id}`, 6, 15 * 60 * 1000)) return;
+  if (!user.mfaEnabled) return res.status(409).json({ error: 'Enable MFA before generating recovery codes.' });
   let secret;
   try { secret = decryptSecret(user.mfaSecretEnc)?.secret; } catch {}
   if (!secret || !verifyTotp(secret, req.body?.code)) return res.status(400).json({ error: 'Invalid authentication code.' });
+  const recoveryCodes = createRecoveryCodes();
+  user.mfaRecoveryCodes = hashRecoveryCodes(recoveryCodes);
+  user.sessionInvalidBefore = Date.now();
+  saveUsers(loadUsers());
+  await waitForUserWrites();
+  setSessionCookie(res, user.id);
+  const ctx = requestContext(req);
+  if (ctx) audit(ctx, 'authentication.mfa_recovery_codes_regenerated', 'user', user.id, { recoveryCodes: recoveryCodes.length });
+  res.json({ ok: true, recoveryCodes, recoveryCodesRemaining: recoveryCodes.length });
+});
+
+app.delete('/api/auth/mfa', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  if (limited(req, res, `mfa-disable:${user.id}`, 6, 15 * 60 * 1000)) return;
+  if (!user.mfaEnabled) return res.status(409).json({ error: 'MFA is not enabled.' });
+  let secret;
+  try { secret = decryptSecret(user.mfaSecretEnc)?.secret; } catch {}
+  let verified = !!secret && verifyTotp(secret, req.body?.code);
+  if (!verified) verified = consumeRecoveryCode(req.body?.code, user.mfaRecoveryCodes || []) !== null;
+  if (!verified) return res.status(400).json({ error: 'Invalid authentication or recovery code.' });
   user.mfaEnabled = false;
   user.mfaSecretEnc = null;
   user.mfaRecoveryCodes = [];
+  user.sessionInvalidBefore = Date.now();
   saveUsers(loadUsers());
+  await waitForUserWrites();
+  setSessionCookie(res, user.id);
+  const ctx = requestContext(req);
+  if (ctx) audit(ctx, 'authentication.mfa_disabled', 'user', user.id);
   res.json({ ok: true });
 });
 

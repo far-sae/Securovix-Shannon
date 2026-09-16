@@ -43,11 +43,24 @@ membership, project, scan, finding, Defender, and remediation mutation writes an
   persist only in browser storage; they are sent to the runtime when used but are not stored in
   Supabase.
 
+### Multi-factor authentication
+
+Each user can enable TOTP MFA from **Settings → Account security baseline**. Password accounts must
+reauthenticate before enrollment. The setup screen provides a scannable QR code and manual secret,
+then verifies a current six-digit authenticator code before activation. Ten one-time recovery codes
+are shown once and can be copied or downloaded; only their hashes are persisted.
+
+Users can review remaining recovery-code capacity, replace all recovery codes after a TOTP check,
+or disable MFA using a current TOTP or recovery code. Enabling, replacing recovery codes, and
+disabling MFA invalidate other sessions and create organization audit events. In production,
+`SHANNON_ENCRYPTION_KEY` must be a stable high-entropy secret: changing it makes existing encrypted
+MFA seeds unreadable.
+
 ## Production setup
 
 1. Apply all repository migrations with `supabase db push`. The Defender enterprise migration adds
    revocable SDK credentials and the durable incident workflow.
-2. Set a stable `SHANNON_SESSION_SECRET`.
+2. Set stable, independently generated `SHANNON_SESSION_SECRET` and `SHANNON_ENCRYPTION_KEY` values.
 3. Set `SHANNON_PLATFORM_ADMINS` to a comma-separated list of operator emails. Only these users can
    control process-wide dashboard self-defense and reset the global provider leaderboard.
 4. Use HTTPS. Production cookies are emitted with `Secure`, `HttpOnly`, and `SameSite=Lax`.

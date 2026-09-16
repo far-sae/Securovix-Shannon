@@ -12,6 +12,7 @@
     "express": "^5.2.1",
     "marked": "^15.0.0",
     "@anthropic-ai/sdk": "^0.126.0",
+    "qrcode": "^1.5.4",
     "yaml": "^2.4.0"
   }
 }

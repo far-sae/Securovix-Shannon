@@ -11,6 +11,7 @@ process.env.SHANNON_SESSION_SECRET = 'dashboard-team-test-secret-that-is-long-en
 process.env.NODE_ENV = 'test';
 
 const { startDashboard } = await import('./packages/dashboard/server.mjs');
+const { totpCode } = await import('./packages/dashboard/enterprise-security.mjs');
 const server = await startDashboard({ port: 0, scheduleMonitors: false });
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -81,6 +82,96 @@ test('dashboard APIs require authentication and enforce organization roles', asy
     body: { name: 'Should not exist' },
   });
   assert.equal(forbidden.response.status, 403);
+});
+
+test('MFA supports password reauthentication, TOTP login, recovery rotation and secure disable', async () => {
+  const password = 'correct-horse-battery-staple';
+  const account = await signup('mfa-owner@example.test', 'MFA Owner');
+
+  const initial = await request('/api/auth/mfa/status', { cookie: account.cookie });
+  assert.equal(initial.response.status, 200);
+  assert.equal(initial.json.enabled, false);
+  assert.equal(initial.json.passwordReauthenticationRequired, true);
+
+  const rejectedSetup = await request('/api/auth/mfa/setup', {
+    method: 'POST',
+    cookie: account.cookie,
+    body: { password: 'wrong-password' },
+  });
+  assert.equal(rejectedSetup.response.status, 401);
+
+  const setup = await request('/api/auth/mfa/setup', {
+    method: 'POST',
+    cookie: account.cookie,
+    body: { password },
+  });
+  assert.equal(setup.response.status, 200);
+  assert.match(setup.json.uri, /^otpauth:\/\/totp\//);
+  assert.match(setup.json.qrDataUrl, /^data:image\/png;base64,/);
+
+  const invalidEnable = await request('/api/auth/mfa/enable', {
+    method: 'POST',
+    cookie: account.cookie,
+    body: { code: '000000' },
+  });
+  assert.equal(invalidEnable.response.status, 400);
+
+  const enabled = await request('/api/auth/mfa/enable', {
+    method: 'POST',
+    cookie: account.cookie,
+    body: { code: totpCode(setup.json.secret) },
+  });
+  assert.equal(enabled.response.status, 200);
+  assert.equal(enabled.json.recoveryCodes.length, 10);
+  let currentCookie = enabled.setCookie.split(';')[0];
+
+  const oldSession = await request('/api/auth/mfa/status', { cookie: account.cookie });
+  assert.equal(oldSession.response.status, 401);
+  const status = await request('/api/auth/mfa/status', { cookie: currentCookie });
+  assert.equal(status.json.enabled, true);
+  assert.equal(status.json.recoveryCodesRemaining, 10);
+
+  const passwordLogin = await request('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'mfa-owner@example.test', password },
+  });
+  assert.equal(passwordLogin.json.mfaRequired, true);
+  const recoveryLogin = await request('/api/auth/mfa/login', {
+    method: 'POST',
+    body: { challenge: passwordLogin.json.challenge, code: enabled.json.recoveryCodes[0] },
+  });
+  assert.equal(recoveryLogin.response.status, 200);
+
+  const secondPasswordLogin = await request('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'mfa-owner@example.test', password },
+  });
+  const replayedRecovery = await request('/api/auth/mfa/login', {
+    method: 'POST',
+    body: { challenge: secondPasswordLogin.json.challenge, code: enabled.json.recoveryCodes[0] },
+  });
+  assert.equal(replayedRecovery.response.status, 401);
+
+  const rotated = await request('/api/auth/mfa/recovery-codes', {
+    method: 'POST',
+    cookie: currentCookie,
+    body: { code: totpCode(setup.json.secret) },
+  });
+  assert.equal(rotated.response.status, 200);
+  assert.equal(rotated.json.recoveryCodes.length, 10);
+  assert.notDeepEqual(rotated.json.recoveryCodes, enabled.json.recoveryCodes);
+  currentCookie = rotated.setCookie.split(';')[0];
+
+  const disabled = await request('/api/auth/mfa', {
+    method: 'DELETE',
+    cookie: currentCookie,
+    body: { code: rotated.json.recoveryCodes[0] },
+  });
+  assert.equal(disabled.response.status, 200);
+  currentCookie = disabled.setCookie.split(';')[0];
+  const finalStatus = await request('/api/auth/mfa/status', { cookie: currentCookie });
+  assert.equal(finalStatus.json.enabled, false);
+  assert.equal(finalStatus.json.recoveryCodesRemaining, 0);
 });
 
 test('Defender supports incident workflow and revocable SDK credentials', async () => {
