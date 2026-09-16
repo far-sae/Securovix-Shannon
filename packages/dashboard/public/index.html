@@ -1691,6 +1691,15 @@ function go(p,d){
   ({dash:pgDash,new:pgNew,domains:pgDomains,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
 }
 async function api(u,o){
+  // A JSON string body sent without this header goes out as text/plain, which express.json() does
+  // not parse — the server then sees an empty req.body and rejects the call as if the field were
+  // missing (e.g. "origin required" however much you typed). Default it here so a call site that
+  // forgets the header cannot produce that silent, misleading failure.
+  if(o&&typeof o.body==='string'){
+    const h=Object.assign({},o.headers);
+    if(!Object.keys(h).some(k=>k.toLowerCase()==='content-type'))h['content-type']='application/json';
+    o=Object.assign({},o,{headers:h});
+  }
   const r=await fetch('/api'+u,o);
   if(!r.ok){
     const e=new Error('HTTP '+r.status);e.status=r.status;
