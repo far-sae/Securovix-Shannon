@@ -649,3 +649,112 @@ test('connector: a binary request body reaches the app byte-for-byte', async () 
     await app.close();
   }
 });
+
+// ---------- self-defense middleware ----------
+import { SELF_SKIP, createSelfDefense } from './defender/middleware.mjs';
+
+const mkReq = (method, url, body) => ({
+  method,
+  url,
+  originalUrl: url,
+  path: url.split('?')[0],
+  body,
+  ip: '10.0.0.5',
+  socket: {},
+});
+const mkRes = () => {
+  const r = { code: null, payload: null };
+  r.status = (c) => {
+    r.code = c;
+    return r;
+  };
+  r.json = (p) => {
+    r.payload = p;
+    return r;
+  };
+  return r;
+};
+const runMw = (mw, req) => {
+  const res = mkRes();
+  let nexted = false;
+  mw(req, res, () => {
+    nexted = true;
+  });
+  return { res, nexted };
+};
+
+test('self-defense: ENFORCE blocks a real attack on a public path before it reaches the app', () => {
+  const d = createSelfDefense({ mode: 'enforce' });
+  const { res, nexted } = runMw(d.middleware, mkReq('GET', '/files?path=../../etc/passwd'));
+  assert.equal(res.code, 403);
+  assert.equal(nexted, false, 'the request must not continue into the app');
+  assert.equal(d.stats().defenses, 1);
+});
+test('self-defense: MONITOR records the same attack but lets it through', () => {
+  const d = createSelfDefense({ mode: 'monitor' });
+  const { res, nexted } = runMw(d.middleware, mkReq('GET', '/files?path=../../etc/passwd'));
+  assert.equal(res.code, null, 'nothing is blocked in monitor mode');
+  assert.equal(nexted, true);
+  assert.equal(d.stats().defenses, 1, 'but it is still recorded for the operator');
+  assert.equal(d.recent()[0].cls, 'path-traversal');
+});
+test("self-defense: Shannon's own tool endpoints are never inspected", () => {
+  const d = createSelfDefense({ mode: 'enforce' });
+  // The Repeater / AI check / Sandbox legitimately carry attack payloads — this is the product.
+  for (const url of ['/api/agent/understand', '/api/scans', '/api/defender/connect', '/api/code-scan/quick']) {
+    const { res, nexted } = runMw(d.middleware, mkReq('POST', url, { target: '../../etc/passwd' }));
+    assert.equal(res.code, null, `${url} must not be blocked`);
+    assert.equal(nexted, true, `${url} must pass through`);
+  }
+  assert.equal(d.stats().events, 0, 'skipped paths are not even counted');
+  assert.equal(d.stats().defenses, 0);
+});
+test('self-defense: a JSON body is inspected, not just the URL', () => {
+  const d = createSelfDefense({ mode: 'enforce' });
+  const { res } = runMw(d.middleware, mkReq('POST', '/signup', { note: '../../etc/passwd' }));
+  assert.equal(res.code, 403);
+});
+test('self-defense: ordinary traffic is never blocked, even when a detect-only signature fires', () => {
+  const d = createSelfDefense({ mode: 'enforce' });
+  for (const [m, u, b] of [
+    ['GET', '/pricing', undefined],
+    ['GET', '/products?page=2&sort=price', undefined],
+    // These two DO match detect-only signatures — sqli on the apostrophe, cmd-injection on "; a".
+    // That is precisely why those classes are not in DEFENSE_CLASSES: a real signup and a contact
+    // form must still go through. They may be recorded; they must never be stopped.
+    ['POST', '/api/auth/login', { email: "o'brien@example.com", password: 'x' }],
+    ['POST', '/contact', { msg: 'Design & code; also coffee' }],
+  ]) {
+    const { res, nexted } = runMw(d.middleware, mkReq(m, u, b));
+    assert.equal(res.code, null, `${m} ${u} must not be blocked`);
+    assert.equal(nexted, true, `${m} ${u} must reach the app`);
+  }
+  assert.ok(
+    d.recent().every((r) => !r.enforced),
+    'no ordinary request may ever be enforced against',
+  );
+});
+test('self-defense: FAILS OPEN if inspection itself throws', () => {
+  const d = createSelfDefense({ mode: 'enforce' });
+  const bad = {
+    method: 'GET',
+    url: '/x',
+    get path() {
+      throw new Error('boom');
+    },
+  };
+  const { res, nexted } = runMw(d.middleware, bad);
+  assert.equal(res.code, null, 'must never fail closed');
+  assert.equal(nexted, true);
+});
+test('self-defense: mode can be flipped live', () => {
+  const d = createSelfDefense({ mode: 'monitor' });
+  assert.equal(runMw(d.middleware, mkReq('GET', '/f?path=../../etc/passwd')).res.code, null);
+  assert.equal(d.setMode('enforce'), 'enforce');
+  assert.equal(runMw(d.middleware, mkReq('GET', '/f?path=../../etc/passwd')).res.code, 403);
+});
+test('self-defense: SELF_SKIP covers the payload-carrying tool APIs', () => {
+  assert.ok(SELF_SKIP.some((r) => r.test('/api/agent/patch')));
+  assert.ok(SELF_SKIP.some((r) => r.test('/api/code-scan/multi/start')));
+  assert.ok(!SELF_SKIP.some((r) => r.test('/api/auth/login')), 'auth is public surface — inspect it');
+});

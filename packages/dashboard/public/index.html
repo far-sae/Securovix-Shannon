@@ -2500,6 +2500,11 @@ function pgDefender() {
       </div>
 
       <div class="crd">
+        <h3>This dashboard</h3>
+        <div id="def-self">Checking…</div>
+      </div>
+
+      <div class="crd">
         <h3>Protected systems</h3>
         <div id="def-list">Loading…</div>
       </div>
@@ -2510,6 +2515,45 @@ function pgDefender() {
       </div>
     </div>`;
   defLoad();
+  defSelfLoad();
+}
+
+async function defSelfLoad() {
+  const el = $('def-self');
+  if (!el) return;
+  try {
+    const s = await api('/defender/self');
+    if (!s.enabled) {
+      el.innerHTML = '<span class="fine">Not enabled. Set <code>SHANNON_DEFEND_SELF=1</code> in the environment '
+        + 'and Shannon inspects this dashboard\'s own incoming traffic — no proxy, no port, nothing to reconnect. '
+        + 'Starts monitor-only; <code>SHANNON_DEFEND_SELF_MODE=enforce</code> to block.</span>';
+      return;
+    }
+    const rows = s.recent.length
+      ? s.recent.map((r) => `<div><code>${H(r.method)} ${H(r.url)}</code> — <b>${H(r.cls || '—')}</b> — ${H(r.action)}${r.enforced ? ' <b>(blocked)</b>' : ''}</div>`).join('')
+      : '<span class="fine">No detections yet.</span>';
+    el.innerHTML = `<div>Mode <b>${H(s.mode)}</b> · requests ${s.stats.events} · detections ${s.stats.defenses}</div>
+      <button class="btn" style="margin:8px 0" onclick="defSelfMode('${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">
+        Switch to ${s.mode === 'enforce' ? 'Monitor-only' : 'Enforce (block attacks)'}
+      </button>
+      <div>${rows}</div>`;
+  } catch (e) {
+    el.innerHTML = `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
+  }
+}
+
+async function defSelfMode(mode) {
+  if (mode === 'enforce' && !confirm(
+    'Enforce will return 403 to requests to THIS dashboard that match the path-traversal, '
+    + 'NoSQL-injection or LLM-prompt-injection signatures. Review the monitor-mode detections '
+    + 'above first to see what would have been blocked. Continue?'
+  )) return;
+  try {
+    await api('/defender/self/mode', { method: 'POST', body: JSON.stringify({ mode }) });
+    defSelfLoad();
+  } catch (e) {
+    alert(e.detail || e.message || 'could not change mode');
+  }
 }
 
 async function defLoad() {

@@ -23,6 +23,7 @@ import {
   setScanOrigin,
   setSessionHeaders,
 } from '../../purple-engine.mjs';
+import { createSelfDefense } from '../../defender/middleware.mjs';
 import { diffRuns } from './agent-history.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
 import { runSecurityTeam } from './agent-team.mjs';
@@ -69,6 +70,23 @@ const app = express();
 // Google OAuth redirect URI is built with http://, which Google rejects.
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
+
+// ── Self-defense (opt-in) ───────────────────────────────────────────────────────────────────────
+// Run the Defender inside the app it protects. The inline proxy assumes Shannon sits in front of a
+// SEPARATE app reached over a port; when the app to protect is this dashboard, that proxy can only
+// bind loopback in its own container and no request can ever reach it. As middleware the defender
+// sits on the real request path — no port, no DNS or TLS work, nothing to reconnect after a deploy.
+// Mounted after express.json() so a JSON body is already parsed and can be inspected, and before
+// the routes so a confirmed attack is stopped before it reaches any of them.
+// Off unless SHANNON_DEFEND_SELF=1, and monitor-only unless SHANNON_DEFEND_SELF_MODE=enforce.
+const SELF_DEFENSE = process.env.SHANNON_DEFEND_SELF === '1'
+  ? createSelfDefense({ mode: process.env.SHANNON_DEFEND_SELF_MODE === 'enforce' ? 'enforce' : 'monitor' })
+  : null;
+if (SELF_DEFENSE) {
+  app.use(SELF_DEFENSE.middleware);
+  console.log(`[defender] self-defense active in ${SELF_DEFENSE.getMode()} mode`);
+}
+
 // `extensions: ['html']` lets us serve `/terms` from `terms.html` etc.
 app.use(express.static(join(__dirname, 'public'), { extensions: ['html'] }));
 
@@ -2696,6 +2714,29 @@ function yamlDump(obj, indent = 0) {
 app.get('/healthz', (_req, res) =>
   res.json({ ok: true, db: isSupabase() ? 'supabase' : 'fs', uptime: process.uptime() }),
 );
+
+// ── Self-defense status / control ───────────────────────────────────────────────────────────────
+// Reports whether this dashboard is defending itself, and lets an operator flip monitor⇄enforce
+// without a redeploy. Read-only when the feature is off, so the UI can explain how to enable it.
+app.get('/api/defender/self', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+  if (!SELF_DEFENSE) return res.json({ enabled: false });
+  res.json({
+    enabled: true,
+    mode: SELF_DEFENSE.getMode(),
+    stats: SELF_DEFENSE.stats(),
+    recent: SELF_DEFENSE.recent().slice(0, 25),
+  });
+});
+
+app.post('/api/defender/self/mode', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'auth required' });
+  if (!SELF_DEFENSE) return res.status(409).json({ error: 'self-defense is not enabled' });
+  const mode = SELF_DEFENSE.setMode(req.body?.mode);
+  res.json({ mode });
+});
 
 // ── Live Defender ───────────────────────────────────────────────────────────────────────────────
 // A connected system is protected inline by a filtering reverse proxy. Ownership verification is
