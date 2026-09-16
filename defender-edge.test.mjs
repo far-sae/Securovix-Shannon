@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
-import { createEdgeServer, isPrivateAddress, routes } from './packages/defender-edge/server.mjs';
+import { createEdgeServer, isDirectExecution, isPrivateAddress, routes } from './packages/defender-edge/server.mjs';
+
+test('edge starts only when its exact module is the process entry point', () => {
+  assert.equal(isDirectExecution('packages/defender-edge/server.mjs'), true);
+  assert.equal(isDirectExecution('packages/dashboard/server.mjs'), false);
+});
 
 test('edge upstream guard rejects private and metadata IPv4 ranges', () => {
   for (const ip of ['127.0.0.1', '10.0.0.8', '172.16.2.3', '192.168.1.2', '169.254.169.254', '100.64.0.1']) {

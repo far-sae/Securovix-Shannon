@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import os from 'node:os';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import express from 'express';
@@ -127,7 +127,8 @@ import {
   validateFindingTransition,
 } from './team-access.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 const ROOT = join(__dirname, '..', '..');
 const WORKSPACES = join(ROOT, 'workspaces');
 const SHANNON_HOME = process.env.SHANNON_DATA_DIR || join(os.homedir(), '.shannon');
@@ -4521,7 +4522,16 @@ export async function startDashboard({ port = PORT, scheduleMonitors = true } = 
     console.error('FATAL: db init failed.', e.message);
     throw e;
   }
-  const server = app.listen(port, () => console.log(`\n  Securovix Dashboard running at http://localhost:${server.address().port}\n`));
+  const server = await new Promise((resolveServer, reject) => {
+    const candidate = app.listen(port, (error) => {
+      if (error) return reject(error);
+      const address = candidate.address();
+      const boundPort = address && typeof address === 'object' ? address.port : port;
+      console.log(`\n  Securovix Dashboard running at http://localhost:${boundPort}\n`);
+      resolveServer(candidate);
+    });
+    candidate.once('error', reject);
+  });
   if (scheduleMonitors) {
     // Continuous monitoring: check for due monitors shortly after boot, then every 10 minutes.
     setTimeout(runDueMonitors, 30_000).unref?.();
@@ -4532,6 +4542,6 @@ export async function startDashboard({ port = PORT, scheduleMonitors = true } = 
 
 export { app };
 
-if (process.argv[1] && process.argv[1].endsWith('server.mjs')) {
+if (process.argv[1] && resolve(process.argv[1]) === __filename) {
   startDashboard().catch(() => process.exit(1));
 }

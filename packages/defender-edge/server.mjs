@@ -17,6 +17,8 @@ import http from 'node:http';
 import https from 'node:https';
 import { lookup as dnsLookup } from 'node:dns';
 import { isIP } from 'node:net';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { inspect } from '../defender-sdk/signatures.mjs';
 
 const PORT = process.env.PORT || 8080;
@@ -281,8 +283,13 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
   });
 }
 
-// Started directly (not imported by a test)
-if (process.argv[1] && process.argv[1].endsWith('server.mjs')) {
+// Start only when this exact file is the process entry point. Checking only the
+// basename is unsafe because the dashboard entry point is also named server.mjs.
+export function isDirectExecution(entry = process.argv[1]) {
+  return !!entry && resolve(entry) === fileURLToPath(import.meta.url);
+}
+
+if (isDirectExecution()) {
   loadRoutesFromEnv();
   refreshRoutes();
   const t1 = setInterval(refreshRoutes, ROUTES_REFRESH_MS);
