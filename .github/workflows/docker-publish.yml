@@ -1,0 +1,52 @@
+name: Publish Docker image
+
+# Build the dashboard image and publish it to the GitHub Container Registry (ghcr.io) so anyone can
+# pull it without cloning or building:
+#   docker pull ghcr.io/far-sae/securovix-shannon:latest
+#
+# Runs on every push to main, on version tags (v1.2.3 -> a matching image tag), and on demand.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # required to push to ghcr.io under this repo
+    steps:
+      - uses: actions/checkout@v4
+
+      # Derive image tags/labels: :latest and :sha for main, plus :vX.Y.Z for tags.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # provided automatically by Actions
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: . # repo root — the dashboard imports the sibling engine files
+          file: Dockerfile.dashboard
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

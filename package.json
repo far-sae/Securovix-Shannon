@@ -13,7 +13,9 @@
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
     "web": "node web/server.mjs",
-    "test": "node --test ./engine.test.mjs ./templates.test.mjs ./crawler.test.mjs ./cvss.test.mjs ./cert-report.test.mjs ./advanced.test.mjs ./probers.test.mjs ./flows.test.mjs ./tls.test.mjs ./agent-understand.test.mjs ./agent-loop.test.mjs ./leads.test.mjs ./code-locate.test.mjs ./patch.test.mjs ./github-pr.test.mjs ./templates-files.test.mjs ./agent-report.test.mjs ./agent-history.test.mjs ./monitor-schedule.test.mjs ./custom-check.test.mjs ./sandbox.test.mjs ./llm.test.mjs ./agent-team.test.mjs ./defender.test.mjs"
+    "dashboard": "node packages/dashboard/server.mjs",
+    "dashboard:worker": "node packages/dashboard/worker.mjs",
+    "test": "node --test ./engine.test.mjs ./templates.test.mjs ./crawler.test.mjs ./cvss.test.mjs ./cert-report.test.mjs ./advanced.test.mjs ./probers.test.mjs ./flows.test.mjs ./tls.test.mjs ./agent-understand.test.mjs ./agent-loop.test.mjs ./leads.test.mjs ./code-locate.test.mjs ./patch.test.mjs ./github-pr.test.mjs ./templates-files.test.mjs ./agent-report.test.mjs ./agent-history.test.mjs ./monitor-schedule.test.mjs ./custom-check.test.mjs ./sandbox.test.mjs ./llm.test.mjs ./agent-team.test.mjs ./defender.test.mjs ./team-access.test.mjs ./defender-edge.test.mjs ./dashboard-team.test.mjs ./enterprise-platform.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
@@ -21,11 +23,20 @@
     "typescript": "^5.6.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.92.0",
-    "undici": "^8.2.0",
+    "@anthropic-ai/sdk": "^0.126.0",
+    "undici": "^8.10.2",
     "yaml": "^2.4.0"
   },
   "optionalDependencies": {
     "playwright": "^1.48.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@grpc/grpc-js": "^1.14.4",
+      "baseline-browser-mapping": "^2.11.0",
+      "browserslist": "^4.29.0",
+      "fast-uri": "^3.1.6",
+      "protobufjs": "^7.6.5"
+    }
   }
 }

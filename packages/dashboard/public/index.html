@@ -734,6 +734,7 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
     <button class="on" onclick="go('dash')" id="n-dash" aria-label="Dashboard"><span aria-hidden="true">&#9632;</span> Dashboard</button>
     <button onclick="go('new')" id="n-new" aria-label="New Scan"><span aria-hidden="true">&#9654;</span> New Scan</button>
     <button onclick="go('domains')" id="n-domains" aria-label="Domains"><span aria-hidden="true">&#9745;</span> Domains</button>
+    <button onclick="go('team')" id="n-team" aria-label="Security Team Workspace"><span aria-hidden="true">&#9672;</span> Team Workspace</button>
     <button onclick="go('agent')" id="n-agent" aria-label="AI Agent"><span aria-hidden="true">&#9673;</span> AI Agent</button>
     <button onclick="go('code')" id="n-code" aria-label="Code Scan"><span aria-hidden="true">&#9876;</span> Code Scan</button>
     <button onclick="go('cfg')" id="n-cfg" aria-label="Settings"><span aria-hidden="true">&#9881;</span> Settings</button>
@@ -1688,7 +1689,7 @@ function go(p,d){
   if(POLL){clearInterval(POLL);POLL=null}
   if(EVT){EVT.close();EVT=null}
   closeDrawer();
-  ({dash:pgDash,new:pgNew,domains:pgDomains,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
+  ({dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
 }
 async function api(u,o){
   // A JSON string body sent without this header goes out as text/plain, which express.json() does
@@ -1709,6 +1710,64 @@ async function api(u,o){
   }
   return r.json();
 }
+
+async function pgTeam(){
+  M.innerHTML='<div class="pg"><div class="empty"><div class="sp"></div><h2>Loading team workspace</h2></div></div>';
+  try{
+    const tc=await api('/team/context');
+    const active=tc.active;
+    if(!active){M.innerHTML='<div class="pg"><div class="empty"><h2>No organization available</h2></div></div>';return}
+    const orgId=active.organization.id,role=active.role;
+    const [mm,pp,ff,aa,ii,jj]=await Promise.all([
+      api(`/team/${orgId}/members`),api(`/team/${orgId}/projects`),api(`/team/${orgId}/findings`),
+      api(`/team/${orgId}/audit?limit=40`).catch(()=>({events:[]})),
+      api(`/team/${orgId}/integrations`).catch(()=>({integrations:[]})),
+      api(`/team/${orgId}/jobs?limit=20`).catch(()=>({jobs:[]})),
+    ]);
+    const canManage=['owner','admin'].includes(role),canProject=['owner','admin','engineer'].includes(role);
+    const canTriage=['owner','admin','engineer','analyst'].includes(role);
+    const stat=(label,value,color='var(--t0)')=>`<div class="crd" style="padding:18px"><div style="font-size:28px;font-weight:800;color:${color}">${value}</div><div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px">${label}</div></div>`;
+    M.innerHTML=`<div class="pg" style="max-width:1200px">
+      <div class="ph"><div><div class="ey">Security operations</div><h1>Team Workspace</h1><p>Shared projects, ownership, finding lifecycle, and audit history.</p></div>
+        <div style="display:flex;gap:8px;align-items:center"><select class="fi" style="min-width:220px" onchange="teamSwitch(this.value)">${tc.organizations.map(o=>`<option value="${H(o.id)}" ${o.id===orgId?'selected':''}>${H(o.name)} · ${H(o.role)}</option>`).join('')}</select><span class="bx bx-g">${H(role)}</span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">${stat('members',mm.members.length)}${stat('projects',pp.projects.length)}${stat('open findings',ff.findings.filter(f=>!['resolved','false-positive'].includes(f.status)).length,'var(--org)')}${stat('critical',ff.findings.filter(f=>f.severity==='critical'&&f.status!=='resolved').length,'var(--red)')}</div>
+      <div style="display:grid;grid-template-columns:1.2fr .8fr;gap:16px;align-items:start">
+        <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:14px">Finding queue</h2>
+          <div style="display:grid;gap:8px">${ff.findings.length?ff.findings.map(f=>`<div style="border:1px solid var(--brd);border-radius:10px;padding:12px;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center">
+            <span class="bx ${f.severity==='critical'?'bx-r':f.severity==='high'?'bx-o':'bx-b'}">${H(f.severity)}</span><div><b>${H(f.title)}</b><div style="font-size:11px;color:var(--t3);margin-top:3px">${H(f.source)} · ${H(f.assigneeUserId||'unassigned')}</div></div>
+            ${canTriage?`<select class="fi" style="width:auto;padding:7px" onchange="teamFindingStatus('${H(orgId)}','${H(f.id)}',this.value)">${['new','triaged','assigned','in-progress','ready-for-retest','resolved','risk-accepted','false-positive'].map(s=>`<option ${s===f.status?'selected':''}>${s}</option>`).join('')}</select>`:`<span class="bx">${H(f.status)}</span>`}</div>`).join(''):'<div class="empty" style="padding:28px"><p>No shared findings yet. Confirmed scan findings appear here automatically.</p></div>'}</div>
+        </section>
+        <div style="display:grid;gap:16px">
+          <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:12px">Members</h2>${mm.members.map(m=>`<div style="display:flex;gap:9px;align-items:center;padding:8px 0;border-bottom:1px solid var(--brd)"><span style="flex:1"><b>${H(m.name||m.email)}</b><small style="display:block;color:var(--t3)">${H(m.email)}</small></span><span class="bx">${H(m.role)}</span></div>`).join('')}
+            ${canManage?`<div style="display:flex;gap:7px;margin-top:12px"><input class="fi" id="tm-email" placeholder="teammate@example.com"><select class="fi" id="tm-role"><option>engineer</option><option>analyst</option><option>developer</option><option>viewer</option><option>admin</option></select><button class="btn btn-p" onclick="teamInviteMember('${H(orgId)}')">Invite</button></div>`:''}</section>
+          <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:12px">Projects</h2>${pp.projects.map(p=>`<div style="padding:8px 0;border-bottom:1px solid var(--brd)"><b>${H(p.name)}</b><span class="bx" style="float:right">${H(p.criticality)}</span><div style="font-size:11px;color:var(--t3)">${H(p.environment)}</div></div>`).join('')||'<p style="color:var(--t3)">No projects yet.</p>'}
+            ${canProject?`<div style="display:flex;gap:7px;margin-top:12px"><input class="fi" id="tp-name" placeholder="Project name"><select class="fi" id="tp-criticality"><option>medium</option><option>high</option><option>critical</option><option>low</option></select><button class="btn btn-p" onclick="teamCreateProject('${H(orgId)}')">Create</button></div>`:''}</section>
+          <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:12px">Recent audit</h2>${aa.events.slice(0,12).map(e=>`<div style="font-size:11px;padding:6px 0;border-bottom:1px solid var(--brd)"><b>${H(e.action)}</b><span style="float:right;color:var(--t3)">${fmtDate(e.createdAt)}</span><div style="color:var(--t3)">${H(e.resourceType)} ${H(e.resourceId||'')}</div></div>`).join('')||'<p style="color:var(--t3)">No audit events yet.</p>'}</section>
+          ${canManage?`<section class="crd" style="padding:22px"><div style="display:flex;align-items:center"><h2 style="font-size:18px;flex:1">Integrations</h2><button class="btn btn-g" onclick="teamAddIntegration('${H(orgId)}')">Add</button></div>${ii.integrations.map(i=>`<div style="padding:9px 0;border-bottom:1px solid var(--brd);display:flex;gap:8px;align-items:center"><span style="flex:1"><b>${H(i.name)}</b><small style="display:block;color:var(--t3)">${H(i.type)} · ${i.enabled?'enabled':'disabled'}</small></span><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Test</button><button class="btn btn-g" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Delete</button></div>`).join('')||'<p style="color:var(--t3);margin-top:10px">No integrations configured.</p>'}</section>`:''}
+          <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:12px">Recent jobs</h2>${jj.jobs.slice(0,12).map(j=>`<div style="font-size:11px;padding:7px 0;border-bottom:1px solid var(--brd)"><b>${H(j.type)}</b><span class="bx" style="float:right">${H(j.status)}</span><div style="color:var(--t3)">${H(j.id)} · attempt ${j.attempts}/${j.maxAttempts}</div></div>`).join('')||'<p style="color:var(--t3)">No durable jobs yet.</p>'}</section>
+        </div>
+      </div>
+      <div style="margin-top:16px"><button class="btn btn-g" onclick="teamCreateOrg()">Create another organization</button></div>
+    </div>`;
+  }catch(e){M.innerHTML=`<div class="pg"><div class="empty"><h2>Team workspace unavailable</h2><p>${H(e.detail||e.message)}</p></div></div>`}
+}
+async function teamSwitch(orgId){await api('/team/active',{method:'POST',body:JSON.stringify({orgId})});pgTeam()}
+async function teamCreateOrg(){const name=prompt('Organization name');if(!name)return;const x=await api('/team/organizations',{method:'POST',body:JSON.stringify({name})});await teamSwitch(x.organization.id)}
+async function teamInviteMember(orgId){const email=$('tm-email').value.trim(),role=$('tm-role').value;try{await api(`/team/${orgId}/invitations`,{method:'POST',body:JSON.stringify({email,role})});alert('Invitation sent to '+email);pgTeam()}catch(e){alert(e.detail||e.message)}}
+async function teamAddIntegration(orgId){
+  const type=(prompt('Integration type: webhook, siem-http, slack, teams, jira, or linear','slack')||'').trim();if(!type)return;
+  const name=(prompt('Display name',type)||'').trim();if(!name)return;const config={},secret={};
+  if(['webhook','siem-http'].includes(type)){config.url=prompt('HTTPS destination URL')||'';secret.token=prompt('Bearer token (optional)')||''}
+  if(['slack','teams'].includes(type))secret.webhookUrl=prompt('Webhook URL')||'';
+  if(type==='jira'){config.baseUrl=prompt('Jira base URL, e.g. https://company.atlassian.net')||'';config.projectKey=prompt('Project key')||'';config.issueType=prompt('Issue type','Task')||'Task';secret.email=prompt('Jira account email')||'';secret.apiToken=prompt('Jira API token')||''}
+  if(type==='linear'){config.teamId=prompt('Linear team ID')||'';secret.apiKey=prompt('Linear API key')||''}
+  try{await api(`/team/${orgId}/integrations`,{method:'POST',body:JSON.stringify({type,name,config,secret})});pgTeam()}catch(e){alert(e.detail||e.message)}
+}
+async function teamTestIntegration(orgId,id){try{await api(`/team/${orgId}/integrations/${id}/test`,{method:'POST'});alert('Test delivery queued.')}catch(e){alert(e.detail||e.message)}}
+async function teamDeleteIntegration(orgId,id){if(!confirm('Delete this integration?'))return;try{await api(`/team/${orgId}/integrations/${id}`,{method:'DELETE'});pgTeam()}catch(e){alert(e.detail||e.message)}}
+async function teamCreateProject(orgId){const name=$('tp-name').value.trim(),criticality=$('tp-criticality').value;try{await api(`/team/${orgId}/projects`,{method:'POST',body:JSON.stringify({name,criticality,environment:'production'})});pgTeam()}catch(e){alert(e.detail||e.message)}}
+async function teamFindingStatus(orgId,id,status){let body={status};if(['risk-accepted','false-positive'].includes(status)){body.reason=prompt('Reason (required)')||'';if(status==='risk-accepted')body.expiresAt=new Date(Date.now()+90*86400000).toISOString()}try{await api(`/team/${orgId}/findings/${id}`,{method:'PATCH',body:JSON.stringify(body)});pgTeam()}catch(e){alert(e.detail||e.message);pgTeam()}}
 let LOAD_STATE='idle',LOAD_ERR=null;
 async function load(){
   LOAD_STATE='loading';LOAD_ERR=null;
@@ -5590,13 +5649,13 @@ function fmtDate(d){return new Intl.DateTimeFormat('en-US',{month:'short',day:'n
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer()});
 
 // ===== AUTH GATE =====
-let CURRENT_USER=null,GOOGLE_CONFIGURED=false;
+let CURRENT_USER=null,GOOGLE_CONFIGURED=false,SSO_CONFIGURED=false,SSO_NAME='Company SSO';
 
 async function authBoot(){
   try{
     const r=await fetch('/api/auth/me');
-    if(r.ok){const d=await r.json();CURRENT_USER=d.user;GOOGLE_CONFIGURED=d.googleConfigured;mountApp()}
-    else{const d=await r.json().catch(()=>({}));GOOGLE_CONFIGURED=d.googleConfigured||false;renderAuthScreen()}
+    if(r.ok){const d=await r.json();CURRENT_USER=d.user;GOOGLE_CONFIGURED=d.googleConfigured;SSO_CONFIGURED=!!d.ssoConfigured;SSO_NAME=d.ssoName||SSO_NAME;mountApp()}
+    else{const d=await r.json().catch(()=>({}));GOOGLE_CONFIGURED=d.googleConfigured||false;SSO_CONFIGURED=!!d.ssoConfigured;SSO_NAME=d.ssoName||SSO_NAME;renderAuthScreen()}
   }catch(e){renderAuthScreen()}
 }
 
@@ -5625,6 +5684,7 @@ function injectUserPill(){
         <div style="font-size:13px;color:var(--t0);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${H(CURRENT_USER.name||CURRENT_USER.email.split('@')[0])}</div>
         <div style="font-size:10.5px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">${H(CURRENT_USER.email)}</div>
       </div>
+      <button class="btn btn-g" style="padding:6px 8px;font-size:11px" onclick="authMfaManage()" title="MFA settings" aria-label="MFA settings">${CURRENT_USER.mfaEnabled?'2FA':'MFA'}</button>
       <button class="btn btn-g" style="padding:6px 8px;font-size:11px" onclick="authLogout()" title="Sign out" aria-label="Sign out">↪</button>
     </div>
     <div style="padding:8px 10px;border-radius:10px;background:${planBg};border:1px solid rgba(255,255,255,.06)">
@@ -5642,6 +5702,21 @@ async function authLogout(){
   CURRENT_USER=null;
   // Reload so the auth gate takes over.
   location.reload();
+}
+
+async function authMfaManage(){
+  try{
+    if(CURRENT_USER.mfaEnabled){
+      const code=prompt('Enter a current authenticator code to disable MFA.');if(!code)return;
+      await api('/auth/mfa',{method:'DELETE',body:JSON.stringify({code})});CURRENT_USER.mfaEnabled=false;injectUserPill();alert('MFA disabled.');return;
+    }
+    const setup=await api('/auth/mfa/setup',{method:'POST'});
+    prompt('Add this TOTP setup URI to your authenticator app, then copy the six-digit code.',setup.uri);
+    const code=prompt('Enter the six-digit code from your authenticator app.');if(!code)return;
+    const enabled=await api('/auth/mfa/enable',{method:'POST',body:JSON.stringify({code})});
+    CURRENT_USER.mfaEnabled=true;injectUserPill();
+    alert('MFA enabled. Save these one-time recovery codes now:\n\n'+enabled.recoveryCodes.join('\n'));
+  }catch(e){alert(e.detail||e.message)}
 }
 
 function renderAuthScreen(){
@@ -5723,13 +5798,14 @@ function renderAuthScreen(){
         Continue with Google
       </button>
       ${GOOGLE_CONFIGURED?'':'<div style="font-size:10.5px;color:var(--t3);text-align:center;margin-top:6px">Google sign-in not configured · set GOOGLE_CLIENT_ID env var</div>'}
+      ${SSO_CONFIGURED?`<button class="auth-btn auth-btn-g" onclick="authSso()">Continue with ${H(SSO_NAME)}</button>`:''}
       <div class="auth-or">or with email</div>
 
       <div id="auth-signup-fields" style="display:none">
         <input class="auth-input" id="auth-name" type="text" placeholder="Your name" autocomplete="name">
       </div>
       <input class="auth-input" id="auth-email" type="email" placeholder="you@example.com" autocomplete="email">
-      <input class="auth-input" id="auth-pwd" type="password" placeholder="Password (8+ chars)" autocomplete="current-password">
+      <input class="auth-input" id="auth-pwd" type="password" placeholder="Password (12+ chars)" autocomplete="current-password">
 
       <label class="auth-consent" id="auth-consent" style="display:none">
         <input type="checkbox" id="auth-consent-cb">
@@ -5737,6 +5813,7 @@ function renderAuthScreen(){
       </label>
 
       <button class="auth-btn auth-btn-p" id="auth-submit" onclick="authSubmit()">Sign in →</button>
+      <button class="auth-btn" style="background:transparent;color:var(--acc2);padding:8px" id="auth-forgot" onclick="authForgot()">Forgot password?</button>
       <div class="auth-err" id="auth-err"></div>
     </div>
 
@@ -5749,6 +5826,10 @@ function renderAuthScreen(){
   `;
   // Submit on Enter
   ['auth-email','auth-pwd','auth-name'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener('keydown',e=>{if(e.key==='Enter')authSubmit()})});
+  const params=new URLSearchParams(location.search);
+  if(params.get('verify'))authVerify(params.get('verify'));
+  else if(params.get('reset'))authTokenForm('reset',params.get('reset'));
+  else if(params.get('invite'))authTokenForm('invite',params.get('invite'));
 }
 
 let AUTH_MODE='signin';
@@ -5762,6 +5843,7 @@ function authSwitch(mode){
   document.getElementById('auth-consent').style.display=mode==='signup'?'flex':'none';
   document.getElementById('auth-pwd').setAttribute('autocomplete',mode==='signup'?'new-password':'current-password');
   document.getElementById('auth-submit').textContent=mode==='signup'?'Create account →':'Sign in →';
+  document.getElementById('auth-forgot').style.display=mode==='signup'?'none':'inline-flex';
   document.getElementById('auth-err').textContent='';
 }
 
@@ -5786,6 +5868,8 @@ async function authSubmit(){
     const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();
     if(!r.ok){err.textContent=d.error||'Authentication failed.';btn.disabled=false;btn.innerHTML=AUTH_MODE==='signup'?'Create account →':'Sign in →';return}
+    if(d.mfaRequired){return authMfaPrompt(d.challenge)}
+    if(d.verificationRequired){err.style.color='var(--grn)';err.textContent='Account created. Check your email to verify it before signing in.';btn.disabled=false;btn.textContent='Create account →';return}
     CURRENT_USER=d.user;
     document.getElementById('auth-root')?.remove();
     document.querySelector('.app').style.display='';
@@ -5794,6 +5878,40 @@ async function authSubmit(){
 }
 
 function authGoogle(){window.location.href='/auth/google'}
+function authSso(){window.location.href='/auth/sso'}
+
+async function authForgot(){
+  const email=document.getElementById('auth-email').value.trim()||prompt('Account email');if(!email)return;
+  const r=await fetch('/api/auth/password/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email})});
+  const d=await r.json();const err=document.getElementById('auth-err');err.style.color='var(--grn)';err.textContent=d.message||'Check your email.';
+}
+
+function authMfaPrompt(challenge){
+  const pane=document.getElementById('auth-pane');pane.innerHTML=`<h2 class="auth-h">Two-factor authentication</h2><p class="auth-sub">Enter your authenticator code or a recovery code.</p><input class="auth-input" id="auth-mfa-code" autocomplete="one-time-code" placeholder="123456"><button class="auth-btn auth-btn-p" onclick="authMfaFinish('${H(challenge)}')">Verify →</button><div class="auth-err" id="auth-err"></div>`;
+  document.getElementById('auth-mfa-code').focus();
+}
+async function authMfaFinish(challenge){
+  const code=document.getElementById('auth-mfa-code').value.trim(),err=document.getElementById('auth-err');
+  const r=await fetch('/api/auth/mfa/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({challenge,code})});const d=await r.json();
+  if(!r.ok){err.textContent=d.error||'Invalid code.';return}CURRENT_USER=d.user;document.getElementById('auth-root')?.remove();document.querySelector('.app').style.display='';mountApp();
+}
+
+async function authVerify(token){
+  const err=document.getElementById('auth-err');err.textContent='Verifying email…';
+  const r=await fetch('/api/auth/email/verify',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token})});const d=await r.json();
+  if(!r.ok){err.textContent=d.error||'Verification failed.';return}history.replaceState({},'',location.pathname);CURRENT_USER=d.user;document.getElementById('auth-root')?.remove();document.querySelector('.app').style.display='';mountApp();
+}
+
+function authTokenForm(kind,token){
+  const pane=document.getElementById('auth-pane'),invite=kind==='invite';
+  pane.innerHTML=`<h2 class="auth-h">${invite?'Accept invitation':'Reset password'}</h2><p class="auth-sub">${invite?'Join your security team workspace. Existing users can leave the password blank.':'Choose a new password with at least 12 characters.'}</p>${invite?'<input class="auth-input" id="auth-token-name" placeholder="Your name">':''}<input class="auth-input" id="auth-token-password" type="password" placeholder="New password (12+ characters)">${invite?'<label class="auth-consent"><input type="checkbox" id="auth-token-consent"><span>I agree to the Terms and Privacy Policy.</span></label>':''}<button class="auth-btn auth-btn-p" onclick="authTokenSubmit('${kind}','${H(token)}')">Continue →</button><div class="auth-err" id="auth-err"></div>`;
+}
+async function authTokenSubmit(kind,token){
+  const body={token,password:document.getElementById('auth-token-password').value};
+  if(kind==='invite'){body.name=document.getElementById('auth-token-name').value.trim();body.acceptedTerms=document.getElementById('auth-token-consent').checked}
+  const r=await fetch(kind==='invite'?'/api/auth/invitations/accept':'/api/auth/password/reset',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const d=await r.json();
+  if(!r.ok){document.getElementById('auth-err').textContent=d.error||'Unable to continue.';return}history.replaceState({},'',location.pathname);CURRENT_USER=d.user;document.getElementById('auth-root')?.remove();document.querySelector('.app').style.display='';mountApp();
+}
 
 authBoot();
 </script>

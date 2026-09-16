@@ -15,6 +15,8 @@
 // carries no such risk.
 import http from 'node:http';
 import https from 'node:https';
+import { lookup as dnsLookup } from 'node:dns';
+import { isIP } from 'node:net';
 import { inspect } from '../defender-sdk/signatures.mjs';
 
 const PORT = process.env.PORT || 8080;
@@ -44,6 +46,29 @@ export const routes = new Map();
 const stats = { requests: 0, detections: 0, blocked: 0, unknownHost: 0 };
 const pending = [];
 
+export function isPrivateAddress(address) {
+  const value = String(address || '').toLowerCase();
+  if (isIP(value) === 4) {
+    const [a, b] = value.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+  }
+  if (isIP(value) === 6)
+    return value === '::' || value === '::1' || /^(fc|fd|fe8|fe9|fea|feb)/.test(value);
+  return false;
+}
+
+function publicLookup(hostname, options, callback) {
+  dnsLookup(hostname, options, (error, address, family) => {
+    if (error) return callback(error);
+    const addresses = Array.isArray(address) ? address : [{ address, family }];
+    if (!addresses.length || addresses.some((x) => isPrivateAddress(x.address))) {
+      return callback(new Error('private or reserved upstream address rejected'));
+    }
+    if (options?.all) return callback(null, addresses);
+    return callback(null, addresses[0].address, addresses[0].family);
+  });
+}
+
 function loadRoutesFromEnv() {
   try {
     for (const r of JSON.parse(process.env.SHANNON_EDGE_ROUTES || '[]')) {
@@ -71,7 +96,6 @@ async function refreshRoutes() {
     // An EMPTY list never replaces live routes. The dashboard keeps its registry in memory, so a
     // dashboard restart briefly reports zero routes — obeying that would 502 every customer site
     // this proxy is fronting. Only a non-empty list is allowed to redefine routing.
-    if (!list.length) return;
     routes.clear();
     loadRoutesFromEnv(); // env entries are the floor; the dashboard adds to them
     for (const x of list) {
@@ -101,7 +125,7 @@ async function flushDetections() {
   }
 }
 
-export function createEdgeServer() {
+export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
   return http.createServer((req, res) => {
     res.on('error', () => {});
     req.on('error', () => {});
@@ -127,6 +151,11 @@ export function createEdgeServer() {
     }
 
     const o = new URL(route.origin);
+    if (!allowPrivateOrigins && (isPrivateAddress(o.hostname) || o.hostname === 'localhost' || o.hostname.endsWith('.local'))) {
+      res.writeHead(502, { 'content-type': 'text/plain' });
+      res.end('Unsafe upstream rejected');
+      return;
+    }
     const agent = o.protocol === 'https:' ? https : http;
 
     const upstreamHeaders = (bodyBuf) => {
@@ -160,6 +189,7 @@ export function createEdgeServer() {
           method: req.method,
           headers,
           timeout: 15_000,
+          lookup: allowPrivateOrigins ? undefined : publicLookup,
         },
         (up) => {
           up.on('error', () => res.destroy());

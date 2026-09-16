@@ -23,7 +23,7 @@ RUN cd packages/dashboard && npm ci --omit=dev
 #     Install run-scan.mjs's two deps into /app/node_modules so the child process
 #     can actually load. Without this, the spawn dies on `import "yaml"` and the
 #     "New Scan" button silently does nothing.
-RUN npm install --omit=dev --no-package-lock yaml@^2.4.0 @anthropic-ai/sdk@^0.39.0
+RUN npm install --omit=dev --no-package-lock yaml@^2.4.0 @anthropic-ai/sdk@^0.126.0
 
 # 3) Copy the rest of the workspace AFTER install. The .dockerignore prevents
 #    any local node_modules from clobbering the freshly installed ones.

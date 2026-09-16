@@ -201,7 +201,7 @@ try {
 // timeout=10min keeps long deliverables (report, war-room) from being killed mid-stream.
 const client = new Anthropic({ apiKey, maxRetries: 5, timeout: 600_000 });
 const MODEL = process.env.SHANNON_MODEL ?? 'claude-opus-4-7';
-const scanId = randomUUID().slice(0, 8);
+const scanId = process.env.SHANNON_SCAN_ID || randomUUID().slice(0, 8);
 const wsDir = join(import.meta.dirname, 'workspaces', scanId);
 const dirs = [
   '',
@@ -228,6 +228,9 @@ const session = {
   completedAgents: [],
   metrics: {},
   status: 'running',
+  ownerUserId: process.env.SHANNON_OWNER_USER_ID || null,
+  orgId: process.env.SHANNON_ORG_ID || null,
+  projectId: process.env.SHANNON_PROJECT_ID || null,
 };
 
 console.log(`\n  Shannon Penetration Testing Framework`);

@@ -171,6 +171,18 @@ node packages/dashboard/server.mjs
 It surfaces the SARIF export, the certification report, and the "Advanced options" (monitoring
 webhook, opt-in network scan) for each scan.
 
+### Team workspace
+
+The dashboard includes organization-scoped RBAC, projects, shared finding triage, assignments,
+risk-acceptance/false-positive decisions, and an append-only activity feed. Confirmed agent and
+pentest findings are imported into the active organization's queue automatically. See
+[`docs/TEAM-OPERATIONS.md`](docs/TEAM-OPERATIONS.md) and apply the team-workspace Supabase migration
+before enabling it in production.
+
+For durable multi-server operation on Railway with Supabase, scalable workers, private artifacts,
+SSO/SCIM/MFA, integrations, retention, and monitoring, follow
+[`docs/ENTERPRISE-DEPLOYMENT.md`](docs/ENTERPRISE-DEPLOYMENT.md).
+
 ---
 
 ## Output

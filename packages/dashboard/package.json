@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "worker": "node worker.mjs"
   },
   "dependencies": {
-    "express": "^4.21.0",
+    "express": "^5.2.1",
     "marked": "^15.0.0",
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^0.126.0",
     "yaml": "^2.4.0"
   }
 }

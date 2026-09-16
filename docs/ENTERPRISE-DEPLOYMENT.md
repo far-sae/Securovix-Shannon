@@ -1,0 +1,73 @@
+# Enterprise deployment: Railway + Supabase
+
+This deployment separates the HTTP dashboard from durable background workers. Supabase is the shared system of record and private artifact store, so scans survive web deploys and any available worker can claim them.
+
+## 1. Create and migrate Supabase
+
+Create a Supabase project, keep the service-role key server-side, then apply the migrations:
+
+```bash
+supabase link --project-ref YOUR_PROJECT_REF
+supabase db push
+```
+
+The enterprise migration creates the job queue, atomic job-claim and token-consumption functions, identities, integrations, delivery history, operational events, and the private `shannon-artifacts` Storage bucket. Row-level security is enabled with no anonymous policies; Railway services use the service-role key.
+
+Enable Supabase point-in-time recovery for production and regularly test a restore.
+
+## 2. Create the Railway web service
+
+Deploy the repository with `railway.json`. It builds `Dockerfile.dashboard`, starts `packages/dashboard/server.mjs`, and checks `/readyz`.
+
+Set every production variable from [`.env.example`](../.env.example), especially:
+
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+- unique random `SHANNON_SESSION_SECRET` and `SHANNON_ENCRYPTION_KEY`
+- `SHANNON_PUBLIC_URL` set to the public Railway domain
+- `SHANNON_DURABLE_JOBS=1` and `SHANNON_REQUIRE_EMAIL_VERIFICATION=1`
+- an email provider (`RESEND_API_KEY` plus `SHANNON_EMAIL_FROM`, or the HTTPS relay variables)
+- `SHANNON_METRICS_TOKEN`
+
+Never expose the Supabase service-role key or either Shannon secret in browser variables, build arguments, logs, or source control.
+
+## 3. Create the Railway worker service
+
+Create a second service from the same repository. Select `railway.worker.json` as its config file, or override its start command with:
+
+```bash
+node packages/dashboard/worker.mjs
+```
+
+Copy the same Supabase, encryption, LLM, email, and retention variables to it. Do not attach a public domain. Scale this service horizontally for more scan throughput. PostgreSQL row locks with `SKIP LOCKED` ensure one worker claims each job. Stale leases recover automatically after a worker crash.
+
+`SHANNON_WORKER_CONCURRENCY` controls child scans per worker. Start with `1` or `2`; increase only after watching Railway memory and CPU. Artifact uploads are private and downloads use short-lived signed URLs after organization RBAC checks.
+
+The web service refreshes its authorization cache from Supabase using `SHANNON_CACHE_REFRESH_MS` (default five seconds), allowing multiple web replicas to converge on account, role, project, finding, and scan-owner changes. Keep this low for rapid revocation and monitor Supabase load when scaling web replicas.
+
+## 4. Identity and provisioning
+
+- OIDC: configure `OIDC_ISSUER`, client credentials, callback URL `https://YOUR_DOMAIN/auth/sso/callback`, and optional allowed domains.
+- SCIM: configure a random `SHANNON_SCIM_TOKEN` and `SHANNON_SCIM_ORG_ID`. The base URL is `https://YOUR_DOMAIN/scim/v2`.
+- MFA: users enable TOTP from the MFA profile control and receive one-time recovery codes.
+- Invitations, verification, and password-reset links require a working email provider in production.
+
+## 5. Integrations and operations
+
+Owners and admins can configure generic webhooks, SIEM HTTP, Slack, Teams, Jira Cloud, and Linear from Team Workspace. Connector credentials are encrypted at rest. Deliveries use the durable queue, exponential-backoff retries, and dead-letter status after exhaustion.
+
+Monitoring endpoints:
+
+- `GET /healthz`: process liveness
+- `GET /readyz`: Supabase and durable-runtime readiness
+- `GET /metrics` with `Authorization: Bearer $SHANNON_METRICS_TOKEN`: Prometheus metrics
+
+Alert on readiness failures, dead-letter jobs, growing queue depth, and expired worker leases. Retention runs at worker startup; completed jobs, tokens, delivery logs, operational logs, and artifacts use the configurable retention-day variables.
+
+## 6. Release checklist
+
+1. Run the complete test suite and production dependency audits.
+2. Apply migrations before deploying code that uses them.
+3. Deploy a worker, then the web service.
+4. Verify `/readyz`, enqueue a test connector delivery, and run an authorized test scan.
+5. Confirm the scan survives a web restart and its report downloads from Supabase Storage.
+6. Test invitation, password reset, MFA recovery, OIDC, SCIM deactivation, backup restore, and secret rotation in staging.

@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import _crypto from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
@@ -32,34 +34,103 @@ import { analyzeSurface } from './agent-understand.mjs';
 import { locateFinding } from './code-locate.mjs';
 import { evaluateMatcher, sanitizeCheck } from './custom-check.mjs';
 import {
+  appendDefenseEvent,
+  appendAudit,
   addVerified,
   allMonitors,
+  createOrganization,
+  getFinding,
+  getMembership,
+  getOrganization,
   getAgentRun,
+  getScanOwner,
   initDb,
   isSupabase,
+  listAudit,
+  listDefenseEvents,
+  listEdgeRoutes,
   listAgentRuns,
+  listFindings,
+  listMembers,
   listMonitors,
+  listOrganizations,
+  listProjects,
+  loadUserSettings,
   loadLeaderboard,
   loadUsers,
   loadVerified,
+  removeMembership,
+  removeEdgeRoute,
   removeMonitor,
   removeVerified,
+  refreshDbIfStale,
   saveAgentRun,
+  saveFinding,
+  saveEdgeRoute,
   saveLeaderboard,
+  saveMembership,
   saveMonitor,
+  saveProject,
+  saveScanOwner,
+  saveUserSettings,
   saveUsers,
   touchMonitor,
+  waitForUserWrites,
 } from './db.mjs';
 import { openPullRequest } from './github-pr.mjs';
 import { gatherLeads } from './leads.mjs';
 import { diffToDelta, dueMonitors } from './monitor-schedule.mjs';
 import { applyLineFix, generatePatch } from './patch.mjs';
 import { runInSandbox, sandboxAvailable } from './sandbox.mjs';
+import {
+  consumeAuthToken,
+  createAuthToken,
+  deleteIntegration,
+  enqueueJob,
+  enterpriseHealth,
+  findAuthToken,
+  findSsoIdentity,
+  getJob,
+  getIntegration,
+  listArtifacts,
+  listDeliveries,
+  listIntegrations,
+  listJobs,
+  readArtifact,
+  saveIntegration,
+  saveSsoIdentity,
+  signedArtifactUrl,
+  updateJob,
+} from './enterprise-db.mjs';
+import { queueIntegrationEvent, sendEmail } from './enterprise-integrations.mjs';
+import {
+  consumeRecoveryCode,
+  createRecoveryCodes,
+  decryptSecret,
+  encryptSecret,
+  hashRecoveryCodes,
+  hashToken,
+  newTotpSecret,
+  publicBaseUrl,
+  randomToken,
+  signChallenge,
+  totpUri,
+  verifyChallenge,
+  verifyTotp,
+} from './enterprise-security.mjs';
+import {
+  ROLES,
+  can,
+  canChangeMember,
+  sanitizeLabel,
+  slugifyOrg,
+  validateFindingTransition,
+} from './team-access.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const WORKSPACES = join(ROOT, 'workspaces');
-const SHANNON_HOME = join(os.homedir(), '.shannon');
+const SHANNON_HOME = process.env.SHANNON_DATA_DIR || join(os.homedir(), '.shannon');
 const LEADERBOARD_PATH = join(SHANNON_HOME, 'leaderboard.json');
 const SETTINGS_PATH = join(ROOT, '.shannon-settings.json');
 const PORT = process.env.PORT || 3000;
@@ -69,7 +140,56 @@ const app = express();
 // req.protocol correctly reports "https" (not "http"). Without this the
 // Google OAuth redirect URI is built with http://, which Google rejects.
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 app.use(express.json({ limit: '2mb' }));
+app.use((req, res, next) => {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
+  res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('cross-origin-opener-policy', 'same-origin');
+  res.setHeader(
+    'content-security-policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+  );
+  next();
+});
+
+// Browser requests with an Origin header must be same-origin. SameSite cookies are useful defense in
+// depth, but this explicit check protects every mutating JSON route, including future routes.
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  const origin = req.headers.origin;
+  if (!origin) return next(); // CLI/service clients generally omit Origin and authenticate separately.
+  let expected;
+  try {
+    expected = `${req.protocol}://${req.get('host')}`;
+  } catch {
+    return res.status(403).json({ error: 'Invalid request origin.' });
+  }
+  if (origin !== expected) return res.status(403).json({ error: 'Cross-origin request rejected.' });
+  next();
+});
+
+const RATE_BUCKETS = new Map();
+function rateLimit(key, { limit, windowMs }) {
+  const now = Date.now();
+  const rec = RATE_BUCKETS.get(key);
+  if (!rec || now >= rec.resetAt) {
+    RATE_BUCKETS.set(key, { count: 1, resetAt: now + windowMs });
+    return { ok: true };
+  }
+  rec.count += 1;
+  return rec.count <= limit ? { ok: true } : { ok: false, retryAfter: Math.ceil((rec.resetAt - now) / 1000) };
+}
+function limited(req, res, bucket, limit, windowMs) {
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const hit = rateLimit(`${bucket}:${ip}`, { limit, windowMs });
+  if (hit.ok) return false;
+  res.setHeader('retry-after', String(hit.retryAfter));
+  res.status(429).json({ error: 'Too many requests. Try again later.' });
+  return true;
+}
 
 // ── Self-defense (opt-in) ───────────────────────────────────────────────────────────────────────
 // Run the Defender inside the app it protects. The inline proxy assumes Shannon sits in front of a
@@ -111,6 +231,7 @@ function ensureSessionSecret() {
 }
 const SESSION_SECRET = process.env.SHANNON_SESSION_SECRET || ensureSessionSecret();
 const SESSION_TTL_DAYS = 30;
+const COOKIE_SECURE = process.env.NODE_ENV === 'production';
 
 // This failure is silent and expensive, so say it loudly at boot. ensureSessionSecret() persists the
 // signing key to ~/.shannon/.session-secret — fine locally, useless on a platform with an ephemeral
@@ -166,7 +287,7 @@ function verifyPassword(pwd, hash, salt) {
   }
 }
 function signSession(userId) {
-  const payload = JSON.stringify({ uid: userId, iat: Date.now() });
+  const payload = JSON.stringify({ uid: userId, sid: _crypto.randomBytes(16).toString('hex'), iat: Date.now() });
   const b64 = Buffer.from(payload).toString('base64url');
   const sig = _crypto.createHmac('sha256', SESSION_SECRET).update(b64).digest('base64url');
   return b64 + '.' + sig;
@@ -198,17 +319,21 @@ function setSessionCookie(res, userId) {
   const token = signSession(userId);
   res.setHeader(
     'Set-Cookie',
-    `shannon_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}`,
+    `shannon_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}${COOKIE_SECURE ? '; Secure' : ''}`,
   );
 }
 function clearSessionCookie(res) {
-  res.setHeader('Set-Cookie', 'shannon_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+  res.append(
+    'Set-Cookie',
+    `shannon_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${COOKIE_SECURE ? '; Secure' : ''}`,
+  );
 }
 function getUser(req) {
   const session = verifySession(parseCookies(req).shannon_session);
   if (!session) return null;
   const users = loadUsers();
-  return users[session.uid] || null;
+  const user = users[session.uid] || null;
+  return user && !user.disabledAt && Number(user.sessionInvalidBefore || 0) <= Number(session.iat || 0) ? user : null;
 }
 function publicUser(u) {
   if (!u) return null;
@@ -218,12 +343,192 @@ function publicUser(u) {
     name: u.name,
     picture: u.picture || null,
     googleLinked: !!u.googleId,
+    emailVerified: !!u.emailVerifiedAt,
+    mfaEnabled: u.mfaEnabled === true,
     subscription: u.subscription || null,
     createdAt: u.createdAt,
   };
 }
+
+function ensurePersonalOrg(user) {
+  const existing = listOrganizations(user.id);
+  if (existing.length) return existing[0];
+  const id = `org_${user.id}`;
+  const name = `${user.name || user.email.split('@')[0]}'s Security Team`;
+  const org = {
+    id,
+    name,
+    slug: `${slugifyOrg(name) || 'security-team'}-${user.id.slice(0, 6)}`,
+    createdBy: user.id,
+    createdAt: Date.now(),
+  };
+  createOrganization(org, { orgId: id, userId: user.id, role: 'owner', createdAt: Date.now() });
+  appendAudit({
+    id: randomUUID(),
+    orgId: id,
+    actorUserId: user.id,
+    action: 'organization.created',
+    resourceType: 'organization',
+    resourceId: id,
+    metadata: { automatic: true },
+    createdAt: Date.now(),
+  });
+  return { ...org, role: 'owner' };
+}
+
+function requestContext(req) {
+  const user = req.shannonUser || getUser(req);
+  if (!user) return null;
+  const orgs = listOrganizations(user.id);
+  const requested = String(
+    req.headers['x-shannon-org'] || req.query?.orgId || req.body?.orgId || parseCookies(req).shannon_org || '',
+  );
+  let org = orgs.find((o) => o.id === requested) || orgs[0];
+  if (!org) org = ensurePersonalOrg(user);
+  const membership = getMembership(org.id, user.id);
+  return membership ? { user, org, membership } : null;
+}
+
+function requirePermission(req, res, permission) {
+  const ctx = requestContext(req);
+  if (!ctx) {
+    res.status(401).json({ error: 'Authentication required.' });
+    return null;
+  }
+  if (!can(ctx.membership.role, permission)) {
+    res.status(403).json({ error: `Your ${ctx.membership.role} role cannot perform this action.` });
+    return null;
+  }
+  return ctx;
+}
+
+function orgContext(req, res, permission) {
+  const user = req.shannonUser || getUser(req);
+  const orgId = String(req.params?.orgId || req.headers['x-shannon-org'] || '');
+  const org = getOrganization(orgId);
+  const membership = user && org ? getMembership(orgId, user.id) : null;
+  if (!user || !org || !membership) {
+    res.status(404).json({ error: 'Organization not found.' });
+    return null;
+  }
+  if (!can(membership.role, permission)) {
+    res.status(403).json({ error: `Your ${membership.role} role cannot perform this action.` });
+    return null;
+  }
+  return { user, org, membership };
+}
+
+function audit(ctx, action, resourceType, resourceId, metadata = {}) {
+  appendAudit({
+    id: randomUUID(),
+    orgId: ctx.org.id,
+    actorUserId: ctx.user.id,
+    action,
+    resourceType,
+    resourceId: resourceId || null,
+    metadata,
+    createdAt: Date.now(),
+  });
+}
+
+function scanContext(req, res, scanId, permission = 'scans.read') {
+  const ctx = requirePermission(req, res, permission);
+  if (!ctx) return null;
+  const owner = getScanOwner(scanId);
+  if (!owner || owner.orgId !== ctx.org.id) {
+    res.status(404).json({ error: 'Scan not found.' });
+    return null;
+  }
+  return { ...ctx, scanOwner: owner };
+}
+
+function requirePlatformOperator(req, res) {
+  const user = req.shannonUser || getUser(req);
+  const allowed = String(process.env.SHANNON_PLATFORM_ADMINS || '')
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+  if (!user || (!allowed.includes(user.email.toLowerCase()) && !(process.env.NODE_ENV !== 'production' && csIsLocalhost(req)))) {
+    res.status(403).json({ error: 'Platform operator permission required.' });
+    return null;
+  }
+  return user;
+}
+
+const PUBLIC_API = new Set([
+  '/auth/me',
+  '/auth/signup',
+  '/auth/login',
+  '/auth/mfa/login',
+  '/auth/email/verify',
+  '/auth/email/resend',
+  '/auth/password/request',
+  '/auth/password/reset',
+  '/auth/invitations/accept',
+  '/auth/plans',
+]);
+app.use('/api', async (req, res, next) => {
+  try {
+    await refreshDbIfStale(Number(process.env.SHANNON_CACHE_REFRESH_MS || 5000));
+  } catch (error) {
+    return res.status(503).json({ error: `Database refresh failed: ${error.message}` });
+  }
+  const relative = req.path;
+  const bearerRoute =
+    req.headers.authorization &&
+    (relative === '/defender/report' || (relative === '/defender/edge/routes' && req.method === 'GET'));
+  if (PUBLIC_API.has(relative) || bearerRoute) return next();
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  req.shannonUser = user;
+  ensurePersonalOrg(user);
+  if (limited(req, res, `api:${user.id}`, 600, 5 * 60 * 1000)) return;
+  next();
+});
+
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
+}
+
+async function dispatchEmail(payload, { orgId = null, userId = null } = {}) {
+  if (isSupabase() && process.env.SHANNON_DURABLE_JOBS !== '0') {
+    return enqueueJob({ orgId, userId, type: 'email', payload, maxAttempts: 5 });
+  }
+  return sendEmail(payload);
+}
+
+async function issueAuthToken(req, {
+  kind,
+  email,
+  userId = null,
+  orgId = null,
+  role = null,
+  createdBy = null,
+  ttlMs,
+  linkPath,
+  subject,
+  message,
+}) {
+  const token = randomToken();
+  await createAuthToken({
+    id: randomUUID(),
+    tokenHash: hashToken(token),
+    kind,
+    userId,
+    email,
+    orgId,
+    role,
+    createdBy,
+    expiresAt: Date.now() + ttlMs,
+    usedAt: null,
+    createdAt: Date.now(),
+  });
+  const link = `${publicBaseUrl(req)}${linkPath}${encodeURIComponent(token)}`;
+  await dispatchEmail(
+    { to: email, subject, text: `${message}\n\n${link}\n\nIf you did not request this, ignore this message.` },
+    { orgId, userId },
+  );
+  return { token, link };
 }
 
 // --- Routes
@@ -232,11 +537,27 @@ app.get('/api/auth/me', (req, res) => {
   // Always send googleConfigured — the login screen (401 path) needs it to
   // decide whether to enable the "Continue with Google" button.
   const googleConfigured = !!process.env.GOOGLE_CLIENT_ID;
-  if (!u) return res.status(401).json({ ok: false, googleConfigured });
-  res.json({ ok: true, user: publicUser(u), googleConfigured });
+  const ssoConfigured = !!(process.env.OIDC_ISSUER && process.env.OIDC_CLIENT_ID && process.env.OIDC_CLIENT_SECRET);
+  if (!u)
+    return res.status(401).json({
+      ok: false,
+      googleConfigured,
+      ssoConfigured,
+      ssoName: process.env.OIDC_NAME || 'Company SSO',
+    });
+  ensurePersonalOrg(u);
+  res.json({
+    ok: true,
+    user: publicUser(u),
+    organizations: listOrganizations(u.id),
+    googleConfigured,
+    ssoConfigured,
+    ssoName: process.env.OIDC_NAME || 'Company SSO',
+  });
 });
 
-app.post('/api/auth/signup', (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
+  if (limited(req, res, 'signup', 5, 60 * 60 * 1000)) return;
   const email = String(req.body?.email || '')
     .trim()
     .toLowerCase();
@@ -246,7 +567,7 @@ app.post('/api/auth/signup', (req, res) => {
   if (!req.body?.acceptedTerms)
     return res.status(400).json({ error: 'You must accept the Terms of Service and Privacy Policy.' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
-  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  if (password.length < 12) return res.status(400).json({ error: 'Password must be at least 12 characters.' });
   if (findUserByEmail(email)) return res.status(409).json({ error: 'An account with that email already exists.' });
   const users = loadUsers();
   const id = _crypto.randomBytes(8).toString('hex');
@@ -259,6 +580,11 @@ app.post('/api/auth/signup', (req, res) => {
     passwordHash: hash,
     salt,
     createdAt: Date.now(),
+    emailVerifiedAt: null,
+    disabledAt: null,
+    mfaEnabled: false,
+    mfaSecretEnc: null,
+    mfaRecoveryCodes: [],
     subscription: null,
     // Legal consent record — captured at signup time per UK GDPR Art. 7(1).
     consent: {
@@ -270,11 +596,34 @@ app.post('/api/auth/signup', (req, res) => {
     },
   };
   saveUsers(users);
-  setSessionCookie(res, id);
-  res.json({ ok: true, user: publicUser(users[id]) });
+  await waitForUserWrites();
+  ensurePersonalOrg(users[id]);
+  let verification = null;
+  try {
+    verification = await issueAuthToken(req, {
+      kind: 'email-verification',
+      email,
+      ttlMs: 24 * 60 * 60_000,
+      linkPath: '/?verify=',
+      subject: 'Verify your Securovix Shannon email',
+      message: 'Verify your email address to activate your security workspace.',
+    });
+  } catch (error) {
+    console.error('[auth] verification email failed:', error.message);
+  }
+  const verificationRequired = process.env.SHANNON_REQUIRE_EMAIL_VERIFICATION === '1';
+  if (!verificationRequired) setSessionCookie(res, id);
+  res.status(verificationRequired ? 202 : 200).json({
+    ok: true,
+    verificationRequired,
+    user: publicUser(users[id]),
+    organizations: listOrganizations(id),
+    ...(process.env.NODE_ENV !== 'production' && verification ? { developmentToken: verification.token } : {}),
+  });
 });
 
 app.post('/api/auth/login', (req, res) => {
+  if (limited(req, res, 'login', 10, 15 * 60 * 1000)) return;
   const email = String(req.body?.email || '')
     .trim()
     .toLowerCase();
@@ -283,8 +632,195 @@ app.post('/api/auth/login', (req, res) => {
   if (!u || !u.passwordHash || !verifyPassword(password, u.passwordHash, u.salt)) {
     return res.status(401).json({ error: 'Wrong email or password.' });
   }
+  if (u.disabledAt) return res.status(403).json({ error: 'This account is disabled.' });
+  if (process.env.SHANNON_REQUIRE_EMAIL_VERIFICATION === '1' && !u.emailVerifiedAt) {
+    return res.status(403).json({ error: 'Verify your email before signing in.', emailVerificationRequired: true });
+  }
+  if (u.mfaEnabled) {
+    return res.json({ ok: true, mfaRequired: true, challenge: signChallenge({ uid: u.id }, 'mfa-login') });
+  }
   setSessionCookie(res, u.id);
   res.json({ ok: true, user: publicUser(u) });
+});
+
+app.post('/api/auth/mfa/login', (req, res) => {
+  if (limited(req, res, 'mfa-login', 10, 15 * 60 * 1000)) return;
+  const challenge = verifyChallenge(req.body?.challenge, 'mfa-login');
+  const user = challenge ? loadUsers()[challenge.uid] : null;
+  if (!user || !user.mfaEnabled || user.disabledAt) return res.status(401).json({ error: 'Invalid MFA challenge.' });
+  let verified = false;
+  try {
+    verified = verifyTotp(decryptSecret(user.mfaSecretEnc)?.secret, req.body?.code);
+  } catch {}
+  if (!verified) {
+    const remaining = consumeRecoveryCode(req.body?.code, user.mfaRecoveryCodes || []);
+    if (remaining) {
+      user.mfaRecoveryCodes = remaining;
+      saveUsers(loadUsers());
+      verified = true;
+    }
+  }
+  if (!verified) return res.status(401).json({ error: 'Invalid authentication code.' });
+  setSessionCookie(res, user.id);
+  res.json({ ok: true, user: publicUser(user) });
+});
+
+app.post('/api/auth/email/verify', async (req, res) => {
+  const record = await consumeAuthToken(hashToken(req.body?.token), 'email-verification');
+  if (!record) return res.status(400).json({ error: 'This verification link is invalid or expired.' });
+  const user = findUserByEmail(record.email);
+  if (!user) return res.status(404).json({ error: 'Account not found.' });
+  user.emailVerifiedAt = Date.now();
+  saveUsers(loadUsers());
+  setSessionCookie(res, user.id);
+  res.json({ ok: true, user: publicUser(user) });
+});
+
+app.post('/api/auth/email/resend', async (req, res) => {
+  if (limited(req, res, 'email-resend', 5, 60 * 60_000)) return;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const user = findUserByEmail(email);
+  let verification = null;
+  if (user && !user.emailVerifiedAt && !user.disabledAt) {
+    try {
+      verification = await issueAuthToken(req, {
+        kind: 'email-verification', email, ttlMs: 24 * 60 * 60_000,
+        linkPath: '/?verify=', subject: 'Verify your Securovix Shannon email',
+        message: 'Verify your email address to activate your security workspace.',
+      });
+    } catch (error) {
+      console.error('[auth] verification email failed:', error.message);
+    }
+  }
+  res.json({
+    ok: true,
+    message: 'If that account requires verification, a new link has been sent.',
+    ...(process.env.NODE_ENV !== 'production' && verification ? { developmentToken: verification.token } : {}),
+  });
+});
+
+app.post('/api/auth/password/request', async (req, res) => {
+  if (limited(req, res, 'password-reset', 5, 60 * 60_000)) return;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const user = findUserByEmail(email);
+  let reset = null;
+  if (user && !user.disabledAt) {
+    try {
+      reset = await issueAuthToken(req, {
+        kind: 'password-reset', email, userId: user.id, ttlMs: 30 * 60_000,
+        linkPath: '/?reset=', subject: 'Reset your Securovix Shannon password',
+        message: 'Use this one-time link to reset your password. It expires in 30 minutes.',
+      });
+    } catch (error) {
+      console.error('[auth] password reset email failed:', error.message);
+    }
+  }
+  res.json({
+    ok: true,
+    message: 'If an account exists for that email, a reset link has been sent.',
+    ...(process.env.NODE_ENV !== 'production' && reset ? { developmentToken: reset.token } : {}),
+  });
+});
+
+app.post('/api/auth/password/reset', async (req, res) => {
+  const password = String(req.body?.password || '');
+  if (password.length < 12) return res.status(400).json({ error: 'Password must be at least 12 characters.' });
+  const record = await consumeAuthToken(hashToken(req.body?.token), 'password-reset');
+  if (!record) return res.status(400).json({ error: 'This reset link is invalid or expired.' });
+  const user = (record.userId && loadUsers()[record.userId]) || findUserByEmail(record.email);
+  if (!user || user.disabledAt) return res.status(400).json({ error: 'This reset link is invalid or expired.' });
+  const next = hashPassword(password);
+  user.passwordHash = next.hash;
+  user.salt = next.salt;
+  user.sessionInvalidBefore = Date.now();
+  saveUsers(loadUsers());
+  setSessionCookie(res, user.id);
+  res.json({ ok: true, user: publicUser(user) });
+});
+
+app.post('/api/auth/invitations/accept', async (req, res) => {
+  const password = String(req.body?.password || '');
+  const tokenHash = hashToken(req.body?.token);
+  const preview = await findAuthToken(tokenHash, 'invitation');
+  if (preview && !findUserByEmail(preview.email)) {
+    if (password.length < 12) return res.status(400).json({ error: 'Choose a password with at least 12 characters.' });
+    if (!req.body?.acceptedTerms) return res.status(400).json({ error: 'You must accept the Terms and Privacy Policy.' });
+  }
+  const record = await consumeAuthToken(tokenHash, 'invitation');
+  if (!record || !record.orgId || !ROLES.includes(record.role) || record.role === 'owner') {
+    return res.status(400).json({ error: 'This invitation is invalid or expired.' });
+  }
+  let user = findUserByEmail(record.email);
+  if (!user) {
+    const id = _crypto.randomBytes(8).toString('hex');
+    const passwordRecord = hashPassword(password);
+    user = {
+      id,
+      email: record.email,
+      name: sanitizeLabel(req.body?.name || record.email.split('@')[0], 100),
+      passwordHash: passwordRecord.hash,
+      salt: passwordRecord.salt,
+      emailVerifiedAt: Date.now(),
+      disabledAt: null,
+      mfaEnabled: false,
+      mfaSecretEnc: null,
+      mfaRecoveryCodes: [],
+      createdAt: Date.now(),
+      subscription: null,
+      consent: { termsVersion: '2026-05-04', privacyVersion: '2026-05-04', acceptedAt: Date.now() },
+    };
+    loadUsers()[id] = user;
+    saveUsers(loadUsers());
+    await waitForUserWrites();
+  }
+  if (!getMembership(record.orgId, user.id)) {
+    saveMembership({ orgId: record.orgId, userId: user.id, role: record.role, createdAt: Date.now() });
+  }
+  appendAudit({
+    id: randomUUID(), orgId: record.orgId, actorUserId: user.id,
+    action: 'invitation.accepted', resourceType: 'membership', resourceId: user.id,
+    metadata: { role: record.role }, createdAt: Date.now(),
+  });
+  setSessionCookie(res, user.id);
+  res.json({ ok: true, user: publicUser(user), organization: getOrganization(record.orgId) });
+});
+
+app.post('/api/auth/mfa/setup', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  const secret = newTotpSecret();
+  user.mfaSecretEnc = encryptSecret({ secret, pending: true, createdAt: Date.now() });
+  user.mfaEnabled = false;
+  user.mfaRecoveryCodes = [];
+  saveUsers(loadUsers());
+  res.json({ secret, uri: totpUri({ secret, email: user.email }) });
+});
+
+app.post('/api/auth/mfa/enable', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  let secret;
+  try { secret = decryptSecret(user.mfaSecretEnc)?.secret; } catch {}
+  if (!secret || !verifyTotp(secret, req.body?.code)) return res.status(400).json({ error: 'Invalid authentication code.' });
+  const recoveryCodes = createRecoveryCodes();
+  user.mfaSecretEnc = encryptSecret({ secret, pending: false, enabledAt: Date.now() });
+  user.mfaEnabled = true;
+  user.mfaRecoveryCodes = hashRecoveryCodes(recoveryCodes);
+  saveUsers(loadUsers());
+  res.json({ ok: true, recoveryCodes });
+});
+
+app.delete('/api/auth/mfa', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  let secret;
+  try { secret = decryptSecret(user.mfaSecretEnc)?.secret; } catch {}
+  if (!secret || !verifyTotp(secret, req.body?.code)) return res.status(400).json({ error: 'Invalid authentication code.' });
+  user.mfaEnabled = false;
+  user.mfaSecretEnc = null;
+  user.mfaRecoveryCodes = [];
+  saveUsers(loadUsers());
+  res.json({ ok: true });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -302,6 +838,11 @@ app.get('/auth/google', (req, res) => {
         'Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars before restarting the server.',
       );
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/google/callback`;
+  const state = _crypto.randomBytes(24).toString('base64url');
+  res.append(
+    'Set-Cookie',
+    `shannon_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/auth/google/callback; Max-Age=600${COOKIE_SECURE ? '; Secure' : ''}`,
+  );
   const url =
     'https://accounts.google.com/o/oauth2/v2/auth?' +
     new URLSearchParams({
@@ -311,13 +852,24 @@ app.get('/auth/google', (req, res) => {
       scope: 'openid email profile',
       access_type: 'online',
       prompt: 'select_account',
+      state,
     });
   res.redirect(url);
 });
 
 app.get('/auth/google/callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, state } = req.query;
   if (!code) return res.status(400).send('Missing code.');
+  const expectedState = parseCookies(req).shannon_oauth_state || '';
+  const stateOk =
+    expectedState.length === String(state || '').length &&
+    expectedState.length > 0 &&
+    _crypto.timingSafeEqual(Buffer.from(expectedState), Buffer.from(String(state || '')));
+  if (!stateOk) return res.status(400).send('Invalid OAuth state. Start sign-in again.');
+  res.setHeader(
+    'Set-Cookie',
+    `shannon_oauth_state=; HttpOnly; SameSite=Lax; Path=/auth/google/callback; Max-Age=0${COOKIE_SECURE ? '; Secure' : ''}`,
+  );
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) return res.status(500).send('Google OAuth not configured.');
@@ -351,6 +903,11 @@ app.get('/auth/google/callback', async (req, res) => {
         name: profile.name || profile.email,
         picture: profile.picture || null,
         googleId: profile.sub,
+        emailVerifiedAt: Date.now(),
+        disabledAt: null,
+        mfaEnabled: false,
+        mfaSecretEnc: null,
+        mfaRecoveryCodes: [],
         createdAt: Date.now(),
         subscription: null,
       };
@@ -358,8 +915,10 @@ app.get('/auth/google/callback', async (req, res) => {
     } else {
       if (!user.googleId) user.googleId = profile.sub;
       if (!user.picture && profile.picture) user.picture = profile.picture;
+      if (!user.emailVerifiedAt) user.emailVerifiedAt = Date.now();
     }
     saveUsers(users);
+    ensurePersonalOrg(user);
     setSessionCookie(res, user.id);
     res.redirect('/');
   } catch (e) {
@@ -368,6 +927,192 @@ app.get('/auth/google/callback', async (req, res) => {
 });
 
 // Subscription — mock checkout (real Stripe integration goes here later)
+let OIDC_DISCOVERY_CACHE = null;
+async function oidcDiscovery() {
+  const issuer = String(process.env.OIDC_ISSUER || '').replace(/\/$/, '');
+  if (!issuer) throw new Error('OIDC_ISSUER is not configured');
+  if (OIDC_DISCOVERY_CACHE?.issuer === issuer && OIDC_DISCOVERY_CACHE.expiresAt > Date.now()) {
+    return OIDC_DISCOVERY_CACHE.value;
+  }
+  const response = await fetch(`${issuer}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`OIDC discovery returned ${response.status}`);
+  const value = await response.json();
+  if (!value.authorization_endpoint || !value.token_endpoint || !value.userinfo_endpoint) {
+    throw new Error('OIDC provider discovery is incomplete');
+  }
+  OIDC_DISCOVERY_CACHE = { issuer, expiresAt: Date.now() + 60 * 60_000, value };
+  return value;
+}
+
+app.get('/auth/sso', async (req, res) => {
+  const clientId = process.env.OIDC_CLIENT_ID;
+  if (!clientId || !process.env.OIDC_CLIENT_SECRET) return res.status(503).send('Company SSO is not configured.');
+  try {
+    const discovery = await oidcDiscovery();
+    const state = randomToken(24);
+    const verifier = randomToken(48);
+    const flow = signChallenge({ state, verifier }, 'oidc-flow', 10 * 60_000);
+    const challenge = _crypto.createHash('sha256').update(verifier).digest('base64url');
+    res.append('Set-Cookie', `shannon_oidc_state=${flow}; HttpOnly; SameSite=Lax; Path=/auth/sso/callback; Max-Age=600${COOKIE_SECURE ? '; Secure' : ''}`);
+    const redirectUri = `${publicBaseUrl(req)}/auth/sso/callback`;
+    const target = new URL(discovery.authorization_endpoint);
+    target.search = new URLSearchParams({
+      client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
+      scope: process.env.OIDC_SCOPES || 'openid email profile', state,
+      code_challenge: challenge, code_challenge_method: 'S256',
+    });
+    res.redirect(target.toString());
+  } catch (error) {
+    res.status(502).send(`SSO initialization failed: ${error.message}`);
+  }
+});
+
+app.get('/auth/sso/callback', async (req, res) => {
+  const flow = verifyChallenge(parseCookies(req).shannon_oidc_state || '', 'oidc-flow');
+  const expected = String(flow?.state || '');
+  const actual = String(req.query?.state || '');
+  const stateOk = expected.length > 0 && expected.length === actual.length && _crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
+  if (!stateOk || !req.query?.code) return res.status(400).send('Invalid SSO callback. Start sign-in again.');
+  res.append('Set-Cookie', `shannon_oidc_state=; HttpOnly; SameSite=Lax; Path=/auth/sso/callback; Max-Age=0${COOKIE_SECURE ? '; Secure' : ''}`);
+  try {
+    const discovery = await oidcDiscovery();
+    const redirectUri = `${publicBaseUrl(req)}/auth/sso/callback`;
+    const tokenResponse = await fetch(discovery.token_endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri,
+        client_id: process.env.OIDC_CLIENT_ID, client_secret: process.env.OIDC_CLIENT_SECRET,
+        code_verifier: String(flow.verifier),
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const tokens = await tokenResponse.json();
+    if (!tokenResponse.ok || !tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'token exchange failed');
+    const profileResponse = await fetch(discovery.userinfo_endpoint, {
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const profile = await profileResponse.json();
+    if (!profileResponse.ok || !profile.sub || !profile.email) throw new Error('SSO user profile is incomplete');
+    if (profile.email_verified === false) throw new Error('SSO provider has not verified this email address');
+    const email = String(profile.email).toLowerCase();
+    const allowedDomains = String(process.env.SHANNON_SSO_ALLOWED_DOMAINS || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
+    if (allowedDomains.length && !allowedDomains.includes(email.split('@')[1])) throw new Error('Your email domain is not allowed for this workspace');
+    const provider = String(process.env.OIDC_ISSUER).replace(/\/$/, '');
+    const identity = await findSsoIdentity(provider, String(profile.sub));
+    const users = loadUsers();
+    let user = (identity && users[identity.userId]) || findUserByEmail(email);
+    if (!user) {
+      const id = _crypto.randomBytes(8).toString('hex');
+      user = {
+        id, email, name: profile.name || email, picture: profile.picture || null,
+        emailVerifiedAt: Date.now(), disabledAt: null, mfaEnabled: false,
+        mfaSecretEnc: null, mfaRecoveryCodes: [], createdAt: Date.now(), subscription: null,
+      };
+      users[id] = user;
+    } else if (user.disabledAt) {
+      return res.status(403).send('This account is disabled.');
+    }
+    user.emailVerifiedAt ||= Date.now();
+    if (!user.picture && profile.picture) user.picture = profile.picture;
+    saveUsers(users);
+    await waitForUserWrites();
+    await saveSsoIdentity({ provider, subject: String(profile.sub), userId: user.id, email, createdAt: Date.now(), lastLoginAt: Date.now() });
+    ensurePersonalOrg(user);
+    setSessionCookie(res, user.id);
+    res.redirect('/');
+  } catch (error) {
+    res.status(502).send(`SSO sign-in failed: ${error.message}`);
+  }
+});
+
+function requireScim(req, res, next) {
+  const configured = String(process.env.SHANNON_SCIM_TOKEN || '');
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const valid = configured.length >= 24 && configured.length === supplied.length && _crypto.timingSafeEqual(Buffer.from(configured), Buffer.from(supplied));
+  if (!valid) return res.status(401).set('www-authenticate', 'Bearer').json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '401', detail: 'Unauthorized' });
+  const orgId = process.env.SHANNON_SCIM_ORG_ID;
+  if (!orgId || !getOrganization(orgId)) return res.status(503).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '503', detail: 'SCIM organization is not configured' });
+  req.scimOrgId = orgId;
+  next();
+}
+
+function scimUser(user) {
+  return {
+    schemas: ['urn:ietf:params:scim:schemas:core:2.0:User'],
+    id: user.id,
+    userName: user.email,
+    active: !user.disabledAt,
+    displayName: user.name || user.email,
+    name: { formatted: user.name || user.email },
+    emails: [{ value: user.email, primary: true }],
+    meta: { resourceType: 'User', created: new Date(user.createdAt || Date.now()).toISOString() },
+  };
+}
+
+app.use('/scim/v2', requireScim);
+app.get('/scim/v2/ServiceProviderConfig', (_req, res) => res.json({
+  schemas: ['urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig'],
+  patch: { supported: true }, bulk: { supported: false }, filter: { supported: true, maxResults: 200 },
+  changePassword: { supported: false }, sort: { supported: false }, etag: { supported: false },
+}));
+app.get('/scim/v2/Users', (req, res) => {
+  let users = listMembers(req.scimOrgId).map((member) => loadUsers()[member.userId]).filter(Boolean);
+  const match = /^userName\s+eq\s+"([^"]+)"$/i.exec(String(req.query.filter || ''));
+  if (match) users = users.filter((user) => user.email === match[1].toLowerCase());
+  const resources = users.map(scimUser);
+  res.json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:ListResponse'], totalResults: resources.length, startIndex: 1, itemsPerPage: resources.length, Resources: resources });
+});
+app.get('/scim/v2/Users/:id', (req, res) => {
+  const membership = getMembership(req.scimOrgId, req.params.id);
+  const user = membership && loadUsers()[req.params.id];
+  if (!user) return res.status(404).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '404', detail: 'User not found' });
+  res.json(scimUser(user));
+});
+app.post('/scim/v2/Users', async (req, res) => {
+  const email = String(req.body?.userName || req.body?.emails?.[0]?.value || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '400', detail: 'A valid userName is required' });
+  const users = loadUsers();
+  let user = findUserByEmail(email);
+  if (!user) {
+    const id = _crypto.randomBytes(8).toString('hex');
+    user = {
+      id, email, name: sanitizeLabel(req.body?.displayName || req.body?.name?.formatted || email, 100),
+      emailVerifiedAt: Date.now(), disabledAt: req.body?.active === false ? Date.now() : null,
+      mfaEnabled: false, mfaSecretEnc: null, mfaRecoveryCodes: [], createdAt: Date.now(), subscription: null,
+    };
+    users[id] = user;
+    saveUsers(users);
+    await waitForUserWrites();
+  }
+  if (!getMembership(req.scimOrgId, user.id)) saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
+  res.status(201).json(scimUser(user));
+});
+app.patch('/scim/v2/Users/:id', (req, res) => {
+  const membership = getMembership(req.scimOrgId, req.params.id);
+  const user = membership && loadUsers()[req.params.id];
+  if (!user) return res.status(404).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '404', detail: 'User not found' });
+  for (const operation of req.body?.Operations || []) {
+    const path = String(operation.path || '').toLowerCase();
+    if (path === 'active' || (!path && Object.hasOwn(operation.value || {}, 'active'))) {
+      const active = path === 'active' ? operation.value : operation.value.active;
+      user.disabledAt = active === false ? Date.now() : null;
+    }
+    if (path === 'displayname') user.name = sanitizeLabel(operation.value, 100);
+  }
+  saveUsers(loadUsers());
+  res.json(scimUser(user));
+});
+app.delete('/scim/v2/Users/:id', (req, res) => {
+  const membership = getMembership(req.scimOrgId, req.params.id);
+  const user = membership && loadUsers()[req.params.id];
+  if (!user) return res.status(404).end();
+  user.disabledAt = Date.now();
+  saveUsers(loadUsers());
+  res.status(204).end();
+});
+
 app.post('/api/auth/subscribe', (req, res) => {
   const u = getUser(req);
   if (!u) return res.status(401).json({ error: 'Login required.' });
@@ -433,22 +1178,18 @@ function csIsLocalhost(req) {
 // anonymous users get an "owner" pseudo-session with no daily cap.
 function csSession(req) {
   const u = getUser(req);
-  if (u) {
-    return {
-      isOwner: false,
-      userId: u.id,
-      user: u,
-      plan: 'free',
-      label: 'Free',
-      dailyLimit: -1,
-      used: 0,
-    };
-  }
-  if (CS_OWNER_USAGE.day !== csToday()) {
-    CS_OWNER_USAGE.day = csToday();
-    CS_OWNER_USAGE.used = 0;
-  }
-  return { isOwner: true, plan: 'free', label: 'Free', dailyLimit: -1, used: CS_OWNER_USAGE.used };
+  if (!u) return null;
+  const ctx = requestContext(req);
+  return {
+    isOwner: ctx?.membership?.role === 'owner',
+    userId: u.id,
+    orgId: ctx?.org?.id || null,
+    user: u,
+    plan: 'free',
+    label: 'Free',
+    dailyLimit: -1,
+    used: 0,
+  };
 }
 function csIncrementUserUsage(userId) {
   const users = loadUsers();
@@ -1048,6 +1789,9 @@ async function csOrchestrate(runId) {
 }
 
 app.post('/api/code-scan/multi/start', (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.run');
+  if (!ctx) return;
+  if (limited(req, res, `code-scan:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
   const session = csSession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Subscription required.' });
   if (session.dailyLimit !== -1 && session.used >= session.dailyLimit) {
@@ -1059,7 +1803,7 @@ app.post('/api/code-scan/multi/start', (req, res) => {
     return res.status(413).json({ ok: false, error: 'Code exceeds 1MB. Try splitting it into smaller files.' });
 
   // Browser-supplied keys are the source of truth. Server settings file & env are LEGACY fallbacks only.
-  const legacy = loadSettings();
+  const legacy = settingsFor(req);
   const keys = {
     claude: bodyKeys?.claude || legacy.apiKey || process.env.ANTHROPIC_API_KEY || '',
     openai: bodyKeys?.openai || legacy.openaiKey || '',
@@ -1074,7 +1818,7 @@ app.post('/api/code-scan/multi/start', (req, res) => {
   }
 
   const runId = randomUUID().slice(0, 8);
-  const sessForRun = session.isOwner ? { isOwner: true } : { isOwner: false, userId: session.userId };
+  const sessForRun = { isOwner: session.isOwner, userId: session.userId, orgId: ctx.org.id };
 
   const run = {
     id: runId,
@@ -1110,7 +1854,9 @@ app.post('/api/code-scan/multi/start', (req, res) => {
 
 app.get('/api/code-scan/multi/:id/events', (req, res) => {
   const run = csRuns.get(req.params.id);
-  if (!run) return res.status(404).json({ ok: false, error: 'Run not found' });
+  const ctx = requestContext(req);
+  if (!run || !ctx || run.session?.userId !== ctx.user.id || run.session?.orgId !== ctx.org.id)
+    return res.status(404).json({ ok: false, error: 'Run not found' });
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   for (const ev of run.events) res.write(`data: ${JSON.stringify(ev)}\n\n`);
   if (run.status === 'running') {
@@ -1125,7 +1871,9 @@ app.get('/api/code-scan/multi/:id/events', (req, res) => {
 
 app.get('/api/code-scan/multi/:id/result', (req, res) => {
   const run = csRuns.get(req.params.id);
-  if (!run) return res.status(404).json({ ok: false, error: 'Run not found' });
+  const ctx = requestContext(req);
+  if (!run || !ctx || run.session?.userId !== ctx.user.id || run.session?.orgId !== ctx.org.id)
+    return res.status(404).json({ ok: false, error: 'Run not found' });
   res.json({
     ok: true,
     status: run.status,
@@ -1139,7 +1887,10 @@ app.get('/api/code-scan/multi/:id/result', (req, res) => {
 
 app.post('/api/code-scan/multi/:id/cancel', (req, res) => {
   const run = csRuns.get(req.params.id);
-  if (!run) return res.status(404).json({ ok: false });
+  const ctx = requirePermission(req, res, 'scans.stop');
+  if (!ctx) return;
+  if (!run || run.session?.userId !== ctx.user.id || run.session?.orgId !== ctx.org.id)
+    return res.status(404).json({ ok: false });
   run.cancelled = true;
   res.json({ ok: true });
 });
@@ -1214,6 +1965,9 @@ async function quickScanFile({ apiKey, code, filename }) {
 }
 
 app.post('/api/code-scan/quick', async (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.run');
+  if (!ctx) return;
+  if (limited(req, res, `quick-scan:${ctx.user.id}`, 60, 60 * 60 * 1000)) return;
   const session = csSession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Subscription required.' });
   if (session.dailyLimit !== -1 && session.used >= session.dailyLimit) {
@@ -1223,7 +1977,7 @@ app.post('/api/code-scan/quick', async (req, res) => {
   if (!code || typeof code !== 'string') return res.status(400).json({ ok: false, error: 'Provide source code.' });
   if (code.length > 1_000_000) return res.status(413).json({ ok: false, error: 'File exceeds 1MB.' });
 
-  const legacy = loadSettings();
+  const legacy = settingsFor(req);
   const apiKey = bodyKeys?.claude || legacy.apiKey || process.env.ANTHROPIC_API_KEY || '';
   if (!apiKey) return res.status(400).json({ ok: false, error: 'Anthropic key required.' });
 
@@ -1258,7 +2012,10 @@ app.get('/api/code-scan/leaderboard', (req, res) => {
 });
 
 app.post('/api/code-scan/leaderboard/reset', (req, res) => {
+  if (!requirePlatformOperator(req, res)) return;
+  const ctx = requestContext(req);
   csSaveLeaderboard({});
+  audit(ctx, 'leaderboard.reset', 'leaderboard', null);
   res.json({ ok: true });
 });
 
@@ -1288,6 +2045,11 @@ function saveSettings(s) {
   if (s.baseUrl) process.env.SHANNON_LLM_BASE_URL = s.baseUrl;
 }
 
+function settingsFor(req) {
+  const user = getUser(req);
+  return user ? { ...loadSettings(), ...loadUserSettings(user.id) } : loadSettings();
+}
+
 // Initialize from saved settings
 const initSettings = loadSettings();
 if (initSettings.apiKey && !process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = initSettings.apiKey;
@@ -1296,7 +2058,7 @@ if (initSettings.model) process.env.SHANNON_MODEL = initSettings.model;
 // ---- API: Settings ----
 // Provider keys are NOT returned here — they live only in the browser's localStorage.
 app.get('/api/settings', (req, res) => {
-  const s = loadSettings();
+  const s = settingsFor(req);
   res.json({
     keysStorage: 'browser',
     model: s.model || process.env.SHANNON_MODEL || 'claude-opus-4-7',
@@ -1306,19 +2068,423 @@ app.get('/api/settings', (req, res) => {
 });
 
 app.post('/api/settings', (req, res) => {
-  const current = loadSettings();
+  const user = getUser(req);
+  const current = settingsFor(req);
   const updated = { ...current, ...req.body };
-  saveSettings(updated);
+  const sanitized = { provider: updated.provider, model: updated.model, baseUrl: updated.baseUrl };
+  saveUserSettings(user.id, sanitized);
   res.json({ ok: true });
 });
 
+// ---- API: Team workspaces --------------------------------------------------
+app.get('/api/team/context', (req, res) => {
+  const user = getUser(req);
+  const organizations = listOrganizations(user.id);
+  const active = requestContext(req);
+  res.json({
+    ok: true,
+    organizations,
+    active: active ? { organization: active.org, role: active.membership.role } : null,
+    roles: ROLES,
+  });
+});
+
+app.post('/api/team/active', (req, res) => {
+  const user = getUser(req);
+  const orgId = String(req.body?.orgId || '');
+  const membership = getMembership(orgId, user.id);
+  if (!membership) return res.status(404).json({ error: 'Organization not found.' });
+  res.append(
+    'Set-Cookie',
+    `shannon_org=${encodeURIComponent(orgId)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}${COOKIE_SECURE ? '; Secure' : ''}`,
+  );
+  res.json({ ok: true, organization: getOrganization(orgId), role: membership.role });
+});
+
+app.post('/api/team/organizations', (req, res) => {
+  const user = getUser(req);
+  const name = sanitizeLabel(req.body?.name, 80);
+  if (name.length < 2) return res.status(400).json({ error: 'Organization name must be at least 2 characters.' });
+  const id = `org_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+  const org = {
+    id,
+    name,
+    slug: `${slugifyOrg(name) || 'security-team'}-${id.slice(-6)}`,
+    createdBy: user.id,
+    createdAt: Date.now(),
+  };
+  createOrganization(org, { orgId: id, userId: user.id, role: 'owner', createdAt: Date.now() });
+  const ctx = { user, org, membership: getMembership(id, user.id) };
+  audit(ctx, 'organization.created', 'organization', id);
+  res.status(201).json({ ok: true, organization: { ...org, role: 'owner' } });
+});
+
+app.get('/api/team/:orgId/members', (req, res) => {
+  const ctx = orgContext(req, res, 'scans.read');
+  if (!ctx) return;
+  res.json({ ok: true, members: listMembers(ctx.org.id) });
+});
+
+app.post('/api/team/:orgId/invitations', async (req, res) => {
+  const ctx = orgContext(req, res, 'members.manage');
+  if (!ctx) return;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const role = String(req.body?.role || 'viewer');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  if (!ROLES.includes(role) || role === 'owner') return res.status(400).json({ error: 'Choose a valid non-owner role.' });
+  const existing = findUserByEmail(email);
+  if (existing && getMembership(ctx.org.id, existing.id)) return res.status(409).json({ error: 'That user is already a member.' });
+  try {
+    const invitation = await issueAuthToken(req, {
+      kind: 'invitation', email, userId: existing?.id || null, orgId: ctx.org.id, role,
+      createdBy: ctx.user.id, ttlMs: 7 * 24 * 60 * 60_000,
+      linkPath: '/?invite=', subject: `You were invited to ${ctx.org.name}`,
+      message: `${ctx.user.name || ctx.user.email} invited you to join ${ctx.org.name} as ${role}. This invitation expires in 7 days.`,
+    });
+    audit(ctx, 'invitation.created', 'invitation', email, { role });
+    res.status(201).json({
+      ok: true, email, role, expiresInDays: 7,
+      ...(process.env.NODE_ENV !== 'production' ? { developmentToken: invitation.token } : {}),
+    });
+  } catch (error) {
+    res.status(502).json({ error: `Unable to send invitation: ${error.message}` });
+  }
+});
+
+app.post('/api/team/:orgId/members', (req, res) => {
+  const ctx = orgContext(req, res, 'members.manage');
+  if (!ctx) return;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const role = String(req.body?.role || 'viewer');
+  const user = findUserByEmail(email);
+  if (!user) return res.status(404).json({ error: 'That user must create a Securovix account before being added.' });
+  if (!ROLES.includes(role) || role === 'owner') return res.status(400).json({ error: 'Choose a valid non-owner role.' });
+  if (getMembership(ctx.org.id, user.id)) return res.status(409).json({ error: 'That user is already a member.' });
+  const membership = { orgId: ctx.org.id, userId: user.id, role, createdAt: Date.now() };
+  saveMembership(membership);
+  audit(ctx, 'membership.created', 'membership', user.id, { role });
+  res.status(201).json({ ok: true, member: listMembers(ctx.org.id).find((m) => m.userId === user.id) });
+});
+
+app.patch('/api/team/:orgId/members/:userId', (req, res) => {
+  const ctx = orgContext(req, res, 'members.manage');
+  if (!ctx) return;
+  const target = getMembership(ctx.org.id, req.params.userId);
+  const role = String(req.body?.role || '');
+  if (!target) return res.status(404).json({ error: 'Member not found.' });
+  if (!canChangeMember(ctx.membership, target, role)) return res.status(403).json({ error: 'Role change not permitted.' });
+  if (target.role === 'owner' && role !== 'owner' && listMembers(ctx.org.id).filter((m) => m.role === 'owner').length === 1)
+    return res.status(409).json({ error: 'An organization must always have an owner.' });
+  saveMembership({ ...target, role });
+  audit(ctx, 'membership.role_changed', 'membership', target.userId, { from: target.role, to: role });
+  res.json({ ok: true, member: listMembers(ctx.org.id).find((m) => m.userId === target.userId) });
+});
+
+app.delete('/api/team/:orgId/members/:userId', (req, res) => {
+  const ctx = orgContext(req, res, 'members.manage');
+  if (!ctx) return;
+  const target = getMembership(ctx.org.id, req.params.userId);
+  if (!target) return res.status(404).json({ error: 'Member not found.' });
+  if (target.role === 'owner') return res.status(409).json({ error: 'Transfer ownership before removing the owner.' });
+  if (!canChangeMember(ctx.membership, target, 'viewer')) return res.status(403).json({ error: 'Member removal not permitted.' });
+  removeMembership(ctx.org.id, target.userId);
+  audit(ctx, 'membership.removed', 'membership', target.userId, { role: target.role });
+  res.json({ ok: true });
+});
+
+app.get('/api/team/:orgId/projects', (req, res) => {
+  const ctx = orgContext(req, res, 'scans.read');
+  if (!ctx) return;
+  res.json({ ok: true, projects: listProjects(ctx.org.id) });
+});
+
+app.post('/api/team/:orgId/projects', (req, res) => {
+  const ctx = orgContext(req, res, 'projects.manage');
+  if (!ctx) return;
+  const name = sanitizeLabel(req.body?.name, 100);
+  if (name.length < 2) return res.status(400).json({ error: 'Project name must be at least 2 characters.' });
+  const criticality = ['low', 'medium', 'high', 'critical'].includes(req.body?.criticality)
+    ? req.body.criticality
+    : 'medium';
+  const project = {
+    id: `prj_${randomUUID().replaceAll('-', '').slice(0, 16)}`,
+    orgId: ctx.org.id,
+    name,
+    description: sanitizeLabel(req.body?.description, 500),
+    environment: sanitizeLabel(req.body?.environment || 'production', 40),
+    criticality,
+    createdAt: Date.now(),
+  };
+  saveProject(project);
+  audit(ctx, 'project.created', 'project', project.id, { criticality });
+  res.status(201).json({ ok: true, project });
+});
+
+app.get('/api/team/:orgId/findings', (req, res) => {
+  const ctx = orgContext(req, res, 'findings.read');
+  if (!ctx) return;
+  res.json({
+    ok: true,
+    findings: listFindings(ctx.org.id, {
+      projectId: req.query.projectId || undefined,
+      status: req.query.status || undefined,
+    }),
+  });
+});
+
+app.post('/api/team/:orgId/findings', (req, res) => {
+  const ctx = orgContext(req, res, 'findings.triage');
+  if (!ctx) return;
+  const title = sanitizeLabel(req.body?.title, 180);
+  if (!title) return res.status(400).json({ error: 'Finding title is required.' });
+  const severity = ['info', 'low', 'medium', 'high', 'critical'].includes(req.body?.severity)
+    ? req.body.severity
+    : 'medium';
+  const basis = `${ctx.org.id}|${req.body?.projectId || ''}|${req.body?.source || 'manual'}|${title.toLowerCase()}|${req.body?.target || ''}`;
+  const fingerprint = _crypto.createHash('sha256').update(basis).digest('hex');
+  const now = Date.now();
+  const finding = saveFinding({
+    id: `fnd_${randomUUID().replaceAll('-', '').slice(0, 16)}`,
+    orgId: ctx.org.id,
+    projectId: req.body?.projectId || null,
+    fingerprint,
+    title,
+    severity,
+    status: 'new',
+    assigneeUserId: null,
+    source: sanitizeLabel(req.body?.source || 'manual', 60),
+    details: typeof req.body?.details === 'object' && req.body.details ? req.body.details : {},
+    decision: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  audit(ctx, 'finding.created', 'finding', finding.id, { severity, source: finding.source });
+  queueIntegrationEvent(ctx.org.id, {
+    id: `finding-created:${finding.id}`,
+    type: 'finding.created',
+    at: new Date().toISOString(),
+    data: finding,
+  }, ctx.user.id).catch((error) => console.error('[integrations] finding event enqueue failed:', error.message));
+  res.status(201).json({ ok: true, finding });
+});
+
+app.patch('/api/team/:orgId/findings/:findingId', (req, res) => {
+  const ctx = orgContext(req, res, 'findings.read');
+  if (!ctx) return;
+  const finding = getFinding(ctx.org.id, req.params.findingId);
+  if (!finding) return res.status(404).json({ error: 'Finding not found.' });
+  const next = { ...finding, updatedAt: Date.now() };
+  if (req.body?.status && req.body.status !== finding.status) {
+    const check = validateFindingTransition({
+      role: ctx.membership.role,
+      currentStatus: finding.status,
+      nextStatus: req.body.status,
+      reason: req.body.reason,
+      expiresAt: req.body.expiresAt,
+    });
+    if (!check.ok) return res.status(403).json({ error: check.error });
+    next.status = req.body.status;
+    next.decision = ['risk-accepted', 'false-positive'].includes(next.status)
+      ? { reason: sanitizeLabel(req.body.reason, 1000), expiresAt: req.body.expiresAt || null, by: ctx.user.id, at: Date.now() }
+      : null;
+  }
+  if (Object.hasOwn(req.body || {}, 'assigneeUserId')) {
+    if (!can(ctx.membership.role, 'findings.triage')) return res.status(403).json({ error: 'Assignment not permitted.' });
+    const assignee = req.body.assigneeUserId ? getMembership(ctx.org.id, req.body.assigneeUserId) : null;
+    if (req.body.assigneeUserId && !assignee) return res.status(400).json({ error: 'Assignee must be an organization member.' });
+    next.assigneeUserId = req.body.assigneeUserId || null;
+    if (next.assigneeUserId && next.status === 'new') next.status = 'assigned';
+  }
+  saveFinding(next);
+  audit(ctx, 'finding.updated', 'finding', next.id, {
+    fromStatus: finding.status,
+    toStatus: next.status,
+    assigneeUserId: next.assigneeUserId,
+  });
+  queueIntegrationEvent(ctx.org.id, {
+    id: `finding-updated:${next.id}:${next.updatedAt}`,
+    type: 'finding.updated',
+    at: new Date().toISOString(),
+    data: next,
+  }, ctx.user.id).catch((error) => console.error('[integrations] finding event enqueue failed:', error.message));
+  res.json({ ok: true, finding: next });
+});
+
+app.get('/api/team/:orgId/audit', (req, res) => {
+  const ctx = orgContext(req, res, 'audit.read');
+  if (!ctx) return;
+  res.json({ ok: true, events: listAudit(ctx.org.id, Number(req.query.limit) || 200) });
+});
+
+const INTEGRATION_TYPES = new Set(['webhook', 'slack', 'teams', 'jira', 'linear', 'siem-http']);
+
+const INTEGRATION_FIELDS = {
+  webhook: { config: ['url'], secret: ['token', 'headers'] },
+  'siem-http': { config: ['url'], secret: ['token', 'headers'] },
+  slack: { config: [], secret: ['webhookUrl'] },
+  teams: { config: [], secret: ['webhookUrl'] },
+  jira: { config: ['baseUrl', 'projectKey', 'issueType'], secret: ['email', 'apiToken'] },
+  linear: { config: ['teamId'], secret: ['apiKey'] },
+};
+
+function integrationInput(type, rawConfig, rawSecret, existingHasSecret = false) {
+  const fields = INTEGRATION_FIELDS[type];
+  if (!fields) throw new Error('Unsupported integration type.');
+  const config = {};
+  const secret = {};
+  for (const key of fields.config) {
+    if (rawConfig?.[key] !== undefined) config[key] = String(rawConfig[key]).trim().slice(0, 2048);
+  }
+  for (const key of fields.secret) {
+    if (rawSecret?.[key] === undefined) continue;
+    if (key === 'headers') {
+      if (!rawSecret.headers || typeof rawSecret.headers !== 'object' || Array.isArray(rawSecret.headers)) throw new Error('headers must be an object.');
+      secret.headers = Object.fromEntries(Object.entries(rawSecret.headers).slice(0, 20).map(([name, value]) => [String(name).slice(0, 100), String(value).slice(0, 2000)]));
+    } else secret[key] = String(rawSecret[key]).trim().slice(0, 4096);
+  }
+  const required = {
+    webhook: ['config.url'], 'siem-http': ['config.url'], slack: ['secret.webhookUrl'], teams: ['secret.webhookUrl'],
+    jira: ['config.baseUrl', 'config.projectKey', 'secret.email', 'secret.apiToken'],
+    linear: ['config.teamId', 'secret.apiKey'],
+  }[type] || [];
+  for (const path of required) {
+    const [group, key] = path.split('.');
+    if (group === 'secret' && existingHasSecret && rawSecret === undefined) continue;
+    if (!(group === 'config' ? config : secret)[key]) throw new Error(`${path} is required.`);
+  }
+  return { config, secret };
+}
+
+app.get('/api/team/:orgId/integrations', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  res.json({ ok: true, integrations: await listIntegrations(ctx.org.id) });
+});
+
+app.post('/api/team/:orgId/integrations', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  const type = String(req.body?.type || '');
+  const name = sanitizeLabel(req.body?.name, 100);
+  if (!INTEGRATION_TYPES.has(type) || !name) return res.status(400).json({ error: 'A valid integration type and name are required.' });
+  let input;
+  try { input = integrationInput(type, req.body?.config, req.body?.secret); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  const now = Date.now();
+  const integration = await saveIntegration({
+    id: `int_${randomUUID().replaceAll('-', '').slice(0, 16)}`,
+    orgId: ctx.org.id,
+    type,
+    name,
+    config: input.config,
+    secretEnc: encryptSecret(input.secret),
+    enabled: req.body?.enabled !== false,
+    createdBy: ctx.user.id,
+    createdAt: now,
+    updatedAt: now,
+  });
+  audit(ctx, 'integration.created', 'integration', integration.id, { type });
+  res.status(201).json({ ok: true, integration: { ...integration, secretEnc: undefined, hasSecret: !!integration.secretEnc } });
+});
+
+app.patch('/api/team/:orgId/integrations/:id', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  const current = await getIntegration(ctx.org.id, req.params.id);
+  if (!current) return res.status(404).json({ error: 'Integration not found.' });
+  let input = { config: current.config, secretEnc: current.secretEnc };
+  if (req.body?.config !== undefined || req.body?.secret !== undefined) {
+    try {
+      const parsed = integrationInput(current.type, req.body?.config ?? current.config, req.body?.secret, !!current.secretEnc);
+      input = { config: parsed.config, secretEnc: req.body?.secret === undefined ? current.secretEnc : encryptSecret(parsed.secret) };
+    } catch (error) { return res.status(400).json({ error: error.message }); }
+  }
+  const integration = await saveIntegration({
+    ...current,
+    name: req.body?.name === undefined ? current.name : sanitizeLabel(req.body.name, 100),
+    config: input.config,
+    secretEnc: input.secretEnc,
+    enabled: req.body?.enabled === undefined ? current.enabled : req.body.enabled === true,
+    updatedAt: Date.now(),
+  });
+  audit(ctx, 'integration.updated', 'integration', integration.id, { type: integration.type, enabled: integration.enabled });
+  res.json({ ok: true, integration: { ...integration, secretEnc: undefined, hasSecret: !!integration.secretEnc } });
+});
+
+app.delete('/api/team/:orgId/integrations/:id', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  if (!(await getIntegration(ctx.org.id, req.params.id))) return res.status(404).json({ error: 'Integration not found.' });
+  await deleteIntegration(ctx.org.id, req.params.id);
+  audit(ctx, 'integration.deleted', 'integration', req.params.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/team/:orgId/integrations/:id/test', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  const integration = await getIntegration(ctx.org.id, req.params.id);
+  if (!integration) return res.status(404).json({ error: 'Integration not found.' });
+  const jobs = await queueIntegrationEvent(ctx.org.id, {
+    id: `integration-test:${randomUUID()}`,
+    type: 'integration.test',
+    at: new Date().toISOString(),
+    data: { title: `Test event for ${integration.name}`, severity: 'info' },
+  }, ctx.user.id, integration.id);
+  audit(ctx, 'integration.test_queued', 'integration', integration.id);
+  res.status(202).json({ ok: true, jobs: jobs.map((job) => ({ id: job.id, status: job.status })) });
+});
+
+app.get('/api/team/:orgId/deliveries', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  res.json({ ok: true, deliveries: await listDeliveries(ctx.org.id, Number(req.query.limit) || 100) });
+});
+
+app.get('/api/team/:orgId/jobs', async (req, res) => {
+  const ctx = orgContext(req, res, 'jobs.read');
+  if (!ctx) return;
+  const jobs = await listJobs(ctx.org.id, Number(req.query.limit) || 100);
+  res.json({
+    ok: true,
+    jobs: jobs.map(({ secretEnc: _secret, ...job }) => job),
+  });
+});
+
+app.post('/api/team/:orgId/jobs/:id/cancel', async (req, res) => {
+  const ctx = orgContext(req, res, 'scans.stop');
+  if (!ctx) return;
+  const job = (await listJobs(ctx.org.id, 500)).find((item) => item.id === req.params.id);
+  if (!job) return res.status(404).json({ error: 'Job not found.' });
+  if (!['queued', 'running'].includes(job.status)) return res.status(409).json({ error: `Cannot cancel a ${job.status} job.` });
+  await updateJob(job.id, { status: 'cancelled', error: 'Cancelled by user', lockedBy: null, lockedAt: null });
+  audit(ctx, 'job.cancelled', 'job', job.id, { type: job.type });
+  res.json({ ok: true });
+});
+
+app.get('/api/team/:orgId/artifacts', async (req, res) => {
+  const ctx = orgContext(req, res, 'scans.read');
+  if (!ctx) return;
+  res.json({ ok: true, artifacts: await listArtifacts(ctx.org.id, req.query.scanId || null) });
+});
+
+app.post('/api/team/:orgId/artifacts/:id/url', async (req, res) => {
+  const ctx = orgContext(req, res, 'scans.read');
+  if (!ctx) return;
+  const artifact = (await listArtifacts(ctx.org.id, req.body?.scanId || null)).find((item) => item.id === req.params.id);
+  if (!artifact) return res.status(404).json({ error: 'Artifact not found.' });
+  res.json({ ok: true, ...(await signedArtifactUrl(artifact, 300)) });
+});
+
 // ---- API: List scans (no workspace paths exposed) ----
-app.get('/api/scans', (req, res) => {
-  if (!existsSync(WORKSPACES)) return res.json([]);
-  const scans = readdirSync(WORKSPACES)
+app.get('/api/scans', async (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.read');
+  if (!ctx) return;
+  const scans = (existsSync(WORKSPACES) ? readdirSync(WORKSPACES) : [])
     .filter((d) => {
       const p = join(WORKSPACES, d);
-      return statSync(p).isDirectory() && existsSync(join(p, 'session.json'));
+      const owner = getScanOwner(d);
+      return owner?.orgId === ctx.org.id && statSync(p).isDirectory() && existsSync(join(p, 'session.json'));
     })
     .map((d) => {
       const session = JSON.parse(readFileSync(join(WORKSPACES, d, 'session.json'), 'utf-8'));
@@ -1334,13 +2500,73 @@ app.get('/api/scans', (req, res) => {
       };
     })
     .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
+  const known = new Set(scans.map((scan) => scan.id));
+  for (const job of await listJobs(ctx.org.id, 500)) {
+    if (job.type !== 'scan' || !job.payload?.scanId || known.has(job.payload.scanId)) continue;
+    scans.push({
+      id: job.payload.scanId,
+      jobId: job.id,
+      target: job.result?.target || job.payload.targetUrl,
+      status: job.status === 'succeeded' ? job.result?.status || 'completed' : job.status,
+      startedAt: job.result?.startedAt || new Date(job.createdAt).toISOString(),
+      completedAt: job.result?.completedAt || null,
+      agents: 0,
+      totalCost: 0,
+      hasReport: job.status === 'succeeded' && Number(job.result?.artifactCount || 0) > 0,
+      attempts: job.attempts,
+      error: job.error || null,
+    });
+  }
+  scans.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
   res.json(scans);
 });
 
 // ---- API: Scan details ----
-app.get('/api/scans/:id', (req, res) => {
+app.get('/api/scans/:id', async (req, res) => {
+  const ctx = scanContext(req, res, req.params.id);
+  if (!ctx) return;
   const wsDir = join(WORKSPACES, req.params.id);
-  if (!existsSync(wsDir)) return res.status(404).json({ error: 'Scan not found' });
+  if (!existsSync(wsDir)) {
+    const jobs = await listJobs(ctx.org.id, 500);
+    const job = jobs.find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
+    if (!job) return res.status(404).json({ error: 'Scan not found' });
+    const artifacts = await listArtifacts(ctx.org.id, req.params.id);
+    const byPath = new Map(artifacts.map((artifact) => [artifact.metadata?.relativePath, artifact]));
+    const readText = async (path) => {
+      const artifact = byPath.get(path);
+      if (!artifact) return null;
+      try { return (await readArtifact(artifact)).toString('utf8'); } catch { return null; }
+    };
+    let session = job.result || { status: job.status, target: job.payload?.targetUrl, startedAt: new Date(job.createdAt).toISOString() };
+    const sessionRaw = await readText('session.json');
+    if (sessionRaw) {
+      try { session = JSON.parse(sessionRaw); } catch {}
+    }
+    const files = {
+      report: await readText('report.md'),
+      preRecon: await readText('pre-recon/analysis.md'),
+      recon: await readText('recon/exploration.md'),
+      httpProbe: await readText('pre-recon/http-probe.txt'),
+      chainAnalysis: await readText('chain-analysis/analysis.md'),
+      warRoom: await readText('war-room/transcript.md'),
+      forensicManifest: await readText('forensic-package/manifest.json'),
+      custody: await readText('forensic-package/chain-of-custody.md'),
+      redTeamSummary: await readText('red-team/summary.md'),
+      blueTeam: await readText('blue-team/defense-assessment.md'),
+      purpleTeam: await readText('purple-team/transcript.md'),
+      purpleConclusion: await readText('purple-team/conclusion.md'),
+      exploitVerify: await readText('exploit-verify/verification.md'),
+      securityHeaders: await readText('pre-recon/security-headers.json'),
+      vulns: {}, exploits: {}, queues: {},
+    };
+    for (const category of ['sqli', 'xss', 'auth-bypass', 'authz-bypass', 'ssrf', 'business-logic', 'misconfig', 'info-disclosure']) {
+      files.vulns[category] = await readText(`vuln/${category}/analysis.md`);
+      files.exploits[category] = await readText(`exploit/${category}/exploit-report.md`);
+      const queue = await readText(`vuln/${category}/exploitation-queue.json`);
+      try { files.queues[category] = queue ? JSON.parse(queue) : null; } catch { files.queues[category] = null; }
+    }
+    return res.json({ session, files, durable: true, job: { id: job.id, status: job.status, attempts: job.attempts, error: job.error } });
+  }
   const session = existsSync(join(wsDir, 'session.json'))
     ? JSON.parse(readFileSync(join(wsDir, 'session.json'), 'utf-8'))
     : {};
@@ -1404,24 +2630,41 @@ app.get('/api/scans/:id', (req, res) => {
 // a merged OWASP/CWE coverage roll-up. Tool-confirmed only → these are real, not noise.
 // Certification-grade pentest report (CVSS 3.1 + OWASP WSTG/ASVS + compliance + sign-off).
 // Open the HTML in a browser and Print → Save as PDF for a deliverable. ?format=md for Markdown.
-app.get('/api/scans/:id/report', (req, res) => {
+app.get('/api/scans/:id/report', async (req, res) => {
+  const ctx = scanContext(req, res, req.params.id);
+  if (!ctx) return;
   // SARIF export for CI/CD & GitHub code scanning.
   if (req.query.format === 'sarif') {
     const sp = join(WORKSPACES, req.params.id, 'purple', 'report.sarif');
-    if (!existsSync(sp)) return res.status(404).json({ error: 'No SARIF report for this scan yet.' });
+    if (!existsSync(sp)) {
+      const artifact = (await listArtifacts(ctx.org.id, req.params.id)).find((item) => item.metadata?.relativePath === 'purple/report.sarif');
+      if (!artifact) return res.status(404).json({ error: 'No SARIF report for this scan yet.' });
+      res.setHeader('content-type', 'application/sarif+json; charset=utf-8');
+      res.setHeader('content-disposition', `attachment; filename="shannon-${req.params.id}.sarif"`);
+      return res.end(await readArtifact(artifact));
+    }
     res.setHeader('content-type', 'application/sarif+json; charset=utf-8');
     res.setHeader('content-disposition', `attachment; filename="shannon-${req.params.id}.sarif"`);
     return res.end(readFileSync(sp, 'utf-8'));
   }
   const fmt = req.query.format === 'md' ? 'md' : 'html';
   const p = join(WORKSPACES, req.params.id, 'purple', `certification-report.${fmt}`);
-  if (!existsSync(p)) return res.status(404).json({ error: 'No certification report for this scan yet.' });
+  if (!existsSync(p)) {
+    const artifact = (await listArtifacts(ctx.org.id, req.params.id)).find(
+      (item) => item.metadata?.relativePath === `purple/certification-report.${fmt}`,
+    );
+    if (!artifact) return res.status(404).json({ error: 'No certification report for this scan yet.' });
+    res.setHeader('content-type', fmt === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
+    res.setHeader('content-disposition', `inline; filename="shannon-pentest-${req.params.id}.${fmt}"`);
+    return res.end(await readArtifact(artifact));
+  }
   res.setHeader('content-type', fmt === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
   res.setHeader('content-disposition', `inline; filename="shannon-pentest-${req.params.id}.${fmt}"`);
   res.end(readFileSync(p, 'utf-8'));
 });
 
 app.get('/api/scans/:id/broker', (req, res) => {
+  if (!scanContext(req, res, req.params.id)) return;
   const scanDir = join(WORKSPACES, req.params.id);
   const brokerDir = join(scanDir, 'broker');
   const rj = (p) => {
@@ -1479,13 +2722,13 @@ app.get('/api/scans/:id/broker', (req, res) => {
 // ============================================================
 // loadVerified / addVerified / removeVerified now provided by db.mjs (Supabase-backed, so domain
 // verifications survive Railway redeploys instead of dying with the container's local file).
-// Registrable-ish domain (eTLD+1 heuristic) so verifying example.com also covers www/app.example.com.
+// Canonical hostname. Do not guess eTLD+1 by taking the last two labels: that turns
+// app.example.co.uk into co.uk and is both incorrect and unsafe. A verified parent
+// explicitly covers its subdomains in isVerified().
 function registrable(host) {
   return String(host || '')
     .toLowerCase()
-    .split('.')
-    .slice(-2)
-    .join('.');
+    .replace(/\.$/, '');
 }
 function hostOf(u) {
   try {
@@ -1497,6 +2740,35 @@ function hostOf(u) {
 function isLocalHost(h) {
   return h === 'localhost' || h === '::1' || /^127\./.test(h) || h.endsWith('.local');
 }
+function isPrivateAddress(address) {
+  const value = String(address || '').toLowerCase();
+  if (isIP(value) === 4) {
+    const [a, b] = value.split('.').map(Number);
+    return (
+      a === 10 ||
+      a === 127 ||
+      a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127)
+    );
+  }
+  if (isIP(value) === 6) {
+    return value === '::1' || value === '::' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe8') || value.startsWith('fe9') || value.startsWith('fea') || value.startsWith('feb');
+  }
+  return false;
+}
+async function publicOriginAllowed(url) {
+  const parsed = url instanceof URL ? url : new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol) || isLocalHost(parsed.hostname) || isPrivateAddress(parsed.hostname)) return false;
+  try {
+    const addresses = await lookup(parsed.hostname, { all: true, verbatim: true });
+    return addresses.length > 0 && addresses.every((x) => !isPrivateAddress(x.address));
+  } catch {
+    return false;
+  }
+}
 // Deterministic per-(user,domain) token — recomputable, so we don't need to store the token itself.
 function domainToken(userId, domain) {
   return _crypto.createHmac('sha256', SESSION_SECRET).update(`verify:${userId}:${domain}`).digest('hex').slice(0, 40);
@@ -1504,7 +2776,8 @@ function domainToken(userId, domain) {
 function isVerified(userId, host) {
   if (!userId) return false;
   const v = loadVerified()[userId] || {};
-  return !!(v[host] || v[registrable(host)]);
+  const candidate = registrable(host);
+  return Object.keys(v).some((domain) => candidate === domain || candidate.endsWith(`.${domain}`));
 }
 
 // Step 1: get the token + instructions for proving ownership of a domain.
@@ -1536,6 +2809,7 @@ app.post('/api/verify/check', async (req, res) => {
   const token = domainToken(user.id, domain);
   const tryFetch = async (url) => {
     try {
+      if (!(await publicOriginAllowed(url))) return '';
       const c = new AbortController();
       const t = setTimeout(() => c.abort(), 8000);
       const r = await fetch(url, { redirect: 'follow', signal: c.signal });
@@ -1744,6 +3018,9 @@ function annotateFixes(run) {
 // against the target), then crawl. `rawTarget` lets the SSE GET stream pass ?target=… (POSTs use body).
 // Returns { target, surface } or { status, error } to send back.
 async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
+  const ctx = requestContext(req);
+  if (!ctx) return { status: 401, error: 'Sign in first.' };
+  if (!can(ctx.membership.role, 'scans.run')) return { status: 403, error: 'Your role cannot run active security tests.' };
   const raw = (rawTarget || '').trim();
   if (!raw) return { status: 400, error: 'Provide a target URL.' };
   const target = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
@@ -1754,9 +3031,7 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
     return { status: 400, error: 'That does not look like a valid URL.' };
   }
   if (!isLocalHost(host)) {
-    const user = getUser(req);
-    if (!user) return { status: 401, error: 'Sign in to analyze an external target.' };
-    if (!isVerified(user.id, host))
+    if (!isVerified(ctx.user.id, host))
       return {
         status: 403,
         error: `Verify ownership of ${registrable(host)} first (Domains page).`,
@@ -1766,7 +3041,7 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
   try {
     const headers = await resolveAuthHeaders(req, target);
     const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120, headers });
-    return { target, surface, headers };
+    return { target, surface, headers, ctx };
   } catch (e) {
     return { status: 502, error: `Could not reach the target: ${e.message}` };
   }
@@ -1776,7 +3051,7 @@ app.post('/api/agent/understand', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   const understanding = analyzeSurface(r.surface);
-  const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
+  const key = settingsFor(req).apiKey || process.env.ANTHROPIC_API_KEY;
   understanding.aiAvailable = !!key;
   understanding.narrative = await aiNarrative(understanding, key);
   res.json({ ok: true, understanding });
@@ -1903,19 +3178,56 @@ app.get('/api/agent/team/stream', async (req, res) => {
   res.end();
 });
 
-// Persist a completed run for regression tracking (only when logged in). Best-effort; never throws.
+function persistConfirmedFindings(ctx, findings, { source, projectId = null, scanId = null } = {}) {
+  let saved = 0;
+  for (const raw of findings || []) {
+    const title = sanitizeLabel(raw.title || raw.detail || raw.cls || raw.tool || 'Security finding', 180);
+    const target = String(raw.target || '');
+    const cls = String(raw.cls || raw.tool || 'unknown');
+    const fingerprint = _crypto
+      .createHash('sha256')
+      .update(`${ctx.org.id}|${projectId || ''}|${cls}|${target}|${title}`)
+      .digest('hex');
+    const now = Date.now();
+    saveFinding({
+      id: `fnd_${fingerprint.slice(0, 16)}`,
+      orgId: ctx.org.id,
+      projectId,
+      fingerprint,
+      title,
+      severity: ['info', 'low', 'medium', 'high', 'critical'].includes(raw.severity) ? raw.severity : 'medium',
+      status: 'new',
+      assigneeUserId: null,
+      source: source || 'scan',
+      details: { ...raw, scanId },
+      decision: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    saved += 1;
+  }
+  if (saved) audit(ctx, 'findings.imported', 'scan', scanId, { count: saved, source, projectId });
+  return saved;
+}
+
+// Persist a completed run for regression tracking and the active team's shared finding queue.
 function persistRun(req, target, run) {
   try {
-    const user = getUser(req);
-    if (!user) return null;
+    const ctx = requestContext(req);
+    if (!ctx) return null;
     const id = randomUUID().slice(0, 12);
-    saveAgentRun(user.id, {
+    saveAgentRun(ctx.user.id, {
       id,
       target,
       createdAt: Date.now(),
       stats: run.stats || {},
       findings: run.findings || [],
       leads: run.leads || [],
+    });
+    persistConfirmedFindings(ctx, run.findings || [], {
+      source: 'agent-run',
+      projectId: req.body?.projectId || req.query?.projectId || null,
+      scanId: id,
     });
     return id;
   } catch {
@@ -2005,8 +3317,9 @@ async function runDueMonitors() {
 }
 
 app.post('/api/agent/monitors', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'Sign in first.' });
+  const ctx = requirePermission(req, res, 'scans.run');
+  if (!ctx) return;
+  const user = ctx.user;
   const raw = (req.body?.target || '').trim();
   if (!raw) return res.status(400).json({ error: 'Provide a target URL.' });
   const target = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
@@ -2036,13 +3349,15 @@ app.post('/api/agent/monitors', (req, res) => {
   res.json({ ok: true, monitor });
 });
 app.get('/api/agent/monitors', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'Sign in first.' });
+  const ctx = requirePermission(req, res, 'scans.read');
+  if (!ctx) return;
+  const user = ctx.user;
   res.json({ ok: true, monitors: listMonitors(user.id) });
 });
 app.delete('/api/agent/monitors/:id', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'Sign in first.' });
+  const ctx = requirePermission(req, res, 'scans.run');
+  if (!ctx) return;
+  const user = ctx.user;
   removeMonitor(user.id, req.params.id);
   res.json({ ok: true });
 });
@@ -2063,6 +3378,8 @@ app.post('/api/agent/report', (req, res) => {
 // internal/metadata hosts (SSRF guard) and follows redirects safely. Only the supplied headers are sent.
 const REPLAY_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
 app.post('/api/agent/replay', async (req, res) => {
+  const active = requirePermission(req, res, 'scans.run');
+  if (!active) return;
   const { method = 'GET', url, headers = {}, body } = req.body || {};
   if (!url || typeof url !== 'string') return res.status(400).json({ error: 'Provide a URL.' });
   let host;
@@ -2124,6 +3441,8 @@ async function llmProposeCheck(instruction, key) {
 }
 
 app.post('/api/agent/custom-check', async (req, res) => {
+  const active = requirePermission(req, res, 'scans.run');
+  if (!active) return;
   const { target, check, instruction } = req.body || {};
   if (!target) return res.status(400).json({ error: 'Provide a target.' });
   let host;
@@ -2143,7 +3462,7 @@ app.post('/api/agent/custom-check', async (req, res) => {
   }
   let proposed = check;
   if (!proposed && instruction) {
-    const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
+    const key = settingsFor(req).apiKey || process.env.ANTHROPIC_API_KEY;
     if (!key)
       return res
         .status(400)
@@ -2213,6 +3532,8 @@ async function llmWriteCode(instruction, lang, key) {
 }
 
 app.post('/api/agent/sandbox', async (req, res) => {
+  const active = requirePermission(req, res, 'scans.run');
+  if (!active) return;
   const { target, code, lang = 'python', instruction } = req.body || {};
   if (!target) return res.status(400).json({ error: 'Provide a target.' });
   let host;
@@ -2240,7 +3561,7 @@ app.post('/api/agent/sandbox', async (req, res) => {
       });
   let src = code;
   if (!src && instruction) {
-    const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
+    const key = settingsFor(req).apiKey || process.env.ANTHROPIC_API_KEY;
     if (!key)
       return res
         .status(400)
@@ -2332,7 +3653,7 @@ app.post('/api/agent/patch', async (req, res) => {
     .replace(/-extract$|-context$|-metadata$/, '');
   const patch = generatePatch({ finding, snippet, guidance: detectionRule(cls) });
   if (!patch) return res.json({ ok: true, patch: null });
-  const key = loadSettings().apiKey || process.env.ANTHROPIC_API_KEY;
+  const key = settingsFor(req).apiKey || process.env.ANTHROPIC_API_KEY;
   if (key) patch.llm = await llmPatch({ snippet, cls, key });
   // If we have a confident rewrite AND the caller passed the full file + line, apply it so they can
   // copy the corrected file back (the usable step before an actual PR).
@@ -2347,6 +3668,8 @@ app.post('/api/agent/patch', async (req, res) => {
 // browser, never persisted here) and acts on repos that token already authorizes — the final auto-patch
 // step. This is the only piece that needs a credential.
 app.post('/api/agent/pr', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.remediate');
+  if (!ctx) return;
   const { repo, path: filePath, content, token, finding } = req.body || {};
   const tok = (token || process.env.GITHUB_TOKEN || '').trim();
   if (!tok)
@@ -2358,13 +3681,33 @@ app.post('/api/agent/pr', async (req, res) => {
   const body = `Automated fix suggested by **Securovix Shannon** for a proven \`${cls}\` finding.\n\n> ⚠️ Suggested patch — review before merging; not verified against the full codebase.`;
   try {
     const out = await openPullRequest({ token: tok, repo, path: filePath, content, title, body });
+    audit(ctx, 'remediation.pull_request_opened', 'repository', repo, { path: filePath, cls, url: out.url });
     res.json({ ok: true, url: out.url, branch: out.branch });
   } catch (e) {
     res.status(502).json({ error: `Could not open PR: ${e.message}` });
   }
 });
 
-app.post('/api/scans', (req, res) => {
+function workspaceConfirmedFindings(scanId) {
+  const broker = join(WORKSPACES, scanId, 'broker');
+  if (!existsSync(broker)) return [];
+  const out = [];
+  for (const category of readdirSync(broker)) {
+    const path = join(broker, category, 'findings.json');
+    if (!existsSync(path)) continue;
+    try {
+      const rows = JSON.parse(readFileSync(path, 'utf-8'));
+      if (Array.isArray(rows)) out.push(...rows);
+      else if (Array.isArray(rows?.findings)) out.push(...rows.findings);
+    } catch {}
+  }
+  return out;
+}
+
+app.post('/api/scans', async (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.run');
+  if (!ctx) return;
+  if (limited(req, res, `scan:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
   const {
     targetUrl,
     authType,
@@ -2385,20 +3728,18 @@ app.post('/api/scans', (req, res) => {
   // (built-in labs / self-demo). This is the safety boundary for multi-tenant / client use.
   const targetHost = hostOf(targetUrl);
   if (!isLocalHost(targetHost)) {
-    const user = getUser(req);
-    if (!user) return res.status(401).json({ error: 'Sign in to scan an external target.' });
     if (req.body.authorized !== true)
       return res
         .status(403)
         .json({ error: 'You must confirm you are authorized to test this target.', needsAuthorization: true });
-    if (!isVerified(user.id, targetHost))
+    if (!isVerified(ctx.user.id, targetHost))
       return res.status(403).json({
         error: `You have not verified ownership of ${registrable(targetHost)}. Verify it first (prove control via DNS, a /.well-known file, or a meta tag).`,
         needsVerification: registrable(targetHost),
       });
   }
 
-  const settings = loadSettings();
+  const settings = settingsFor(req);
   // Browser-supplied key takes precedence; fall back to env or legacy file for backward compat.
   const apiKey = bodyKey || settings.apiKey || process.env.ANTHROPIC_API_KEY;
   if (!apiKey)
@@ -2407,6 +3748,10 @@ app.post('/api/scans', (req, res) => {
       .json({ error: 'Anthropic API key required. Add it in Settings → API Keys (browser-only storage).' });
 
   const scanId = randomUUID().slice(0, 8);
+  const projectId = req.body?.projectId || null;
+  if (projectId && !listProjects(ctx.org.id).some((p) => p.id === projectId))
+    return res.status(400).json({ error: 'Project does not belong to the active organization.' });
+  saveScanOwner({ scanId, orgId: ctx.org.id, userId: ctx.user.id, projectId, createdAt: Date.now() });
   const config = {
     target: { url: targetUrl, urls: {} },
     pipeline: { retryPreset: retryPreset || 'fast', maxConcurrentPipelines: 3 },
@@ -2426,10 +3771,15 @@ app.post('/api/scans', (req, res) => {
     if (username) config.authentication.username = username;
     if (password) config.authentication.password = password;
   }
-  const configPath = join(ROOT, `scan-${scanId}.yaml`);
-  writeFileSync(configPath, yamlDump(config, 0));
-
-  const env = { ...process.env, ANTHROPIC_API_KEY: apiKey, SHANNON_MODEL: settings.model || 'claude-opus-4-7' };
+  const env = {
+    ...process.env,
+    ANTHROPIC_API_KEY: apiKey,
+    SHANNON_MODEL: settings.model || 'claude-opus-4-7',
+    SHANNON_SCAN_ID: scanId,
+    SHANNON_OWNER_USER_ID: ctx.user.id,
+    SHANNON_ORG_ID: ctx.org.id,
+    SHANNON_PROJECT_ID: projectId || '',
+  };
   if (settings.baseUrl) env.SHANNON_LLM_BASE_URL = settings.baseUrl;
   // Multi-LLM war room — when enabled, pass extra provider keys + a flag through env so the scanner's
   // Red/Blue phases can route through the war-room orchestrator. run-scan.mjs reads these opportunistically.
@@ -2479,6 +3829,45 @@ app.post('/api/scans', (req, res) => {
     if (netOk) env.SHANNON_NETWORK_SCAN = '1';
   }
 
+  if (isSupabase() && process.env.SHANNON_DURABLE_JOBS !== '0') {
+    const durableConfig = structuredClone(config);
+    delete durableConfig.authentication;
+    const job = await enqueueJob({
+      orgId: ctx.org.id,
+      userId: ctx.user.id,
+      type: 'scan',
+      payload: {
+        scanId,
+        targetUrl,
+        projectId,
+        config: durableConfig,
+        model: settings.model || 'claude-opus-4-7',
+        baseUrl: settings.baseUrl || null,
+        warRoom: warRoom === true,
+        monitor: req.body.monitor === true,
+        networkScan: env.SHANNON_NETWORK_SCAN === '1',
+      },
+      secretEnc: encryptSecret({
+        apiKey,
+        authentication: config.authentication || null,
+        providerKeys: warRoom ? {
+          openai: providerKeys?.openai || null,
+          gemini: providerKeys?.gemini || null,
+          glm: providerKeys?.glm || null,
+        } : null,
+        accessControl: cleanIds,
+        alertWebhook: env.SHANNON_ALERT_WEBHOOK || null,
+      }),
+      maxAttempts: 3,
+      idempotencyKey: `scan:${scanId}`,
+    });
+    audit(ctx, 'scan.queued', 'scan', scanId, { target: targetUrl, projectId, jobId: job.id });
+    return res.status(202).json({ scanId, jobId: job.id, status: 'queued' });
+  }
+
+  const configPath = join(ROOT, `scan-${scanId}.yaml`);
+  writeFileSync(configPath, yamlDump(config, 0));
+
   const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], {
     cwd: ROOT,
     env,
@@ -2506,6 +3895,9 @@ app.post('/api/scans', (req, res) => {
     phases: [],
     currentPhase: null,
     sseClients: [],
+    userId: ctx.user.id,
+    orgId: ctx.org.id,
+    projectId,
   };
   runningScans.set(scanId, scan);
 
@@ -2557,16 +3949,37 @@ app.post('/api/scans', (req, res) => {
   child.stderr.on('data', (d) => process_(d));
   child.on('close', (code) => {
     scan.status = code === 0 ? 'completed' : 'failed';
+    if (code === 0) {
+      try {
+        persistConfirmedFindings(ctx, workspaceConfirmedFindings(scanId), {
+          source: 'pentest-scan',
+          projectId,
+          scanId,
+        });
+      } catch (e) {
+        console.error('[team] finding import failed:', e.message);
+      }
+    }
     bc(scan, { type: code === 0 ? 'complete' : 'failed' });
   });
 
+  audit(ctx, 'scan.started', 'scan', scanId, { target: targetUrl, projectId });
   res.json({ scanId, status: 'started' });
 });
 
 // ---- API: Stop scan ----
-app.post('/api/scans/:id/stop', (req, res) => {
+app.post('/api/scans/:id/stop', async (req, res) => {
+  const ctx = scanContext(req, res, req.params.id, 'scans.stop');
+  if (!ctx) return;
   const scan = runningScans.get(req.params.id);
-  if (!scan) return res.status(404).json({ error: 'Scan not found or already finished' });
+  if (!scan) {
+    const job = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
+    if (!job) return res.status(404).json({ error: 'Scan not found or already finished' });
+    if (!['queued', 'running'].includes(job.status)) return res.status(409).json({ error: `Cannot stop a ${job.status} scan.` });
+    await updateJob(job.id, { status: 'cancelled', error: 'Cancelled by user', lockedBy: null, lockedAt: null });
+    audit(ctx, 'scan.stopped', 'scan', req.params.id, { jobId: job.id });
+    return res.json({ ok: true, message: 'Scan cancellation requested' });
+  }
   try {
     scan.child.kill('SIGTERM');
     setTimeout(() => {
@@ -2575,6 +3988,7 @@ app.post('/api/scans/:id/stop', (req, res) => {
       } catch {}
     }, 3000);
     scan.status = 'stopped';
+    audit(ctx, 'scan.stopped', 'scan', req.params.id);
     bc_ext(scan, { type: 'stopped' });
     res.json({ ok: true, message: 'Scan stopped' });
   } catch (e) {
@@ -2583,10 +3997,19 @@ app.post('/api/scans/:id/stop', (req, res) => {
 });
 
 // ---- API: Mark stale scan as failed ----
-app.post('/api/scans/:id/mark-failed', (req, res) => {
+app.post('/api/scans/:id/mark-failed', async (req, res) => {
+  const ctx = scanContext(req, res, req.params.id, 'scans.stop');
+  if (!ctx) return;
   const wsDir = join(WORKSPACES, req.params.id);
   const sessionPath = join(wsDir, 'session.json');
-  if (!existsSync(sessionPath)) return res.status(404).json({ error: 'Scan not found' });
+  if (!existsSync(sessionPath)) {
+    const job = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
+    if (!job) return res.status(404).json({ error: 'Scan not found' });
+    if (job.status === 'succeeded') return res.json({ ok: true, message: 'Already completed' });
+    await updateJob(job.id, { status: 'dead-letter', error: 'Manually marked failed', lockedBy: null, lockedAt: null });
+    audit(ctx, 'scan.marked_failed', 'scan', req.params.id, { jobId: job.id });
+    return res.json({ ok: true, message: 'Scan marked as failed' });
+  }
 
   try {
     const session = JSON.parse(readFileSync(sessionPath, 'utf-8'));
@@ -2597,6 +4020,7 @@ app.post('/api/scans/:id/mark-failed', (req, res) => {
     writeFileSync(sessionPath, JSON.stringify(session, null, 2));
     // Also clean up from running scans map
     runningScans.delete(req.params.id);
+    audit(ctx, 'scan.marked_failed', 'scan', req.params.id);
     res.json({ ok: true, message: 'Scan marked as failed' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2616,7 +4040,9 @@ function bc_ext(scan, data) {
 }
 
 // ---- API: Live status ----
-app.get('/api/scans/:id/live', (req, res) => {
+app.get('/api/scans/:id/live', async (req, res) => {
+  const ctx = scanContext(req, res, req.params.id);
+  if (!ctx) return;
   const scan = runningScans.get(req.params.id);
   if (scan)
     return res.json({
@@ -2630,13 +4056,43 @@ app.get('/api/scans/:id/live', (req, res) => {
     const session = JSON.parse(readFileSync(join(wsDir, 'session.json'), 'utf-8'));
     return res.json({ status: session.status || 'completed' });
   }
+  const job = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
+  if (job) return res.json({
+    status: job.status === 'succeeded' ? job.result?.status || 'completed' : job.status,
+    output: job.result?.outputTail || '', target: job.result?.target || job.payload?.targetUrl,
+    phases: [], attempts: job.attempts, error: job.error || null,
+  });
   res.status(404).json({ error: 'Not found' });
 });
 
 // ---- SSE ----
-app.get('/api/scans/:id/events', (req, res) => {
+app.get('/api/scans/:id/events', async (req, res) => {
+  const ctx = scanContext(req, res, req.params.id);
+  if (!ctx) return;
   const scan = runningScans.get(req.params.id);
-  if (!scan) return res.status(404).json({ error: 'Not found' });
+  if (!scan) {
+    const initial = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
+    if (!initial) return res.status(404).json({ error: 'Not found' });
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    let previous = '';
+    const send = async () => {
+      const job = await getJob(initial.id).catch(() => null);
+      if (!job) return;
+      const snapshot = JSON.stringify({ status: job.status, attempts: job.attempts, error: job.error || null, output: job.result?.outputTail || '' });
+      if (snapshot !== previous) res.write(`data: ${JSON.stringify({ type: 'job', ...JSON.parse(snapshot) })}\n\n`);
+      previous = snapshot;
+      if (['succeeded', 'cancelled', 'dead-letter', 'failed'].includes(job.status)) {
+        res.write(`data: ${JSON.stringify({ type: job.status === 'succeeded' ? 'complete' : 'failed', status: job.status })}\n\n`);
+        clearInterval(timer);
+        res.end();
+      }
+    };
+    const timer = setInterval(() => send().catch(() => {}), 2_000);
+    timer.unref?.();
+    req.on('close', () => clearInterval(timer));
+    await send();
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   for (const phase of scan.phases) {
     res.write(
@@ -2712,15 +4168,45 @@ function yamlDump(obj, indent = 0) {
 
 // Health-check endpoint — Railway will hit this to confirm the container is alive.
 app.get('/healthz', (_req, res) =>
-  res.json({ ok: true, db: isSupabase() ? 'supabase' : 'fs', uptime: process.uptime() }),
+  res.json({ ok: true, service: 'dashboard', uptime: process.uptime() }),
 );
+
+app.get('/readyz', async (_req, res) => {
+  try {
+    const database = await enterpriseHealth();
+    res.json({ ok: true, database, durableJobs: isSupabase() && process.env.SHANNON_DURABLE_JOBS !== '0' });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/metrics', async (req, res) => {
+  const configured = String(process.env.SHANNON_METRICS_TOKEN || '');
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const valid = configured && supplied.length === configured.length && _crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
+  if (!valid) return res.status(401).type('text/plain').send('unauthorized\n');
+  const jobs = await listJobs(null, 500);
+  const counts = {};
+  for (const job of jobs) counts[`${job.type}:${job.status}`] = (counts[`${job.type}:${job.status}`] || 0) + 1;
+  const lines = [
+    '# HELP shannon_process_uptime_seconds Dashboard process uptime.',
+    '# TYPE shannon_process_uptime_seconds gauge',
+    `shannon_process_uptime_seconds ${process.uptime()}`,
+    '# HELP shannon_jobs Jobs by type and status (latest 500).',
+    '# TYPE shannon_jobs gauge',
+    ...Object.entries(counts).map(([key, value]) => {
+      const [type, status] = key.split(':');
+      return `shannon_jobs{type="${type.replaceAll('"', '')}",status="${status.replaceAll('"', '')}"} ${value}`;
+    }),
+  ];
+  res.type('text/plain; version=0.0.4').send(`${lines.join('\n')}\n`);
+});
 
 // ── Self-defense status / control ───────────────────────────────────────────────────────────────
 // Reports whether this dashboard is defending itself, and lets an operator flip monitor⇄enforce
 // without a redeploy. Read-only when the feature is off, so the UI can explain how to enable it.
 app.get('/api/defender/self', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
+  if (!requirePlatformOperator(req, res)) return;
   if (!SELF_DEFENSE) return res.json({ enabled: false });
   res.json({
     enabled: true,
@@ -2731,10 +4217,11 @@ app.get('/api/defender/self', (req, res) => {
 });
 
 app.post('/api/defender/self/mode', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
+  if (!requirePlatformOperator(req, res)) return;
+  const ctx = requestContext(req);
   if (!SELF_DEFENSE) return res.status(409).json({ error: 'self-defense is not enabled' });
   const mode = SELF_DEFENSE.setMode(req.body?.mode);
+  audit(ctx, 'defender.self_mode_changed', 'defender', 'self', { mode });
   res.json({ mode });
 });
 
@@ -2742,67 +4229,74 @@ app.post('/api/defender/self/mode', (req, res) => {
 // The key carries its own user id and is verified by HMAC, so there is no key table to keep in sync
 // and no lookup on the hot path — the same trick domainToken() already uses. Rotating
 // SHANNON_SESSION_SECRET invalidates every key, which is the (documented) revocation story for v1.
-function defenderApiKey(userId) {
-  const sig = _crypto.createHmac('sha256', SESSION_SECRET).update(`defender-key:${userId}`).digest('hex');
-  return `sk_${userId}_${sig.slice(0, 32)}`;
+function defenderApiKey(userId, orgId) {
+  const payload = Buffer.from(JSON.stringify({ uid: userId, oid: orgId })).toString('base64url');
+  const sig = _crypto.createHmac('sha256', SESSION_SECRET).update(`defender-key:${payload}`).digest('base64url');
+  return `sk_${payload}.${sig}`;
 }
 function verifyDefenderKey(key) {
-  const m = /^sk_([A-Za-z0-9]+)_([a-f0-9]{32})$/.exec(String(key || ''));
+  const m = /^sk_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(key || ''));
   if (!m) return null;
-  return defenderApiKey(m[1]) === key ? m[1] : null;
+  const expected = _crypto.createHmac('sha256', SESSION_SECRET).update(`defender-key:${m[1]}`).digest('base64url');
+  if (expected.length !== m[2].length || !_crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(m[2]))) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(m[1], 'base64url').toString());
+    const membership = getMembership(payload.oid, payload.uid);
+    return membership && can(membership.role, 'defender.manage') ? { userId: payload.uid, orgId: payload.oid } : null;
+  } catch {
+    return null;
+  }
 }
 
-// Reported detections, newest first, per user. In memory and capped: this is an activity feed, not
-// the system of record, and it must not become an unbounded retention hole (see the blackboard).
-const sdkReports = new Map();
+// Limit each SDK batch; accepted events are persisted per organization.
 const SDK_REPORT_MAX = 200;
 
 app.post('/api/defender/report', (req, res) => {
-  const userId = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
-  if (!userId) return res.status(401).json({ error: 'invalid api key' });
+  const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+  if (!principal) return res.status(401).json({ error: 'invalid api key' });
   const incoming = Array.isArray(req.body?.detections) ? req.body.detections : [];
   if (!incoming.length) return res.json({ accepted: 0 });
 
-  const list = sdkReports.get(userId) || [];
   for (const d of incoming.slice(0, SDK_REPORT_MAX)) {
-    list.unshift({
+    appendDefenseEvent({
+      id: randomUUID(),
+      orgId: principal.orgId,
+      userId: principal.userId,
       at: typeof d.at === 'string' ? d.at : new Date().toISOString(),
       method: String(d.method || '').slice(0, 10),
       url: String(d.url || '').slice(0, 300),
       cls: String(d.cls || '').slice(0, 60),
       enforced: d.enforced === true,
       srcIp: d.srcIp ? String(d.srcIp).slice(0, 64) : null,
+      createdAt: Date.now(),
     });
   }
-  if (list.length > SDK_REPORT_MAX) list.length = SDK_REPORT_MAX;
-  sdkReports.set(userId, list);
   res.json({ accepted: incoming.length });
 });
 
 app.get('/api/defender/sdk', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
-  res.json({ apiKey: defenderApiKey(user.id), reports: (sdkReports.get(user.id) || []).slice(0, 25) });
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const user = ctx.user;
+  res.json({ apiKey: defenderApiKey(user.id, ctx.org.id), reports: listDefenseEvents(ctx.org.id, 25) });
 });
 
 // ── Edge routes (consumed by packages/defender-edge) ────────────────────────────────────────────
 // hostname → origin for the public multi-tenant proxy. In memory for now, and the edge deliberately
 // ignores an empty list so a dashboard restart cannot 502 live customer traffic; the durable source
 // for production is the edge's own SHANNON_EDGE_ROUTES. Moving this into Supabase is the next step.
-const edgeRoutes = new Map(); // host -> { origin, mode, userId }
 
 app.get('/api/defender/edge/routes', (req, res) => {
-  const userId = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
-  if (!userId) return res.status(401).json({ error: 'invalid api key' });
-  const list = [...edgeRoutes.entries()]
-    .filter(([, v]) => v.userId === userId)
-    .map(([host, v]) => ({ host, origin: v.origin, mode: v.mode }));
+  const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+  if (!principal) return res.status(401).json({ error: 'invalid api key' });
+  const list = listEdgeRoutes({ orgId: principal.orgId }).map((v) => ({ host: v.host, origin: v.origin, mode: v.mode }));
   res.json({ routes: list });
 });
 
-app.post('/api/defender/edge/routes', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
+app.post('/api/defender/edge/routes', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const user = ctx.user;
   const { host, origin, mode } = req.body || {};
   if (!host || !origin) return res.status(400).json({ error: 'host and origin are required' });
 
@@ -2818,22 +4312,40 @@ app.post('/api/defender/edge/routes', (req, res) => {
 
   // Same gate as everything else: you may not put a blocking proxy in front of a host you have not
   // proven you own, and you may not point one at an origin you do not own either.
-  const h = String(host).toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+  const h = hostOf(String(host));
+  if (!h) return res.status(400).json({ error: 'invalid public hostname' });
   if (!isLocalHost(h) && !isVerified(user.id, h)) {
     return res.status(403).json({ error: 'needsVerification', host: h });
   }
+  if (!isVerified(user.id, parsed.hostname)) {
+    return res.status(403).json({ error: 'originNeedsVerification', host: parsed.hostname });
+  }
+  if (!(await publicOriginAllowed(parsed))) {
+    return res.status(400).json({ error: 'origin must resolve only to public IP addresses' });
+  }
 
-  edgeRoutes.set(h, { origin, mode: mode === 'enforce' ? 'enforce' : 'monitor', userId: user.id });
+  const route = {
+    host: h,
+    origin,
+    mode: mode === 'enforce' ? 'enforce' : 'monitor',
+    userId: user.id,
+    orgId: ctx.org.id,
+    createdAt: Date.now(),
+  };
+  saveEdgeRoute(route);
+  audit(ctx, 'defender.edge_route_created', 'edge-route', h, { origin: parsed.origin, mode });
   res.json({ host: h, origin, mode: mode === 'enforce' ? 'enforce' : 'monitor' });
 });
 
 app.delete('/api/defender/edge/routes/:host', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const user = ctx.user;
   const h = String(req.params.host || '').toLowerCase();
-  const cur = edgeRoutes.get(h);
-  if (!cur || cur.userId !== user.id) return res.status(404).json({ error: 'not found' });
-  edgeRoutes.delete(h);
+  const cur = listEdgeRoutes({ orgId: ctx.org.id }).find((r) => r.host === h);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  removeEdgeRoute(h, ctx.org.id);
+  audit(ctx, 'defender.edge_route_removed', 'edge-route', h);
   res.json({ ok: true });
 });
 
@@ -2856,8 +4368,9 @@ function defBroadcast(entry, payload) {
 }
 
 app.post('/api/defender/connect', async (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const user = ctx.user;
 
   const { origin } = req.body || {};
   if (!origin) return res.status(400).json({ error: 'origin required' });
@@ -2880,6 +4393,13 @@ app.post('/api/defender/connect', async (req, res) => {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return res.status(400).json({ error: 'origin must be an http(s) URL' });
+  }
+
+  if (!isLocalHost(host) && !(await publicOriginAllowed(parsed))) {
+    return res.status(400).json({ error: 'origin must resolve only to public IP addresses' });
+  }
+  if (isLocalHost(host) && process.env.NODE_ENV === 'production') {
+    return res.status(400).json({ error: 'local origins are disabled in production' });
   }
 
   if (!isLocalHost(host) && !isVerified(user.id, host)) {
@@ -2926,6 +4446,7 @@ app.post('/api/defender/connect', async (req, res) => {
   }
   entry.runtime = runtime;
 
+  audit(ctx, 'defender.connected', 'defender', id, { origin: parsed.origin });
   res.json({ id, mode: 'monitor', proxyUrl: runtime.meta.url, origin, graph: runtime.graph });
 });
 
@@ -2939,20 +4460,23 @@ app.get('/api/defender/list', (req, res) => {
 });
 
 app.post('/api/defender/:id/mode', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const user = ctx.user;
   const entry = defenders.get(req.params.id);
   if (!entry || entry.system.userId !== user.id) return res.status(404).json({ error: 'not found' });
   if (!entry.runtime) return res.status(409).json({ error: 'defender not running' });
   const mode = entry.runtime.setMode(req.body?.mode);
   entry.system.mode = mode;
+  audit(ctx, 'defender.mode_changed', 'defender', entry.system.id, { mode });
   defBroadcast(entry, { type: 'mode', mode });
   res.json({ id: entry.system.id, mode });
 });
 
 app.post('/api/defender/:id/disconnect', async (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const user = ctx.user;
   const entry = defenders.get(req.params.id);
   if (!entry || entry.system.userId !== user.id) return res.status(404).json({ error: 'not found' });
   try {
@@ -2965,6 +4489,7 @@ app.post('/api/defender/:id/disconnect', async (req, res) => {
   }
   entry.sseClients.length = 0;
   defenders.delete(req.params.id);
+  audit(ctx, 'defender.disconnected', 'defender', req.params.id);
   res.json({ ok: true });
 });
 
@@ -2989,15 +4514,24 @@ app.get('/api/defender/:id/events', (req, res) => {
   });
 });
 
-(async () => {
+export async function startDashboard({ port = PORT, scheduleMonitors = true } = {}) {
   try {
     await initDb();
   } catch (e) {
     console.error('FATAL: db init failed.', e.message);
-    process.exit(1);
+    throw e;
   }
-  app.listen(PORT, () => console.log(`\n  Securovix Dashboard running at http://localhost:${PORT}\n`));
-  // Continuous monitoring: check for due monitors shortly after boot, then every 10 minutes.
-  setTimeout(runDueMonitors, 30_000);
-  setInterval(runDueMonitors, 10 * 60 * 1000);
-})();
+  const server = app.listen(port, () => console.log(`\n  Securovix Dashboard running at http://localhost:${server.address().port}\n`));
+  if (scheduleMonitors) {
+    // Continuous monitoring: check for due monitors shortly after boot, then every 10 minutes.
+    setTimeout(runDueMonitors, 30_000).unref?.();
+    setInterval(runDueMonitors, 10 * 60 * 1000).unref?.();
+  }
+  return server;
+}
+
+export { app };
+
+if (process.argv[1] && process.argv[1].endsWith('server.mjs')) {
+  startDashboard().catch(() => process.exit(1));
+}

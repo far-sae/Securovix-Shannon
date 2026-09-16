@@ -5,10 +5,8 @@
     "dockerfilePath": "Dockerfile.dashboard"
   },
   "deploy": {
-    "startCommand": "node packages/dashboard/server.mjs",
-    "healthcheckPath": "/readyz",
-    "healthcheckTimeout": 30,
+    "startCommand": "node packages/dashboard/worker.mjs",
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 5
+    "restartPolicyMaxRetries": 10
   }
 }

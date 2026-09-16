@@ -856,7 +856,7 @@ test('edge: routes by Host, blocks attacks in enforce, forwards ordinary traffic
     res.end('origin-ok');
   });
   edgeRoutes.set('app.customer.test', { origin: app.origin, mode: 'enforce' });
-  const edge = createEdgeServer();
+  const edge = createEdgeServer({ allowPrivateOrigins: true });
   await new Promise((r) => edge.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${edge.address().port}`;
   try {
@@ -885,7 +885,7 @@ test('edge: monitor mode observes without blocking', async () => {
     res.end('origin-ok');
   });
   edgeRoutes.set('watch.customer.test', { origin: app.origin, mode: 'monitor' });
-  const edge = createEdgeServer();
+  const edge = createEdgeServer({ allowPrivateOrigins: true });
   await new Promise((r) => edge.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${edge.address().port}`;
   try {

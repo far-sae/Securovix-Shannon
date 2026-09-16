@@ -24,20 +24,22 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # --- Gating steps (verified green locally) ---
       - name: Typecheck (worker + tool-broker + cli)
         run: pnpm typecheck
 
-      - name: Root unit tests (engine + crawler + templates)
+      - name: Root unit tests
         run: pnpm test
 
-      # --- Informational steps (surfaced, not yet gating) ---
-      # Worker uses better-sqlite3 (native) — promote to gating once confirmed green on CI runners.
-      - name: Package tests (worker + tool-broker, vitest)
+      - name: Package tests (worker + tool-broker)
         run: pnpm --filter @shannon/worker --filter @shannon/tool-broker test
-        continue-on-error: true
 
-      # Repo has pre-existing lint debt; lint is reported but does not block until cleaned up.
-      - name: Lint (biome)
+      - name: Production dependency audit (monorepo)
+        run: pnpm audit --prod --audit-level high
+
+      - name: Production dependency audit (dashboard image lockfile)
+        run: npm audit --omit=dev --audit-level=high --prefix packages/dashboard
+
+      # Existing formatting/lint debt is still visible while it is paid down.
+      - name: Lint (biome, informational)
         run: pnpm lint
         continue-on-error: true
