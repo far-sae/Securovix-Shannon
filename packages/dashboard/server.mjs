@@ -94,6 +94,22 @@ function ensureSessionSecret() {
 const SESSION_SECRET = process.env.SHANNON_SESSION_SECRET || ensureSessionSecret();
 const SESSION_TTL_DAYS = 30;
 
+// This failure is silent and expensive, so say it loudly at boot. ensureSessionSecret() persists the
+// signing key to ~/.shannon/.session-secret — fine locally, useless on a platform with an ephemeral
+// filesystem (Railway, Fly, Heroku, any container rebuild): the key is regenerated on EVERY deploy,
+// which invalidates every session already issued. Users keep their cookie and still look signed in,
+// but verifySession() fails, getUser() returns null, and every authenticated route answers 401 —
+// so the whole app appears broken with no error that points at the cause.
+if (!process.env.SHANNON_SESSION_SECRET) {
+  console.warn(
+    '[auth] WARNING: SHANNON_SESSION_SECRET is not set — using a key stored on local disk.\n' +
+      '       On an ephemeral filesystem this key changes on every deploy and silently logs out\n' +
+      '       every user (their requests start returning 401 while they still appear signed in).\n' +
+      '       Set SHANNON_SESSION_SECRET to a fixed random value to keep sessions across deploys:\n' +
+      '         openssl rand -hex 32',
+  );
+}
+
 // Two-tier plan system:
 //   starter — free, includes Dashboard + New Scan (no Code Scan access)
 //   pro     — £15/mo or £120/yr, adds the multi-LLM Code Scan war room
