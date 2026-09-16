@@ -28,6 +28,21 @@ The supported states are:
 `risk-accepted` requires a reason and a future expiry. `false-positive` requires a reason. Every
 membership, project, scan, finding, Defender, and remediation mutation writes an audit event.
 
+## Security workflows
+
+- **New Scan** provides balanced, API-intensive, and continuous-assurance engagement profiles. All
+  external targets remain behind ownership verification and explicit authorization; network service
+  checks require a separate opt-in.
+- **AI Agent Operations** separates proven findings from potential leads, supports coordinated agent
+  runs, request replay, bounded custom checks, isolated sandbox work, scheduled monitoring, and
+  Markdown, JSON, or SARIF evidence export.
+- **Code Scan** supports a four-agent Red/Blue review for individual files and a bounded concurrent
+  project sweep for folders or zip files. Corrected source can be downloaded and findings can be
+  exported as SARIF 2.1.0 for CI and code-scanning platforms.
+- **Settings** shows provider, MFA, remediation, and learning readiness. Provider and GitHub keys
+  persist only in browser storage; they are sent to the runtime when used but are not stored in
+  Supabase.
+
 ## Production setup
 
 1. Apply all repository migrations with `supabase db push`. The Defender enterprise migration adds

@@ -500,6 +500,29 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
 .cs-rep th,.cs-rep td{border:1px solid var(--brd);padding:6px 10px;text-align:left;font-size:12.5px}
 .cs-rep th{background:var(--s2);color:var(--t0)}
 
+/* ---------- Shared security workspace layout ---------- */
+.sec-page{max-width:1380px;width:100%;box-sizing:border-box;--sec-line:#35353d;--sec-soft:#18181c}
+.sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:22px}
+.sec-head h1{font-size:32px;line-height:1.1;margin:4px 0 7px;letter-spacing:-.5px}
+.sec-head p{font-size:13.5px;color:var(--t2);max-width:720px;margin:0;line-height:1.55}
+.sec-head-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.sec-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+.sec-kpi{min-height:108px;padding:17px 18px;border:1px solid var(--sec-line);border-radius:14px;background:linear-gradient(145deg,var(--s1),var(--sec-soft));display:grid;align-content:space-between;box-sizing:border-box;min-width:0}
+.sec-kpi>span{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--t3);font-weight:700}
+.sec-kpi>strong{font-size:29px;line-height:1;color:var(--t0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sec-kpi>small{font-size:10.5px;color:var(--t3);line-height:1.4}
+.sec-kpi.good>strong{color:var(--grn)}.sec-kpi.warn>strong{color:var(--org)}.sec-kpi.danger>strong{color:var(--red)}
+.sec-card{background:linear-gradient(180deg,var(--s1),var(--s2));border:1px solid var(--sec-line);border-radius:14px;padding:20px;min-width:0;box-sizing:border-box;overflow:hidden}
+.sec-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.sec-card-head h2,.sec-card-head h3{font-size:16px;margin:0;display:flex;align-items:center;gap:8px}
+.sec-card-head small{color:var(--t3);font-size:10.5px}
+.sec-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(300px,.8fr);gap:16px;align-items:start}
+.sec-stack{display:grid;gap:16px;min-width:0}.sec-fine{font-size:11px;line-height:1.55;color:var(--t3)}
+.sec-checks{display:grid;gap:9px}.sec-check{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--brd)}.sec-check:last-child{border-bottom:0}.sec-check b{display:block;font-size:12.5px}.sec-check small{display:block;color:var(--t3);font-size:10.5px;margin-top:2px;line-height:1.45}.sec-check-mark{width:24px;height:24px;flex:0 0 24px;border-radius:8px;border:1px solid var(--brd2);display:grid;place-items:center;color:var(--grn);background:var(--bg);font-weight:800;font-size:11px}.sec-check-mark.warn{color:var(--org)}
+@media(max-width:1050px){.sec-grid{grid-template-columns:1fr}.sec-grid>.sec-stack:last-child{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.sec-head{align-items:stretch;flex-direction:column}.sec-head-actions{justify-content:flex-start}.sec-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.sec-grid>.sec-stack:last-child{grid-template-columns:1fr}}
+@media(max-width:480px){.sec-page{padding-left:14px;padding-right:14px}.sec-kpis{gap:8px}.sec-kpi{min-height:98px;padding:14px}.sec-card{padding:16px}.sec-head-actions .btn{flex:1}}
+
 /* ---------- Settings page redesign ---------- */
 .set-hero{position:relative;padding:30px 32px 28px;border-radius:18px;border:1px solid var(--brd);background:
   radial-gradient(800px 220px at 0% 0%,rgba(212,247,69,.10),transparent 60%),
@@ -569,6 +592,9 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
 .set-save-msg{font-size:12.5px;color:var(--grn);font-weight:500;display:inline-flex;align-items:center;gap:6px}
 .set-save-msg::before{content:"";display:none;width:6px;height:6px;border-radius:50%;background:var(--grn);box-shadow:0 0 8px rgba(74,222,128,.7)}
 .set-save-msg.shown::before{display:inline-block}
+.settings-security{margin-bottom:18px}.settings-security-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:14px;align-items:center}.settings-security-grid .sec-check{border:0;padding:0}.settings-security-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.settings-security-actions .btn{padding:8px 10px;font-size:11px}
+@media(max-width:1000px){.settings-security-grid{grid-template-columns:1fr 1fr}.settings-security-actions{justify-content:flex-start}}
+@media(max-width:620px){.set-hero{padding:22px 20px}.set-section{padding:18px 16px}.set-cta{align-items:stretch;flex-direction:column}.set-cta .btn{width:100%}.settings-security-grid{grid-template-columns:1fr}.prov-input{padding-right:94px}.settings-security-actions .btn{flex:1}}
 
 /* ============================================================
    DESIGN POLISH LAYER — global motion, depth, and feel
@@ -1705,7 +1731,9 @@ function go(p,d){
   if(POLL){clearInterval(POLL);POLL=null}
   if(EVT){EVT.close();EVT=null}
   closeDrawer();
-  ({dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
+  const result=({dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
+  const resetScroll=()=>requestAnimationFrame(()=>{M.scrollTop=0;window.scrollTo(0,0)});
+  if(result&&typeof result.finally==='function')result.finally(resetScroll);else resetScroll();
 }
 async function api(u,o){
   // A JSON string body sent without this header goes out as text/plain, which express.json() does
@@ -1832,7 +1860,7 @@ async function pgAgent(){
        ~1.5:1 against it — they read as nothing. And --t3 (#737373) on that background is ~4.0:1,
        under the 4.5:1 AA floor for small text, which is what made this page tiring to read.
        Cards get a real raised surface, fields a distinct well, and body text >=7:1. */
-    .agpg{--srf:#232329;--fld:#0e0e10;--line:#46464e;--tx:#ededf0;--tx2:#b8b8be;max-width:1180px;color:var(--tx)}
+    .agpg{--srf:#232329;--fld:#0e0e10;--line:#46464e;--tx:#ededf0;--tx2:#b8b8be;color:var(--tx)}
     /* Lift the dim global tokens for THIS page only. The result renderers (sandbox stdout, monitor
        rows, run history) inject their own markup using --t2/--t3/--brd, so overriding the variables
        here fixes that generated content too, instead of patching each template. */
@@ -1865,17 +1893,19 @@ async function pgAgent(){
     .agpg .ag-desc{color:var(--tx2);font-size:12.5px;line-height:1.65;margin:0}
     .agpg .ag-fine{color:var(--tx2);font-size:12px;line-height:1.5}
     .agpg .ag-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px}
-    @media(max-width:560px){.agpg .ag-grid{grid-template-columns:1fr}}
+    .ag-command{margin-bottom:4px}.ag-command .ag-run{max-width:none}.ag-command .ag-run input{min-width:220px}.ag-mode-map{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}.ag-mode-map button{text-align:left;padding:10px 11px;border:1px solid var(--line);border-radius:9px;background:var(--fld);color:var(--tx2);cursor:pointer;font-size:10.5px}.ag-mode-map button b{display:block;color:var(--tx);font-size:11.5px;margin-bottom:2px}
+    @media(max-width:760px){.ag-mode-map{grid-template-columns:1fr 1fr}}
+    @media(max-width:560px){.agpg .ag-grid{grid-template-columns:1fr}.ag-mode-map{grid-template-columns:1fr}.agpg .ag-run{display:grid}.agpg .ag-run input{min-width:0;width:100%}}
   </style>
-  <div class="pg agpg">
-    <h1>AI Agent</h1>
-    <p class="ag-sub">Point it at a target you own — it maps the app, runs proof-based checks, and reports. <b style="color:var(--t0)">Zero false positives.</b></p>
+  <div class="pg agpg sec-page">
+    <header class="sec-head"><div><div class="ey">Autonomous application security</div><h1>AI Agent Operations</h1><p>Map owned targets, coordinate proof-based security agents, investigate requests, generate remediation, and preserve evidence without mixing confirmed findings with unproven leads.</p></div><div class="sec-head-actions"><button class="btn btn-g" onclick="go('domains')">Verified targets</button><button class="btn btn-g" onclick="go('team')">Shared findings</button></div></header>
+    <div class="sec-kpis"><div class="sec-kpi good"><span>Finding standard</span><strong>proof</strong><small>confirmed exploitation required</small></div><div class="sec-kpi"><span>Autonomous roles</span><strong>5</strong><small>recon through remediation</small></div><div class="sec-kpi"><span>Evidence formats</span><strong>3</strong><small>Markdown · JSON · SARIF</small></div><div class="sec-kpi"><span>Safety model</span><strong>scoped</strong><small>verified assets and bounded tools</small></div></div>
 
-    <div class="ag-run">
+    <div class="sec-card ag-command"><div class="sec-card-head"><h2>${ico('target',{cls:'ico-sm'})} Target command</h2><small>ownership verification enforced</small></div><div class="ag-run">
       <input id="ag-target" placeholder="https://staging.yoursite.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')agentUnderstand()">
       <button class="btn btn-p" id="ag-go" onclick="agentUnderstand()">Analyze</button>
     </div>
-    <div class="ag-note">Verified targets only — see <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Domains</a>. Localhost is exempt.</div>
+    <div class="ag-note">Verified targets only — see <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Domains</a>. Localhost is exempt.</div><div class="ag-mode-map"><button onclick="agentOpenTool('ag-team-go')"><b>Autonomous team</b>Coordinated multi-agent engagement</button><button onclick="agentOpenTool('rp-url')"><b>Request repeater</b>Replay and inspect a single request</button><button onclick="agentOpenTool('cc-instruction')"><b>Bounded AI check</b>Create a potential lead safely</button><button onclick="agentOpenTool('mon-target')"><b>Continuous monitor</b>Track regressions over time</button></div></div>
 
     <div id="ag-out" class="ag-results"></div>
 
@@ -1989,6 +2019,15 @@ async function pgAgent(){
     </div>
   </div>`;
 }
+function agentOpenTool(id){
+  const el=$(id);if(!el)return;
+  const details=el.closest('details');if(details)details.open=true;
+  const target=($('ag-target')?.value||'').trim();
+  if(id==='mon-target'&&target&&!el.value)el.value=target;
+  if(id==='rp-url'&&target&&!el.value)el.value=target;
+  setTimeout(()=>{el.scrollIntoView({behavior:'smooth',block:'center'});try{el.focus()}catch{}},80);
+}
+
 async function runSandbox(){
   const target=($('ag-target')?.value||'').trim(),out=$('sb-out');if(!out)return;
   if(!target){out.innerHTML='<span style="color:var(--red);font-size:12px">Enter a target above first.</span>';return;}
@@ -2417,7 +2456,7 @@ async function agentPatch(i){
         <div style="display:grid;gap:6px;margin-top:8px">
           <input id="ag-pr-repo-${i}" placeholder="owner/repo" spellcheck="false" style="padding:8px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:7px;color:var(--t0);font-size:12px;outline:0">
           <input id="ag-pr-path-${i}" placeholder="path/to/the/file.js (real path in the repo)" spellcheck="false" style="padding:8px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:7px;color:var(--t0);font-size:12px;outline:0">
-          <input id="ag-pr-token-${i}" type="password" placeholder="GitHub token (repo scope) — stays in your browser" style="padding:8px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:7px;color:var(--t0);font-size:12px;outline:0">
+          <input id="ag-pr-token-${i}" type="password" placeholder="GitHub token — sent for this PR, never persisted server-side" style="padding:8px 10px;background:var(--bg);border:1px solid var(--brd2);border-radius:7px;color:var(--t0);font-size:12px;outline:0">
           <div><button class="btn btn-p" style="padding:6px 11px;font-size:12px" onclick="agentOpenPR(${i})">Open pull request</button></div>
           <div id="ag-pr-out-${i}" style="font-size:12px;word-break:break-all"></div>
         </div>
@@ -3024,6 +3063,18 @@ function pgNew(){
   WIZ_STEP=1;wizRender();
 }
 
+function scanPreset(name){
+  const target=$('turl')?.value.trim();
+  const presets={
+    balanced:{retryPreset:'default',warRoom:true,monitor:false,networkScan:false,focusUrls:'',avoidUrls:'/static/, /assets/'},
+    api:{retryPreset:'subscription',warRoom:true,monitor:false,networkScan:false,focusUrls:'/api/, /graphql',avoidUrls:'/docs/, /static/'},
+    continuous:{retryPreset:'default',warRoom:true,monitor:true,networkScan:false,focusUrls:'',avoidUrls:'/static/, /assets/'},
+  };
+  WIZ={...WIZ,...(presets[name]||presets.balanced)};
+  if(target)WIZ.targetUrl=target;
+  wizRender();
+}
+
 function wizRender(){
   const k=typeof csLoadKeys==='function'?csLoadKeys():{};
   const ready=['claude','openai','gemini','glm'].filter(p=>k[p]).length;
@@ -3040,10 +3091,12 @@ function wizRender(){
 
   let panel='';
   if(WIZ_STEP===1){
-    panel=`<div class="crd" style="padding:34px">
+    panel=`<div class="sec-card scan-panel">
       <div style="margin-bottom:8px;font-family:'Inter',system-ui,sans-serif;font-size:22px;font-weight:700;color:var(--t0);letter-spacing:-.3px">Where should we attack?</div>
       <p style="color:var(--t3);font-size:13px;margin-bottom:24px;line-height:1.55">Paste the target's URL. The pentest pipeline runs HTTP Recon → Pre-Recon → Deep Recon → Red Team → Blue Team → Verify → Chains → War Room → Report → Forensic.</p>
+      <div class="scan-presets"><button class="scan-preset ${!WIZ.monitor&&!WIZ.focusUrls?.includes('/graphql')?'on':''}" onclick="scanPreset('balanced')"><b>Balanced assessment</b><small>Full proof-based application test</small></button><button class="scan-preset ${WIZ.focusUrls?.includes('/graphql')?'on':''}" onclick="scanPreset('api')"><b>API intensive</b><small>Deep retries for API and GraphQL</small></button><button class="scan-preset ${WIZ.monitor?'on':''}" onclick="scanPreset('continuous')"><b>Continuous assurance</b><small>Baseline and regression monitoring</small></button></div>
       <div class="fg"><label for="turl">Target URL</label><input class="fi" type="url" id="turl" placeholder="https://example.com" autocomplete="url" spellcheck="false" value="${H(WIZ.targetUrl||'')}"></div>
+      <div id="wiz-error" class="scan-error" role="alert"></div>
       <div class="fg" style="margin-bottom:0"><label for="rpreset">Retry preset</label>
         <select class="fi" id="rpreset" style="cursor:pointer">
           <option value="fast" ${WIZ.retryPreset==='fast'?'selected':''}>Fast — 5 retries · best for spike testing</option>
@@ -3058,7 +3111,7 @@ function wizRender(){
     </div>`;
   }
   else if(WIZ_STEP===2){
-    panel=`<div class="crd" style="padding:34px">
+    panel=`<div class="sec-card scan-panel">
       <div style="margin-bottom:8px;font-family:'Inter',system-ui,sans-serif;font-size:22px;font-weight:700;color:var(--t0);letter-spacing:-.3px">How do agents authenticate?</div>
       <p style="color:var(--t3);font-size:13px;margin-bottom:24px;line-height:1.55">Optional: provide auth so the recon agents can reach behind login. Then narrow the scope so we don't waste budget on docs.</p>
 
@@ -3110,7 +3163,7 @@ function wizRender(){
     </div>`;
   }
   else {
-    panel=`<div class="crd" style="padding:34px">
+    panel=`<div class="sec-card scan-panel">
       <div style="margin-bottom:8px;font-family:'Inter',system-ui,sans-serif;font-size:22px;font-weight:700;color:var(--t0);letter-spacing:-.3px">Pick the engine, then launch.</div>
       <p style="color:var(--t3);font-size:13px;margin-bottom:24px;line-height:1.55">War-room mode auto-picks the strongest AI for each role from your provider keys. Single-LLM mode runs everything on Anthropic.</p>
 
@@ -3156,7 +3209,7 @@ function wizRender(){
         <div style="width:32px;height:32px;border-radius:8px;background:radial-gradient(circle at 30% 30%,#ff8888,var(--rt) 60%,#a02020);display:flex;align-items:center;justify-content:center;font-family:'Inter',system-ui,sans-serif;font-weight:800;color:#0b0b0b;flex-shrink:0">C</div>
         <div style="flex:1;min-width:200px">
           <div style="font-size:12.5px;font-weight:700;color:var(--t0)">Anthropic key required</div>
-          <div style="font-size:11.5px;color:var(--t3);margin-top:2px">Stored only in your browser — never uploaded.</div>
+          <div style="font-size:11.5px;color:var(--t3);margin-top:2px">Persisted only in your browser; sent to the scan runtime for this engagement and never stored in Supabase.</div>
         </div>
         <button class="btn btn-p" type="button" style="padding:8px 14px;font-size:12px" onclick="promptForAnthropicKey('Add your Anthropic key to unlock scans.').then(kk=>{if(kk)wizRender()})">+ Add key</button>
       </div>`:''}
@@ -3168,7 +3221,13 @@ function wizRender(){
     </div>`;
   }
 
-  M.innerHTML=`<div class="pg" style="max-width:760px">
+  const identityCount=['acAuser','acAck','acBuser','acBck','acAdmUser','acAdmCk'].reduce((n,key)=>n+(WIZ[key]?1:0),0);
+  const scopeLabel=WIZ.focusUrls?'focused':'full surface';
+  M.innerHTML=`<style>
+    .scan-layout{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:16px;align-items:start}.scan-main{min-width:0}.scan-panel{padding:28px}.scan-panel:hover{transform:none;box-shadow:none}.scan-side{position:sticky;top:18px}.scan-presets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:20px}.scan-preset{text-align:left;padding:12px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t1);cursor:pointer}.scan-preset.on{border-color:rgba(212,247,69,.45);background:var(--glow2)}.scan-preset b,.scan-preset small{display:block}.scan-preset b{font-size:11.5px}.scan-preset small{font-size:9.5px;color:var(--t3);line-height:1.4;margin-top:3px}.scan-error{min-height:0;color:var(--red);font-size:11.5px;margin:-12px 0 14px}.scan-policy{display:grid}.scan-policy-row{padding:10px 0;border-bottom:1px solid var(--brd)}.scan-policy-row:last-child{border-bottom:0}.scan-policy-row span,.scan-policy-row b{display:block}.scan-policy-row span{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em}.scan-policy-row b{font-size:12px;color:var(--t1);margin-top:3px;word-break:break-word}
+    @media(max-width:1050px){.scan-layout{grid-template-columns:1fr}.scan-side{position:static;display:grid;grid-template-columns:1fr 1fr;gap:16px}.scan-side .sec-card{height:100%}}
+    @media(max-width:680px){.scan-presets{grid-template-columns:1fr}.scan-side{grid-template-columns:1fr}.scan-panel{padding:18px}.scan-panel .fr{grid-template-columns:1fr}.wiz-step{font-size:10px;gap:6px}.wiz-step .num{width:27px;height:27px}.wiz-line{margin:0 6px;min-width:8px}}
+  </style><div class="pg sec-page">
     <!-- Hero -->
     <div style="position:relative;padding:24px 30px;border-radius:18px;overflow:hidden;background:linear-gradient(160deg,rgba(212,247,69,.08) 0%,rgba(96,165,250,.04) 100%),linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid var(--brd);margin-bottom:22px">
       <div style="position:absolute;inset:0;background-image:radial-gradient(500px 250px at 90% 10%,rgba(212,247,69,.12),transparent 60%);pointer-events:none"></div>
@@ -3178,9 +3237,10 @@ function wizRender(){
       </div>
     </div>
 
-    ${stepIndicator}
+    <div class="sec-kpis"><div class="sec-kpi"><span>Target scope</span><strong>${H(scopeLabel)}</strong><small>${H(WIZ.targetUrl||'awaiting target')}</small></div><div class="sec-kpi ${ready>=2?'good':'warn'}"><span>AI providers</span><strong>${ready}/4</strong><small>${ready>=2?'multi-provider war room ready':'add providers in Settings'}</small></div><div class="sec-kpi"><span>Test identities</span><strong>${Math.floor(identityCount/2)}</strong><small>two identities enable BOLA checks</small></div><div class="sec-kpi ${WIZ.monitor?'good':''}"><span>Assurance mode</span><strong>${WIZ.monitor?'continuous':'one-time'}</strong><small>${WIZ.networkScan?'network checks requested':'application testing'}</small></div></div>
+    <div class="scan-layout"><main class="scan-main">${stepIndicator}
     ${WIZ_STEP===1?'<div id="verify-banner" style="margin-bottom:18px"></div>':''}
-    ${panel}
+    ${panel}</main><aside class="sec-stack scan-side"><section class="sec-card"><div class="sec-card-head"><h3>${ico('shield-check',{cls:'ico-sm'})} Engagement policy</h3></div><div class="sec-checks"><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Ownership gate</b><small>External assets require domain verification and explicit authorization.</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Proof before finding</b><small>Unproven signals remain separate leads, never confirmed findings.</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Network opt-in</b><small>Service checks stay off until separately authorized.</small></div></div></div></section><section class="sec-card"><div class="sec-card-head"><h3>Current configuration</h3></div><div class="scan-policy"><div class="scan-policy-row"><span>Target</span><b>${H(WIZ.targetUrl||'Not selected')}</b></div><div class="scan-policy-row"><span>Authentication</span><b>${H(WIZ.authType||'public surface')}</b></div><div class="scan-policy-row"><span>Retry profile</span><b>${H(WIZ.retryPreset||'default')}</b></div><div class="scan-policy-row"><span>War room</span><b>${WIZ.warRoom===false?'single provider':'multi-provider'}</b></div></div></section></aside></div>
   </div>`;
   // Live wire-ups for the current step
   if(WIZ_STEP===2){
@@ -3214,7 +3274,16 @@ function wizCollect(){
 }
 function wizNext(){
   wizCollect();
-  if(WIZ_STEP===1&&!WIZ.targetUrl){const t=$('turl');if(t){t.focus();t.style.borderColor='var(--red)';setTimeout(()=>t.style.borderColor='',1600)}return}
+  if(WIZ_STEP===1){
+    const t=$('turl'),err=$('wiz-error');
+    let parsed=null;
+    try{parsed=new URL(WIZ.targetUrl)}catch{}
+    if(!WIZ.targetUrl||!parsed||!['http:','https:'].includes(parsed.protocol)){
+      if(err)err.textContent='Enter a complete HTTP or HTTPS target URL, for example https://staging.example.com.';
+      if(t){t.focus();t.style.borderColor='var(--red)';setTimeout(()=>t.style.borderColor='',1600)}
+      return;
+    }
+  }
   if(WIZ_STEP<3){WIZ_STEP++;wizRender()}
 }
 function wizBack(){wizCollect();if(WIZ_STEP>1){WIZ_STEP--;wizRender()}}
@@ -3223,6 +3292,11 @@ async function doScan(){
   // Read final-step toggle then commit everything from WIZ.
   wizCollect();
   if(!WIZ.targetUrl){WIZ_STEP=1;wizRender();return}
+  if(WIZ.networkScan&&!WIZ.networkAuthorized){alert('Confirm that you authorize network-level testing before launching network service checks.');return}
+  if(WIZ.alertWebhook){
+    try{const webhook=new URL(WIZ.alertWebhook);if(webhook.protocol!=='https:')throw new Error('HTTPS required')}
+    catch{alert('The monitoring webhook must be a complete HTTPS URL.');return}
+  }
   let keys=csLoadKeys();
   if(!keys.claude){
     const k=await promptForAnthropicKey('Anthropic API key required to launch a pentest.');
@@ -3350,7 +3424,7 @@ function promptForAnthropicKey(reason){
             <div style="font-size:11px;color:var(--t3);margin-top:2px">${H(reason||'Required to call Claude')}</div>
           </div>
         </div>
-        <p style="font-size:12.5px;color:var(--t2);line-height:1.6;margin-bottom:14px">Paste your Anthropic key. <strong style="color:var(--t1)">Stored only in your browser</strong> — never sent to our server.</p>
+        <p style="font-size:12.5px;color:var(--t2);line-height:1.6;margin-bottom:14px">Paste your Anthropic key. <strong style="color:var(--t1)">Persisted only in your browser</strong>; it is sent to the scan runtime when used and is never written to Supabase.</p>
         <input id="qk-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"
                style="width:100%;padding:12px 14px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-family:'JetBrains Mono',monospace;font-size:12.5px;outline:0;margin-bottom:6px">
         <div id="qk-err" style="font-size:11px;color:var(--red);min-height:14px;margin-bottom:8px"></div>
@@ -4571,7 +4645,7 @@ async function pgCfg(){
     :claudeOk?{cls:'',label:`${connectedCount} of ${PROVIDER_ROWS.length} providers connected`}
     :{cls:'warn',label:`${connectedCount} connected · Anthropic still required`};
 
-  M.innerHTML=`<div class="pg" style="max-width:1180px">
+  M.innerHTML=`<div class="pg sec-page settings-page">
     <section class="set-hero">
       <div class="set-hero-eyebrow">Workspace · Account</div>
       <h1>Settings</h1>
@@ -4582,6 +4656,9 @@ async function pgCfg(){
         ${lb.leaderboard?.length?`<span class="set-hero-pill muted"><span class="dot"></span>${totalRuns} scored war-room turns</span>`:''}
       </div>
     </section>
+
+    <div class="sec-kpis"><div class="sec-kpi ${claudeOk?'good':'warn'}"><span>Provider readiness</span><strong>${connectedCount}/4</strong><small>${claudeOk?'required fallback connected':'Anthropic key required'}</small></div><div class="sec-kpi ${CURRENT_USER?.mfaEnabled?'good':'warn'}"><span>Account MFA</span><strong>${CURRENT_USER?.mfaEnabled?'on':'off'}</strong><small>${CURRENT_USER?.mfaEnabled?'TOTP protects this account':'enable MFA for administrators'}</small></div><div class="sec-kpi ${ghTok?'good':''}"><span>Remediation PRs</span><strong>${ghTok?'ready':'not set'}</strong><small>${ghRepo?H(ghRepo):'optional GitHub integration'}</small></div><div class="sec-kpi"><span>Learning signal</span><strong>${totalRuns}</strong><small>scored war-room turns</small></div></div>
+    <section class="sec-card settings-security"><div class="sec-card-head"><h2>${ico('shield-check',{cls:'ico-sm'})} Account security baseline</h2><small>local and account controls</small></div><div class="settings-security-grid"><div class="sec-check"><span class="sec-check-mark ${CURRENT_USER?.mfaEnabled?'':'warn'}">${CURRENT_USER?.mfaEnabled?'✓':'!'}</span><div><b>Multi-factor authentication</b><small>${CURRENT_USER?.mfaEnabled?'Enabled for this account.':'Recommended for every owner and administrator.'}</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Provider credential isolation</b><small>Keys persist only in this browser and are never written to Supabase.</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Organization authorization</b><small>Server-side role checks protect scans, findings, Defender, and settings.</small></div></div><div class="settings-security-actions"><button class="btn btn-p" onclick="authMfaManage()">${CURRENT_USER?.mfaEnabled?'Manage MFA':'Enable MFA'}</button><button class="btn btn-g" onclick="settingsClearProviderKeys()">Clear browser keys</button></div></div></section>
 
     <section class="set-section">
       <div class="set-section-head">
@@ -4633,7 +4710,7 @@ async function pgCfg(){
 
     <div class="crd" style="padding:30px;margin-bottom:16px">
       <h3 class="h-display" style="font-size:17px;color:var(--t0);margin-bottom:4px">GitHub — auto-patch pull requests</h3>
-      <p style="font-size:12px;color:var(--t3);margin-bottom:16px;line-height:1.55">Add a token with <b>repo</b> scope so the AI Agent can open a pull request with a fix. Stored only in your browser (localStorage) — it never touches our server, and acts only on repos it already authorizes.</p>
+      <p style="font-size:12px;color:var(--t3);margin-bottom:16px;line-height:1.55">Add a token with <b>repo</b> scope so the AI Agent can open a pull request with a fix. It persists only in browser localStorage, is sent to the runtime for the requested PR, and is never stored server-side.</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
         <input id="s-gh-token" type="password" value="${H(ghTok)}" placeholder="ghp_… (repo scope)" autocomplete="off" spellcheck="false" style="flex:1;min-width:260px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
         <input id="s-gh-repo" value="${H(ghRepo)}" placeholder="default owner/repo (optional)" autocomplete="off" spellcheck="false" style="flex:1;min-width:200px;padding:11px 13px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-size:13px;outline:0">
@@ -4650,7 +4727,7 @@ async function pgCfg(){
       </div>
       <p style="font-size:12px;color:var(--t3);margin-bottom:18px;line-height:1.55">Every war-room turn updates each provider's score (length, speed, success). Top score → <span style="color:var(--rt)">Red Lead</span>; #2 → Red Operator; #3 → <span style="color:var(--bt)">Blue Architect</span>; #4 → Blue Engineer. ${totalRuns} turns recorded so far.</p>
 
-      <div style="background:var(--bg2);border:1px solid var(--brd);border-radius:var(--rs);overflow:hidden">
+      <div style="background:var(--bg2);border:1px solid var(--brd);border-radius:var(--rs);overflow:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12.5px">
           <thead><tr style="border-bottom:1px solid var(--brd)">
             <th style="padding:10px 14px;text-align:left;color:var(--t3);font-weight:700;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px">Rank</th>
@@ -4755,6 +4832,12 @@ async function pgCfg(){
     if(saved)m.classList.add('shown');else m.classList.remove('shown');
     setTimeout(()=>{m.textContent='';m.classList.remove('shown');pgCfg()},1400);
   };
+}
+
+function settingsClearProviderKeys(){
+  if(!confirm('Remove all AI provider keys stored in this browser? Running scans will require new keys.'))return;
+  try{localStorage.removeItem(KEYS_LS)}catch{}
+  pgCfg();
 }
 
 async function csResetLb(){
@@ -4874,11 +4957,12 @@ let CS_PROJECT={files:[],selected:new Set(),patches:new Map(),findings:[],scanni
 
 function renderCodeScanner(me){
   const limit=me.dailyLimit===-1?'∞':me.dailyLimit;
+  const providerCount=PROVIDER_ROWS.filter((provider)=>!!csLoadKeys()[provider.field]).length;
   const planBadge=me.isOwner
     ? `<span class="sev sev-medium">${ico('flame',{cls:'ico-sm'})}<span>Owner · ${me.used}/∞ today</span></span>`
     : `<span class="sev sev-info">${ico('circle-check',{cls:'ico-sm'})}<span>${H(me.label||'Subscribed')} · ${me.used}/${limit} today</span></span><button class="btn btn-g" style="padding:5px 11px;font-size:10.5px;margin-left:8px" onclick="csManageSub()">Manage</button>`;
 
-  M.innerHTML=`<div class="pg" style="max-width:1280px">
+  M.innerHTML=`<div class="pg sec-page code-page">
     <section class="cs-hero">
       <div class="section-eyebrow">Source-Code · Red vs Blue</div>
       <h1>Code Scan</h1>
@@ -4888,11 +4972,13 @@ function renderCodeScanner(me){
       </div>
     </section>
 
+    <div class="sec-kpis"><div class="sec-kpi ${providerCount?'good':'warn'}"><span>AI providers</span><strong>${providerCount}/4</strong><small>${providerCount?'war-room routing available':'add Anthropic to begin'}</small></div><div class="sec-kpi"><span>Specialist agents</span><strong>4</strong><small>two Red · two Blue</small></div><div class="sec-kpi"><span>Repository workers</span><strong>3</strong><small>bounded concurrent file scans</small></div><div class="sec-kpi good"><span>CI evidence</span><strong>SARIF</strong><small>GitHub and security tooling export</small></div></div>
+
     ${!csLoadKeys().claude?`<div class="empty-state" style="padding:18px 22px;min-height:0;text-align:left;flex-direction:row;gap:14px;border-style:solid;border-color:rgba(212,247,69,.32)">
       <div class="empty-state-icon" style="margin:0;width:42px;height:42px;border-radius:11px;color:var(--acc2)">${ico('key-round',{cls:'ico-lg'})}</div>
       <div style="flex:1;min-width:220px;text-align:left">
         <h3 style="margin:0 0 4px;font-size:14px">Anthropic key required</h3>
-        <p style="margin:0;font-size:12.5px;color:var(--t2);max-width:none">Stored only in your browser. Optional providers (OpenAI / Gemini / GLM) fall back to Claude.</p>
+        <p style="margin:0;font-size:12.5px;color:var(--t2);max-width:none">Persisted only in your browser and sent to the scan runtime when used. Optional providers fall back to Claude.</p>
       </div>
       <button class="btn btn-p" type="button" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" onclick="promptForAnthropicKey('Add your Anthropic key to unlock the war room.').then(k=>{if(k)pgCode()})">${ico('plus',{cls:'ico-sm'})} Add key</button>
     </div>`:''}
@@ -5099,7 +5185,7 @@ function csRenderQuickResult(r,filename,box){
       </div>
       <div style="display:flex;gap:8px">
         <button class="btn btn-g" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" onclick="csCopyText(window._csQuickFixed||'')">${ico('check',{cls:'ico-sm'})} Copy fixed</button>
-        <button class="btn btn-p" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" onclick="csDl(window._csQuickFixed||'',${JSON.stringify(filename)},'text/plain')">${ico('file-text',{cls:'ico-sm'})} Download fixed file</button>
+        <button class="btn btn-p" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" onclick="csDl(window._csQuickFixed||'',${JSON.stringify(filename)},'text/plain')">${ico('file-text',{cls:'ico-sm'})} Download fixed file</button><button class="btn btn-g" style="padding:8px 14px;font-size:12px" onclick="csExportSarif('result')">Export SARIF</button>
       </div>
     </div>
 
@@ -5364,7 +5450,7 @@ function csRenderProjectResult(){
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:240px">
-          <button class="btn btn-p" onclick="csDownloadFixedZip()" style="padding:14px 22px;font-size:14px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;gap:8px">${ico('inbox',{cls:'ico-sm'})} Download corrected code (.zip)</button>
+          <button class="btn btn-p" onclick="csDownloadFixedZip()" style="padding:14px 22px;font-size:14px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;gap:8px">${ico('inbox',{cls:'ico-sm'})} Download corrected code (.zip)</button><button class="btn btn-g" onclick="csExportSarif('project')">Export project SARIF</button>
           <span style="color:var(--t3);font-size:11px;text-align:center">All ${totalPatched} patched files in original folder structure</span>
         </div>
       </div>
@@ -5658,7 +5744,7 @@ function csRenderFinal(r){
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-g" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" ${fixedCode?'':'disabled'} onclick="csCopyText(window._csMultiFixed||'')">${ico('check',{cls:'ico-sm'})} Copy fixed</button>
-        <button class="btn btn-p" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" ${fixedCode?'':'disabled'} onclick="csDl(window._csMultiFixed||'',window._csMultiFixedName||'fixed.txt','text/plain')">${ico('file-text',{cls:'ico-sm'})} Download fixed file</button>
+        <button class="btn btn-p" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" ${fixedCode?'':'disabled'} onclick="csDl(window._csMultiFixed||'',window._csMultiFixedName||'fixed.txt','text/plain')">${ico('file-text',{cls:'ico-sm'})} Download fixed file</button><button class="btn btn-g" style="padding:8px 14px;font-size:12px" onclick="csExportSarif('result')">Export SARIF</button>
       </div>
     </div>
     <div class="crd" style="padding:0;margin-top:14px;overflow:hidden">
@@ -5743,6 +5829,25 @@ function csShowTab(tab){
     <div class="cs-rep">${md(rep)}</div>`;
     $('cs-rep-dl').onclick=()=>csDl(rep,'redblue-report.md','text/markdown');
   }
+}
+
+function csExportSarif(scope='result'){
+  const project=scope==='project';
+  const findings=project?(CS_PROJECT.findings||[]):(CS_RESULT?.redTeam?.findings||[]);
+  const defaultFile=project?'project':(($('cs-fname')?.value||window._csMultiFixedName||'source').trim());
+  const rules=new Map();
+  const results=findings.map((finding,index)=>{
+    const title=String(finding.title||finding.category||finding.id||`Finding ${index+1}`);
+    const ruleId=String(finding.id||finding.category||title).toLowerCase().replace(/[^a-z0-9._-]+/g,'-').replace(/^-|-$/g,'').slice(0,80)||`shannon-${index+1}`;
+    if(!rules.has(ruleId))rules.set(ruleId,{id:ruleId,name:title,shortDescription:{text:title},help:{text:String(finding.description||'Review and remediate this Shannon Code Scan finding.')}});
+    const line=Number(Array.isArray(finding.lines)?finding.lines[0]:finding.line)||1;
+    const uri=String(finding.file||defaultFile).replaceAll('\\','/');
+    const level=['critical','high'].includes(finding.severity)?'error':finding.severity==='medium'?'warning':'note';
+    return {ruleId,level,message:{text:String(finding.description||title)},locations:[{physicalLocation:{artifactLocation:{uri},region:{startLine:Math.max(1,line)}}}],properties:{severity:finding.severity||'info',category:finding.category||null,source:'Securovix Shannon Code Scan'}};
+  });
+  const sarif={$schema:'https://json.schemastore.org/sarif-2.1.0.json',version:'2.1.0',runs:[{tool:{driver:{name:'Securovix Shannon Code Scan',informationUri:'https://github.com/far-sae/Securovix-Shannon',rules:[...rules.values()]}},results}]};
+  csDl(JSON.stringify(sarif,null,2),project?'shannon-project-results.sarif':'shannon-code-results.sarif','application/sarif+json');
+  csToast(`Exported ${findings.length} finding${findings.length===1?'':'s'} to SARIF`,'success');
 }
 
 function csDl(text,name,mime){
