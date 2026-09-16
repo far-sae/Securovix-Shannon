@@ -85,6 +85,7 @@ import { diffToDelta, dueMonitors } from './monitor-schedule.mjs';
 import { applyLineFix, generatePatch } from './patch.mjs';
 import { runInSandbox, sandboxAvailable } from './sandbox.mjs';
 import {
+  appendOperationalEvent,
   consumeAuthToken,
   createAuthToken,
   deleteIntegration,
@@ -98,6 +99,7 @@ import {
   listDeliveries,
   listIntegrations,
   listJobs,
+  listOperationalEvents,
   readArtifact,
   saveIntegration,
   saveSsoIdentity,
@@ -252,23 +254,13 @@ if (!process.env.SHANNON_SESSION_SECRET) {
   );
 }
 
-// Two-tier plan system:
-//   starter — free, includes Dashboard + New Scan (no Code Scan access)
-//   pro     — £15/mo or £120/yr, adds the multi-LLM Code Scan war room
-const PLAN_LIMITS = { starter: 0, pro: -1 };
-const PLAN_LABELS = { starter: 'Starter', pro: 'Pro' };
-const PLAN_PRICING = {
-  starter: { monthly: 0, yearly: 0, currency: 'GBP' },
-  pro: { monthly: 15, yearly: 120, currency: 'GBP' },
-};
-const PLAN_FEATURES = {
-  starter: ['Dashboard', 'New Scan (web pentest)', 'Settings & API keys'],
-  pro: [
-    'Everything in Starter',
-    'Code Scan (multi-LLM war room)',
-    'Unlimited code scans',
-    'Findings + patches + report',
-  ],
+// Billing is disabled: every feature is currently available on one free, unlimited plan.
+const FREE_PLAN = {
+  plan: 'free',
+  label: 'Free',
+  pricing: { monthly: 0, yearly: 0, currency: 'GBP' },
+  features: ['Dashboard', 'Web pentest', 'AI Agent', 'Code Scan', 'Defender', 'Team Workspace'],
+  dailyLimit: -1,
 };
 
 // loadUsers / saveUsers now provided by db.mjs (Supabase or JSON-file backend).
@@ -488,10 +480,6 @@ app.use('/api', async (req, res, next) => {
   if (limited(req, res, `api:${user.id}`, 600, 5 * 60 * 1000)) return;
   next();
 });
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 async function dispatchEmail(payload, { orgId = null, userId = null } = {}) {
   if (isSupabase() && process.env.SHANNON_DURABLE_JOBS !== '0') {
@@ -1010,7 +998,7 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
-// Subscription — mock checkout (real Stripe integration goes here later)
+// Paid billing is deliberately absent until a real provider and webhook-backed entitlement flow exist.
 let OIDC_DISCOVERY_CACHE = null;
 async function oidcDiscovery() {
   const issuer = String(process.env.OIDC_ISSUER || '').replace(/\/$/, '');
@@ -1200,55 +1188,23 @@ app.delete('/scim/v2/Users/:id', (req, res) => {
 app.post('/api/auth/subscribe', (req, res) => {
   const u = getUser(req);
   if (!u) return res.status(401).json({ error: 'Login required.' });
-  const plan = String(req.body?.plan || '');
-  const cycle = req.body?.cycle === 'yearly' ? 'yearly' : 'monthly';
-  if (!PLAN_LIMITS.hasOwnProperty(plan)) return res.status(400).json({ error: 'Invalid plan.' });
-  const users = loadUsers();
-  const pricing = PLAN_PRICING[plan];
-  const renewsAt = plan === 'starter' ? null : Date.now() + (cycle === 'yearly' ? 365 : 30) * 86400_000;
-  users[u.id].subscription = {
-    plan,
-    label: PLAN_LABELS[plan],
-    dailyLimit: PLAN_LIMITS[plan],
-    cycle,
-    priceGbp: pricing[cycle],
-    currency: pricing.currency,
-    startedAt: Date.now(),
-    renewsAt,
-    used: 0,
-    day: todayKey(),
-  };
-  saveUsers(users);
-  res.json({ ok: true, user: publicUser(users[u.id]) });
+  res.status(410).json({ error: 'Paid subscriptions are disabled. Every feature is available on the free plan.' });
 });
 
 app.get('/api/auth/plans', (_req, res) => {
-  res.json({
-    plans: Object.keys(PLAN_LIMITS).map((p) => ({
-      plan: p,
-      label: PLAN_LABELS[p],
-      pricing: PLAN_PRICING[p],
-      features: PLAN_FEATURES[p],
-      dailyLimit: PLAN_LIMITS[p],
-    })),
-  });
+  res.json({ plans: [FREE_PLAN], billingEnabled: false });
 });
 
 app.post('/api/auth/cancel', (req, res) => {
   const u = getUser(req);
   if (!u) return res.status(401).json({ error: 'Login required.' });
-  const users = loadUsers();
-  users[u.id].subscription = null;
-  saveUsers(users);
-  res.json({ ok: true, user: publicUser(users[u.id]) });
+  res.status(410).json({ error: 'There is no paid subscription to cancel. Every feature is free.' });
 });
 
 // ============================================================
-// Code Scan (Red Team vs Blue Team) — owner bypass + paywall
+// Code Scan (Red Team vs Blue Team) — authenticated and free for workspace members.
 // ============================================================
 const CS_OWNER_DISABLED = process.env.SHANNON_OWNER_BYPASS === '0';
-const CS_OWNER_USAGE = { used: 0, day: '' };
-const csToday = () => new Date().toISOString().slice(0, 10);
 
 function csIsLocalhost(req) {
   if (CS_OWNER_DISABLED) return false;
@@ -1275,14 +1231,6 @@ function csSession(req) {
     used: 0,
   };
 }
-function csIncrementUserUsage(userId) {
-  const users = loadUsers();
-  if (!users[userId]?.subscription) return;
-  users[userId].subscription.used = (users[userId].subscription.used || 0) + 1;
-  users[userId].subscription.day = csToday();
-  saveUsers(users);
-}
-
 const CS_SYSTEM_PROMPT = `You are a dual-mode source-code security analyzer that runs both a Red Team (offensive) and a Blue Team (defensive) pass over the user's submitted code.
 
 RED TEAM job: enumerate every security flaw, bug, logic error, injection vector, authn/authz gap, data exposure, race condition, crypto misuse, dependency risk, or unsafe pattern. For each, give severity, category, the relevant line numbers, a clear description, and a concrete proof-of-concept exploit (payload, request, or attack steps).
@@ -1866,9 +1814,6 @@ async function csOrchestrate(runId) {
   run.status = 'complete';
   run.endedAt = Date.now();
 
-  if (run.session?.isOwner) CS_OWNER_USAGE.used += 1;
-  else if (run.session?.userId) csIncrementUserUsage(run.session.userId);
-
   csBc(run, { type: 'complete', result, agents });
 }
 
@@ -1877,10 +1822,7 @@ app.post('/api/code-scan/multi/start', (req, res) => {
   if (!ctx) return;
   if (limited(req, res, `code-scan:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
   const session = csSession(req);
-  if (!session) return res.status(401).json({ ok: false, error: 'Subscription required.' });
-  if (session.dailyLimit !== -1 && session.used >= session.dailyLimit) {
-    return res.status(429).json({ ok: false, error: `Daily scan limit reached for the ${session.label} plan.` });
-  }
+  if (!session) return res.status(401).json({ ok: false, error: 'Authentication required.' });
   const { code, filename, keys: bodyKeys } = req.body || {};
   if (!code || typeof code !== 'string') return res.status(400).json({ ok: false, error: 'Provide source code.' });
   if (code.length > 1_000_000)
@@ -2053,10 +1995,7 @@ app.post('/api/code-scan/quick', async (req, res) => {
   if (!ctx) return;
   if (limited(req, res, `quick-scan:${ctx.user.id}`, 60, 60 * 60 * 1000)) return;
   const session = csSession(req);
-  if (!session) return res.status(401).json({ ok: false, error: 'Subscription required.' });
-  if (session.dailyLimit !== -1 && session.used >= session.dailyLimit) {
-    return res.status(429).json({ ok: false, error: `Daily scan limit reached for the ${session.label} plan.` });
-  }
+  if (!session) return res.status(401).json({ ok: false, error: 'Authentication required.' });
   const { code, filename, keys: bodyKeys } = req.body || {};
   if (!code || typeof code !== 'string') return res.status(400).json({ ok: false, error: 'Provide source code.' });
   if (code.length > 1_000_000) return res.status(413).json({ ok: false, error: 'File exceeds 1MB.' });
@@ -2067,7 +2006,6 @@ app.post('/api/code-scan/quick', async (req, res) => {
 
   try {
     const out = await quickScanFile({ apiKey, code, filename });
-    if (!session.isOwner && session.userId) csIncrementUserUsage(session.userId);
     res.json({ ok: true, ...out });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message || String(err) });
@@ -4264,6 +4202,46 @@ app.get('/readyz', async (_req, res) => {
   }
 });
 
+app.get('/api/system/readiness', async (req, res) => {
+  const ctx = requirePermission(req, res, 'settings.manage');
+  if (!ctx) return;
+  const now = Date.now();
+  const strong = (value) => !!value && String(value).length >= 32 && !/replace-me|change-me/i.test(String(value));
+  const [database, workerEvents, edgeEvents, dockerSandbox, browserRuntime] = await Promise.all([
+    enterpriseHealth().catch((error) => ({ ok: false, error: error.message })),
+    listOperationalEvents('worker', 5).catch(() => []),
+    listOperationalEvents('edge', 5, ctx.org.id).catch(() => []),
+    sandboxAvailable().catch(() => false),
+    import('playwright').then(() => true).catch(() => false),
+  ]);
+  const workerHeartbeat = workerEvents.find((event) => ['worker.heartbeat', 'worker.started'].includes(event.event));
+  const edgeHeartbeat = edgeEvents.find((event) => event.event === 'edge.heartbeat');
+  const recent = (event, maxAge) => !!event && now - Number(event.createdAt || 0) <= maxAge;
+  const checks = [
+    { key: 'database', label: 'Supabase database', status: database.ok && database.backend === 'supabase' ? 'ready' : 'configure', detail: database.ok ? `Backend: ${database.backend}` : database.error },
+    { key: 'secrets', label: 'Session and encryption secrets', status: strong(process.env.SHANNON_SESSION_SECRET) && strong(process.env.SHANNON_ENCRYPTION_KEY) ? 'ready' : 'configure', detail: 'Two independent secrets of at least 32 characters' },
+    { key: 'public-url', label: 'Public application URL', status: /^https:\/\//.test(process.env.SHANNON_PUBLIC_URL || '') ? 'ready' : 'configure', detail: process.env.SHANNON_PUBLIC_URL || 'Set SHANNON_PUBLIC_URL' },
+    { key: 'email', label: 'Transactional email', status: process.env.RESEND_API_KEY || process.env.SHANNON_EMAIL_WEBHOOK_URL ? 'ready' : 'configure', detail: process.env.RESEND_API_KEY ? 'Resend configured' : process.env.SHANNON_EMAIL_WEBHOOK_URL ? 'HTTPS relay configured' : 'Verification, reset and invitation mail cannot be delivered' },
+    { key: 'worker', label: 'Durable background worker', status: recent(workerHeartbeat, 180_000) ? 'ready' : 'configure', detail: workerHeartbeat ? `Last heartbeat ${new Date(workerHeartbeat.createdAt).toISOString()}` : 'Deploy railway.worker.json' },
+    { key: 'browser', label: 'Headless browser proofs', status: process.env.SHANNON_HEADLESS === '1' && browserRuntime ? 'ready' : 'configure', detail: browserRuntime ? 'Set SHANNON_HEADLESS=1' : 'Playwright runtime is not installed' },
+    { key: 'sandbox', label: 'Isolated code sandbox', status: dockerSandbox ? 'ready' : 'optional', detail: dockerSandbox ? 'Docker isolation available' : 'Requires a Docker-capable dedicated runner; custom checks remain available' },
+    { key: 'edge', label: 'Public Defender Edge', status: recent(edgeHeartbeat, 300_000) ? 'ready' : 'optional', detail: edgeHeartbeat ? `Last heartbeat ${new Date(edgeHeartbeat.createdAt).toISOString()}` : 'Deploy railway.edge.json when public reverse-proxy protection is required' },
+    { key: 'sso', label: 'Company SSO', status: process.env.OIDC_ISSUER && process.env.OIDC_CLIENT_ID && process.env.OIDC_CLIENT_SECRET ? 'ready' : 'optional', detail: process.env.OIDC_ISSUER || 'OIDC is optional' },
+    { key: 'scim', label: 'SCIM provisioning', status: strong(process.env.SHANNON_SCIM_TOKEN) && process.env.SHANNON_SCIM_ORG_ID ? 'ready' : 'optional', detail: process.env.SHANNON_SCIM_ORG_ID || 'SCIM is optional' },
+    { key: 'metrics', label: 'Protected metrics', status: strong(process.env.SHANNON_METRICS_TOKEN) ? 'ready' : 'configure', detail: 'Prometheus endpoint bearer token' },
+  ];
+  const requiredKeys = new Set(['database', 'secrets', 'public-url', 'email', 'worker', 'browser', 'metrics']);
+  const required = checks.filter((item) => requiredKeys.has(item.key));
+  res.json({
+    ok: required.every((item) => item.status === 'ready'),
+    ready: required.filter((item) => item.status === 'ready').length,
+    required: required.length,
+    checks,
+    generatedAt: now,
+    organization: { id: ctx.org.id, name: ctx.org.name },
+  });
+});
+
 app.get('/metrics', async (req, res) => {
   const configured = String(process.env.SHANNON_METRICS_TOKEN || '');
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -4440,12 +4418,26 @@ app.patch('/api/defender/events/:id', (req, res) => {
 // Durable hostname → origin mappings for the public multi-tenant proxy. The edge can pull this list
 // with a scoped SDK credential and keeps its last valid routes if the dashboard becomes unavailable.
 
+const EDGE_HEARTBEATS = new Map();
+
 app.get('/api/defender/edge/routes', (req, res) => {
   const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
   const ctx = principal ? null : requirePermission(req, res, 'defender.manage');
   if (!principal && !ctx) return;
   const orgId = principal?.orgId || ctx.org.id;
   const list = listEdgeRoutes({ orgId }).map((v) => ({ host: v.host, origin: v.origin, mode: v.mode, createdAt: v.createdAt }));
+  if (principal && Date.now() - Number(EDGE_HEARTBEATS.get(orgId) || 0) > 60_000) {
+    EDGE_HEARTBEATS.set(orgId, Date.now());
+    appendOperationalEvent({
+      service: 'edge',
+      instanceId: String(req.headers['x-shannon-edge-instance'] || req.headers['user-agent'] || 'edge').slice(0, 160),
+      level: 'info',
+      event: 'edge.heartbeat',
+      orgId,
+      metadata: { routes: list.length },
+      createdAt: Date.now(),
+    }).catch(() => {});
+  }
   res.json({ routes: list });
 });
 

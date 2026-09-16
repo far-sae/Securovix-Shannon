@@ -498,6 +498,7 @@ try {
     label: 'scan',
     workspaceDir: wsDir,
     maxPages: 40,
+    headless: process.env.SHANNON_HEADLESS === '1',
     accessControl,
     monitor: process.env.SHANNON_MONITOR === '1', // continuous monitoring (baseline + diff + alert)
     networkScan: process.env.SHANNON_NETWORK_SCAN === '1', // opt-in unauth-service check on the verified host

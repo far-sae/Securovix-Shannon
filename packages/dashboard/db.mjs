@@ -76,6 +76,7 @@ function ensureHome() {
 async function sb(path, opts = {}) {
   const r = await fetch(SUPABASE_URL + '/rest/v1' + path, {
     ...opts,
+    signal: opts.signal || AbortSignal.timeout(Number(process.env.SHANNON_DB_TIMEOUT_MS || 15_000)),
     headers: {
       apikey: SUPABASE_KEY,
       authorization: 'Bearer ' + SUPABASE_KEY,

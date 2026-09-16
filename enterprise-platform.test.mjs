@@ -12,6 +12,7 @@ process.env.NODE_ENV = 'test';
 
 const security = await import('./packages/dashboard/enterprise-security.mjs');
 const database = await import('./packages/dashboard/enterprise-db.mjs');
+const worker = await import('./packages/dashboard/worker.mjs');
 
 after(() => rmSync(dataDir, { recursive: true, force: true }));
 
@@ -80,4 +81,25 @@ test('durable jobs are idempotent, claimed once and recovered after a stale leas
   const recovered = await database.getJob(first.id);
   assert.equal(recovered.status, 'queued');
   assert.equal(recovered.lockedBy, null);
+});
+
+test('operational heartbeats are queryable and worker health is explicit', async () => {
+  await database.appendOperationalEvent({
+    service: 'worker',
+    instanceId: 'worker-test',
+    level: 'info',
+    event: 'worker.heartbeat',
+    metadata: { activeJobs: 0 },
+    createdAt: Date.now(),
+  });
+  const events = await database.listOperationalEvents('worker', 5);
+  assert.equal(events[0].event, 'worker.heartbeat');
+  assert.equal(events[0].instanceId, 'worker-test');
+
+  const health = worker.createWorkerHealthServer();
+  await new Promise((resolve) => health.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${health.address().port}`;
+  assert.equal((await fetch(`${base}/healthz`)).status, 200);
+  assert.equal((await fetch(`${base}/readyz`)).status, 503);
+  await new Promise((resolve) => health.close(resolve));
 });

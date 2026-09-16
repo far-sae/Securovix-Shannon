@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +28,8 @@ const POLL_MS = Math.max(500, Number(process.env.SHANNON_WORKER_POLL_MS || 2500)
 const MAX_ARTIFACT_BYTES = Math.max(1024, Number(process.env.SHANNON_MAX_ARTIFACT_BYTES || 100 * 1024 * 1024));
 let stopping = false;
 const activeChildren = new Set();
+const workerStatus = { ready: false, startedAt: Date.now(), lastPollAt: null, activeJobs: 0, database: null };
+let healthServer = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -250,7 +253,7 @@ async function handle(job) {
 }
 
 export async function runWorker() {
-  await enterpriseHealth();
+  workerStatus.database = await enterpriseHealth();
   await requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000));
   const retention = {
     authTokenDays: Number(process.env.SHANNON_AUTH_TOKEN_RETENTION_DAYS || 7),
@@ -259,7 +262,7 @@ export async function runWorker() {
     completedJobDays: Number(process.env.SHANNON_JOB_RETENTION_DAYS || 30),
     artifactDays: Number(process.env.SHANNON_ARTIFACT_RETENTION_DAYS || 90),
   };
-  await purgeExpiredEnterpriseData(retention).catch((error) =>
+  purgeExpiredEnterpriseData(retention).catch((error) =>
     console.error('[worker] retention failed:', error.message),
   );
   await appendOperationalEvent({
@@ -269,9 +272,23 @@ export async function runWorker() {
     event: 'worker.started',
     metadata: { concurrency: CONCURRENCY },
   }).catch(() => {});
+  workerStatus.ready = true;
   let lastMaintenance = Date.now();
   let lastRetention = Date.now();
+  let lastHeartbeat = 0;
   while (!stopping) {
+    workerStatus.lastPollAt = Date.now();
+    if (Date.now() - lastHeartbeat > 60_000) {
+      await appendOperationalEvent({
+        service: 'worker',
+        instanceId: INSTANCE,
+        level: 'info',
+        event: 'worker.heartbeat',
+        metadata: { concurrency: CONCURRENCY, activeJobs: activeChildren.size },
+        createdAt: Date.now(),
+      }).catch(() => {});
+      lastHeartbeat = Date.now();
+    }
     if (Date.now() - lastMaintenance > 60_000) {
       await requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000)).catch(() => {});
       lastMaintenance = Date.now();
@@ -287,12 +304,38 @@ export async function runWorker() {
       await sleep(POLL_MS);
       continue;
     }
+    workerStatus.activeJobs = jobs.length;
     await Promise.all(jobs.map(handle));
+    workerStatus.activeJobs = 0;
   }
+  workerStatus.ready = false;
+}
+
+export function createWorkerHealthServer() {
+  return http.createServer(async (req, res) => {
+    if (!['/healthz', '/readyz'].includes(req.url || '')) {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, error: 'not found' }));
+    }
+    const stale = !workerStatus.lastPollAt || Date.now() - workerStatus.lastPollAt > Math.max(30_000, POLL_MS * 5);
+    const ready = workerStatus.ready && !stale;
+    res.writeHead(req.url === '/readyz' && !ready ? 503 : 200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: req.url === '/healthz' ? true : ready,
+      service: 'worker',
+      instance: INSTANCE,
+      uptime: Math.floor((Date.now() - workerStatus.startedAt) / 1000),
+      lastPollAt: workerStatus.lastPollAt,
+      activeJobs: workerStatus.activeJobs,
+      database: workerStatus.database,
+    }));
+  });
 }
 
 function shutdown() {
   stopping = true;
+  workerStatus.ready = false;
+  healthServer?.close();
   for (const child of activeChildren) {
     try {
       child.kill('SIGTERM');
@@ -303,8 +346,19 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 if (process.argv[1]?.endsWith('worker.mjs')) {
+  const port = Number(process.env.PORT || 8080);
+  healthServer = createWorkerHealthServer().listen(port, '0.0.0.0', () =>
+    console.log(`[worker] health server listening on 0.0.0.0:${port}`),
+  );
+  healthServer.once('error', (error) => {
+    console.error('[worker] health server failed:', error);
+    process.exitCode = 1;
+    shutdown();
+  });
   runWorker().catch((error) => {
     console.error('[worker] fatal:', error);
+    workerStatus.ready = false;
+    healthServer?.close();
     process.exitCode = 1;
   });
 }

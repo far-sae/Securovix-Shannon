@@ -49,6 +49,7 @@ async function rest(path, opts = {}) {
   if (!USE_SUPABASE) throw new Error('Supabase is not configured');
   const response = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...opts,
+    signal: opts.signal || AbortSignal.timeout(Number(process.env.SHANNON_DB_TIMEOUT_MS || 15_000)),
     headers: {
       apikey: SUPABASE_KEY,
       authorization: `Bearer ${SUPABASE_KEY}`,
@@ -496,6 +497,29 @@ export async function appendOperationalEvent(event) {
     ]),
   });
   return event;
+}
+
+export async function listOperationalEvents(service = null, limit = 100, orgId = null) {
+  if (!USE_SUPABASE) {
+    return local.operations
+      .filter((item) => (!service || item.service === service) && (!orgId || item.orgId === orgId))
+      .slice(0, Math.min(500, limit));
+  }
+  const serviceFilter = service ? `service=eq.${encodeURIComponent(service)}&` : '';
+  const orgFilter = orgId ? `org_id=eq.${encodeURIComponent(orgId)}&` : '';
+  const rows = await rest(
+    `/shannon_operational_events?${serviceFilter}${orgFilter}order=created_at.desc&limit=${Math.min(500, limit)}`,
+  );
+  return (rows || []).map((row) => ({
+    id: row.id,
+    service: row.service,
+    instanceId: row.instance_id || null,
+    level: row.level,
+    event: row.event,
+    orgId: row.org_id || null,
+    metadata: row.metadata || {},
+    createdAt: Number(row.created_at),
+  }));
 }
 
 export async function saveArtifact(record, content) {

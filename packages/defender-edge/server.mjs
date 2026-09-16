@@ -25,6 +25,7 @@ const PORT = process.env.PORT || 8080;
 const HOST = process.env.SHANNON_EDGE_BIND || '0.0.0.0';
 const DASHBOARD = (process.env.SHANNON_DASHBOARD_URL || '').replace(/\/$/, '');
 const API_KEY = process.env.SHANNON_EDGE_API_KEY || '';
+const INSTANCE = process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_DEPLOYMENT_ID || 'edge';
 const ROUTES_REFRESH_MS = Number(process.env.SHANNON_EDGE_REFRESH_MS || 60_000);
 const MAX_CLASSIFIED_BODY = 1024 * 1024;
 
@@ -90,7 +91,7 @@ async function refreshRoutes() {
   if (!DASHBOARD || !API_KEY) return;
   try {
     const r = await fetch(`${DASHBOARD}/api/defender/edge/routes`, {
-      headers: { authorization: `Bearer ${API_KEY}` },
+      headers: { authorization: `Bearer ${API_KEY}`, 'x-shannon-edge-instance': INSTANCE },
     });
     if (!r.ok) return;
     const { routes: list } = await r.json();

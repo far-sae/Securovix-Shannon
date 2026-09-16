@@ -174,12 +174,41 @@ test('MFA supports password reauthentication, TOTP login, recovery rotation and 
   assert.equal(finalStatus.json.recoveryCodesRemaining, 0);
 });
 
+test('production readiness reports real dependencies and billing never grants fake entitlements', async () => {
+  const owner = await signup('readiness-owner@example.test', 'Readiness Owner');
+  const readiness = await request('/api/system/readiness', { cookie: owner.cookie });
+  assert.equal(readiness.response.status, 200);
+  assert.ok(Array.isArray(readiness.json.checks));
+  assert.ok(readiness.json.checks.some((item) => item.key === 'worker'));
+  assert.ok(readiness.json.checks.some((item) => item.key === 'browser'));
+  assert.ok(readiness.json.checks.some((item) => item.key === 'sandbox'));
+
+  const plans = await request('/api/auth/plans');
+  assert.equal(plans.response.status, 200);
+  assert.equal(plans.json.billingEnabled, false);
+  assert.deepEqual(plans.json.plans.map((plan) => plan.plan), ['free']);
+
+  const subscribe = await request('/api/auth/subscribe', {
+    method: 'POST',
+    cookie: owner.cookie,
+    body: { plan: 'pro', cycle: 'monthly' },
+  });
+  assert.equal(subscribe.response.status, 410);
+});
+
 test('Defender supports incident workflow and revocable SDK credentials', async () => {
   const owner = await signup('defender-owner@example.test', 'Defender Owner');
 
   const sdk = await request('/api/defender/sdk', { cookie: owner.cookie });
   assert.equal(sdk.response.status, 200);
   assert.match(sdk.json.apiKey, /^sk_/);
+
+  const edgeRoutes = await request('/api/defender/edge/routes', {
+    headers: { authorization: `Bearer ${sdk.json.apiKey}`, 'x-shannon-edge-instance': 'edge-test' },
+  });
+  assert.equal(edgeRoutes.response.status, 200);
+  const readiness = await request('/api/system/readiness', { cookie: owner.cookie });
+  assert.equal(readiness.json.checks.find((item) => item.key === 'edge').status, 'ready');
 
   const reported = await request('/api/defender/report', {
     method: 'POST',

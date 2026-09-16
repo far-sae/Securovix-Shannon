@@ -95,6 +95,7 @@ audit metadata.
 
 - Locally connected loopback Defender proxies are process-bound. Use the durable public Defender edge
   or the in-app SDK for production traffic.
-- Scan artifacts still require persistent object storage when the hosting filesystem is ephemeral.
+- Durable worker scans upload artifacts to the private Supabase Storage bucket and serve downloads
+  through short-lived signed URLs. Local synchronous scans remain filesystem-backed development mode.
 - The scheduler is single-process. Multi-instance deployments should move scheduled work and scan
   execution to a durable queue before horizontal scaling.
