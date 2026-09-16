@@ -408,6 +408,22 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
   .cs-arena{grid-template-columns:1fr!important}
 }
 
+@media(max-width:700px){
+  .app{display:block}
+  .sidebar{width:100%;height:auto;max-height:none;position:sticky;top:0;z-index:110;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;overflow:visible;border-right:0;border-bottom:1px solid var(--brd);box-shadow:0 8px 28px rgba(0,0,0,.34)}
+  .logo{padding:8px 11px;border:0;gap:8px}.logo-mark{width:30px;height:30px}.logo h1{font-size:13px}.logo span{display:none}
+  .nav{display:flex;gap:4px;min-width:0;overflow-x:auto;padding:7px 9px;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}
+  .nav button{width:auto;min-width:max-content;margin:0;padding:9px 10px;font-size:11px;gap:6px}
+  .slist,#user-pill{display:none!important}
+  .main{width:100%;overflow:visible}
+}
+@media(max-width:480px){
+  .sidebar{display:block}
+  .sidebar .logo{display:none}
+  .nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;overflow:visible;padding:6px}
+  .nav button{min-width:0;justify-content:center;padding:7px 3px;font-size:9px;line-height:1.15;white-space:normal}
+}
+
 /* ===== Code Scan multi-agent ===== */
 .cs-grid{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:18px;align-items:start}
 .cs-drop{position:relative;border:1.5px dashed var(--brd2);border-radius:12px;padding:0;background:var(--bg);transition:all var(--fast);overflow:hidden}
@@ -1726,29 +1742,50 @@ async function pgTeam(){
     ]);
     const canManage=['owner','admin'].includes(role),canProject=['owner','admin','engineer'].includes(role);
     const canTriage=['owner','admin','engineer','analyst'].includes(role);
-    const stat=(label,value,color='var(--t0)')=>`<div class="crd" style="padding:18px"><div style="font-size:28px;font-weight:800;color:${color}">${value}</div><div style="font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.7px">${label}</div></div>`;
-    M.innerHTML=`<div class="pg" style="max-width:1200px">
-      <div class="ph"><div><div class="ey">Security operations</div><h1>Team Workspace</h1><p>Shared projects, ownership, finding lifecycle, and audit history.</p></div>
-        <div style="display:flex;gap:8px;align-items:center"><select class="fi" style="min-width:220px" onchange="teamSwitch(this.value)">${tc.organizations.map(o=>`<option value="${H(o.id)}" ${o.id===orgId?'selected':''}>${H(o.name)} · ${H(o.role)}</option>`).join('')}</select><span class="bx bx-g">${H(role)}</span></div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">${stat('members',mm.members.length)}${stat('projects',pp.projects.length)}${stat('open findings',ff.findings.filter(f=>!['resolved','false-positive'].includes(f.status)).length,'var(--org)')}${stat('critical',ff.findings.filter(f=>f.severity==='critical'&&f.status!=='resolved').length,'var(--red)')}</div>
-      <div style="display:grid;grid-template-columns:1.2fr .8fr;gap:16px;align-items:start">
-        <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:14px">Finding queue</h2>
-          <div style="display:grid;gap:8px">${ff.findings.length?ff.findings.map(f=>`<div style="border:1px solid var(--brd);border-radius:10px;padding:12px;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center">
-            <span class="bx ${f.severity==='critical'?'bx-r':f.severity==='high'?'bx-o':'bx-b'}">${H(f.severity)}</span><div><b>${H(f.title)}</b><div style="font-size:11px;color:var(--t3);margin-top:3px">${H(f.source)} · ${H(f.assigneeUserId||'unassigned')}</div></div>
-            ${canTriage?`<select class="fi" style="width:auto;padding:7px" onchange="teamFindingStatus('${H(orgId)}','${H(f.id)}',this.value)">${['new','triaged','assigned','in-progress','ready-for-retest','resolved','risk-accepted','false-positive'].map(s=>`<option ${s===f.status?'selected':''}>${s}</option>`).join('')}</select>`:`<span class="bx">${H(f.status)}</span>`}</div>`).join(''):'<div class="empty" style="padding:28px"><p>No shared findings yet. Confirmed scan findings appear here automatically.</p></div>'}</div>
-        </section>
-        <div style="display:grid;gap:16px">
-          <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:12px">Members</h2>${mm.members.map(m=>`<div style="display:flex;gap:9px;align-items:center;padding:8px 0;border-bottom:1px solid var(--brd)"><span style="flex:1"><b>${H(m.name||m.email)}</b><small style="display:block;color:var(--t3)">${H(m.email)}</small></span><span class="bx">${H(m.role)}</span></div>`).join('')}
-            ${canManage?`<div style="display:flex;gap:7px;margin-top:12px"><input class="fi" id="tm-email" placeholder="teammate@example.com"><select class="fi" id="tm-role"><option>engineer</option><option>analyst</option><option>developer</option><option>viewer</option><option>admin</option></select><button class="btn btn-p" onclick="teamInviteMember('${H(orgId)}')">Invite</button></div>`:''}</section>
-          <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:12px">Projects</h2>${pp.projects.map(p=>`<div style="padding:8px 0;border-bottom:1px solid var(--brd)"><b>${H(p.name)}</b><span class="bx" style="float:right">${H(p.criticality)}</span><div style="font-size:11px;color:var(--t3)">${H(p.environment)}</div></div>`).join('')||'<p style="color:var(--t3)">No projects yet.</p>'}
-            ${canProject?`<div style="display:flex;gap:7px;margin-top:12px"><input class="fi" id="tp-name" placeholder="Project name"><select class="fi" id="tp-criticality"><option>medium</option><option>high</option><option>critical</option><option>low</option></select><button class="btn btn-p" onclick="teamCreateProject('${H(orgId)}')">Create</button></div>`:''}</section>
-          <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:12px">Recent audit</h2>${aa.events.slice(0,12).map(e=>`<div style="font-size:11px;padding:6px 0;border-bottom:1px solid var(--brd)"><b>${H(e.action)}</b><span style="float:right;color:var(--t3)">${fmtDate(e.createdAt)}</span><div style="color:var(--t3)">${H(e.resourceType)} ${H(e.resourceId||'')}</div></div>`).join('')||'<p style="color:var(--t3)">No audit events yet.</p>'}</section>
-          ${canManage?`<section class="crd" style="padding:22px"><div style="display:flex;align-items:center"><h2 style="font-size:18px;flex:1">Integrations</h2><button class="btn btn-g" onclick="teamAddIntegration('${H(orgId)}')">Add</button></div>${ii.integrations.map(i=>`<div style="padding:9px 0;border-bottom:1px solid var(--brd);display:flex;gap:8px;align-items:center"><span style="flex:1"><b>${H(i.name)}</b><small style="display:block;color:var(--t3)">${H(i.type)} · ${i.enabled?'enabled':'disabled'}</small></span><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Test</button><button class="btn btn-g" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Delete</button></div>`).join('')||'<p style="color:var(--t3);margin-top:10px">No integrations configured.</p>'}</section>`:''}
-          <section class="crd" style="padding:22px"><h2 style="font-size:18px;margin-bottom:12px">Recent jobs</h2>${jj.jobs.slice(0,12).map(j=>`<div style="font-size:11px;padding:7px 0;border-bottom:1px solid var(--brd)"><b>${H(j.type)}</b><span class="bx" style="float:right">${H(j.status)}</span><div style="color:var(--t3)">${H(j.id)} · attempt ${j.attempts}/${j.maxAttempts}</div></div>`).join('')||'<p style="color:var(--t3)">No durable jobs yet.</p>'}</section>
-        </div>
-      </div>
-      <div style="margin-top:16px"><button class="btn btn-g" onclick="teamCreateOrg()">Create another organization</button></div>
+    const open=ff.findings.filter(f=>!['resolved','false-positive','risk-accepted'].includes(f.status));
+    const critical=open.filter(f=>f.severity==='critical').length;
+    const activeWork=open.filter(f=>['assigned','in-progress','ready-for-retest'].includes(f.status)).length;
+    const failedJobs=jj.jobs.filter(j=>['failed','dead-letter'].includes(j.status)).length;
+    const kpi=(label,value,tone,detail)=>`<article class="team-kpi ${tone||''}"><span>${H(label)}</span><strong>${value}</strong><small>${H(detail)}</small></article>`;
+    const statuses=['new','triaged','assigned','in-progress','ready-for-retest','resolved','risk-accepted','false-positive'];
+    M.innerHTML=`<style>
+      .team-pg{max-width:1380px;width:100%;box-sizing:border-box;--team-line:#35353d;--team-soft:#18181c}
+      .team-head{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:22px}
+      .team-head h1{font-size:32px;line-height:1.1;margin:4px 0 7px}.team-head p{color:var(--t2);font-size:13.5px;margin:0;max-width:650px}
+      .team-org{display:flex;align-items:center;justify-content:flex-end;gap:9px;min-width:0}.team-org .fi{width:min(320px,34vw);min-width:220px}
+      .team-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+      .team-kpi{min-height:112px;padding:17px 18px;background:linear-gradient(145deg,var(--s1),var(--team-soft));border:1px solid var(--team-line);border-radius:14px;display:grid;align-content:space-between;box-sizing:border-box;overflow:hidden}
+      .team-kpi span{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--t3);font-weight:700}.team-kpi strong{font-size:31px;line-height:1;color:var(--t0)}.team-kpi small{font-size:11px;color:var(--t3)}
+      .team-kpi.warn strong{color:var(--org)}.team-kpi.danger strong{color:var(--red)}.team-kpi.good strong{color:var(--grn)}
+      .team-layout{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(330px,.85fr);gap:16px;align-items:start}.team-stack{display:grid;gap:16px;min-width:0}
+      .team-card{background:linear-gradient(180deg,var(--s1),var(--s2));border:1px solid var(--team-line);border-radius:14px;padding:20px;min-width:0;box-sizing:border-box;overflow:hidden}
+      .team-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.team-card-head h2{font-size:16px;margin:0;display:flex;align-items:center;gap:8px}.team-card-head small{color:var(--t3);font-size:11px}
+      .team-findings{display:grid;gap:8px}.team-finding{display:grid;grid-template-columns:80px minmax(0,1fr) minmax(145px,auto);gap:12px;align-items:center;padding:13px;border:1px solid var(--brd);border-radius:10px;background:rgba(0,0,0,.12)}
+      .team-finding-main{min-width:0}.team-finding-main b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.team-meta{font-size:10.5px;color:var(--t3);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.team-finding .fi{width:100%;padding:7px 9px;font-size:11px}
+      .team-list{display:grid}.team-row{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 0;border-bottom:1px solid var(--brd)}.team-row:last-child{border-bottom:0}.team-row-main{flex:1;min-width:0}.team-row-main b{display:block;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.team-row-main small{display:block;color:var(--t3);font-size:10.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .team-avatar{width:30px;height:30px;flex:0 0 30px;border-radius:9px;background:var(--bg);border:1px solid var(--brd2);display:grid;place-items:center;color:var(--acc2);font-weight:800;font-size:11px;text-transform:uppercase}
+      .team-form{display:grid;grid-template-columns:minmax(0,1fr) 116px auto;gap:8px;margin-top:13px;align-items:stretch}.team-form .fi,.team-form .btn{width:100%;min-width:0;box-sizing:border-box}.team-form .btn{white-space:nowrap}
+      .team-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.team-actions .btn{padding:6px 9px;font-size:10.5px}
+      .team-ops{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}.team-scroll{max-height:390px;overflow:auto;padding-right:3px}
+      .team-empty{padding:25px 12px;text-align:center;color:var(--t3);font-size:12px;border:1px dashed var(--brd);border-radius:10px}.team-footer{display:flex;justify-content:flex-end;margin-top:16px}
+      @media(max-width:1080px){.team-layout{grid-template-columns:1fr}.team-side{grid-template-columns:repeat(2,minmax(0,1fr))}.team-ops{grid-template-columns:1fr 1fr}}
+      @media(max-width:760px){.team-head{align-items:stretch;flex-direction:column}.team-org{justify-content:flex-start}.team-org .fi{width:100%;min-width:0}.team-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.team-side,.team-ops{grid-template-columns:1fr}.team-finding{grid-template-columns:72px minmax(0,1fr)}.team-finding>:last-child{grid-column:1/-1}.team-form{grid-template-columns:minmax(0,1fr) 110px}.team-form .btn{grid-column:1/-1}.team-actions{justify-content:flex-start}}
+      @media(max-width:480px){.team-pg{padding-left:14px;padding-right:14px}.team-kpis{grid-template-columns:1fr 1fr;gap:8px}.team-kpi{min-height:98px;padding:14px}.team-card{padding:16px}.team-org{align-items:stretch;flex-direction:column}.team-finding{grid-template-columns:1fr}.team-finding>:last-child{grid-column:auto}.team-form{grid-template-columns:1fr}.team-form .btn{grid-column:auto}}
+    </style><div class="pg team-pg">
+      <header class="team-head"><div><div class="ey">Security operations</div><h1>Team Workspace</h1><p>One operating view for ownership, remediation, integrations, durable jobs, and evidence-grade audit history.</p></div>
+        <div class="team-org"><select class="fi" aria-label="Active organization" onchange="teamSwitch(this.value)">${tc.organizations.map(o=>`<option value="${H(o.id)}" ${o.id===orgId?'selected':''}>${H(o.name)} · ${H(o.role)}</option>`).join('')}</select><span class="bx bx-g">${H(role)}</span></div></header>
+      <div class="team-kpis">${kpi('Open findings',open.length,open.length?'warn':'good',`${activeWork} actively owned`)}${kpi('Critical exposure',critical,critical?'danger':'good',critical?'requires immediate response':'no unresolved criticals')}${kpi('Security coverage',`${mm.members.length}/${pp.projects.length}`,'',`${mm.members.length} members · ${pp.projects.length} projects`)}${kpi('Automation health',failedJobs,failedJobs?'danger':'good',failedJobs?'failed or dead-letter jobs':'no failed jobs')}</div>
+      <div class="team-layout">
+        <main class="team-stack"><section class="team-card"><div class="team-card-head"><h2>${ico('shield',{cls:'ico-sm'})} Finding queue</h2><small>${open.length} open · ${ff.findings.length} total</small></div>
+          <div class="team-findings team-scroll">${ff.findings.length?ff.findings.map(f=>`<div class="team-finding"><span class="bx ${f.severity==='critical'?'bx-r':f.severity==='high'?'bx-o':f.severity==='low'?'bx-g':'bx-b'}">${H(f.severity)}</span><div class="team-finding-main"><b>${H(f.title)}</b><div class="team-meta">${H(f.source)} · ${H(f.assigneeUserId||'unassigned')} · ${fmtDate(f.updatedAt||f.createdAt)}</div></div>${canTriage?`<select class="fi" aria-label="Finding status" onchange="teamFindingStatus('${H(orgId)}','${H(f.id)}',this.value)">${statuses.map(s=>`<option ${s===f.status?'selected':''}>${s}</option>`).join('')}</select>`:`<span class="bx">${H(f.status)}</span>`}</div>`).join(''):'<div class="team-empty">No shared findings yet. Confirmed scan findings appear here automatically.</div>'}</div></section>
+          <div class="team-ops"><section class="team-card"><div class="team-card-head"><h2>${ico('zap',{cls:'ico-sm'})} Integrations</h2>${canManage?`<button class="btn btn-g" onclick="teamAddIntegration('${H(orgId)}')">+ Add</button>`:''}</div><div class="team-list">${ii.integrations.map(i=>`<div class="team-row"><div class="team-row-main"><b>${H(i.name)}</b><small>${H(i.type)} · ${i.enabled?'enabled':'disabled'} · secret ${i.hasSecret?'stored':'missing'}</small></div><span class="bx ${i.enabled?'bx-g':''}">${i.enabled?'active':'off'}</span>${canManage?`<div class="team-actions"><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Test</button><button class="btn btn-g" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Delete</button></div>`:''}</div>`).join('')||'<div class="team-empty">No delivery integrations configured.</div>'}</div></section>
+            <section class="team-card"><div class="team-card-head"><h2>${ico('list',{cls:'ico-sm'})} Durable jobs</h2><small>latest ${Math.min(jj.jobs.length,20)}</small></div><div class="team-list team-scroll">${jj.jobs.slice(0,20).map(j=>`<div class="team-row"><div class="team-row-main"><b>${H(j.type)}</b><small>${H(j.id)} · attempt ${j.attempts}/${j.maxAttempts}</small></div><span class="bx ${j.status==='succeeded'?'bx-g':j.status==='dead-letter'?'bx-r':j.status==='running'?'bx-o':''}">${H(j.status)}</span></div>`).join('')||'<div class="team-empty">No durable jobs yet.</div>'}</div></section></div>
+          <section class="team-card"><div class="team-card-head"><h2>${ico('file-text',{cls:'ico-sm'})} Audit trail</h2><small>organization activity</small></div><div class="team-list team-scroll">${aa.events.slice(0,40).map(e=>`<div class="team-row"><div class="team-row-main"><b>${H(e.action)}</b><small>${H(e.resourceType)} ${H(e.resourceId||'')} · actor ${H(e.actorUserId||'system')}</small></div><small>${fmtDate(e.createdAt)}</small></div>`).join('')||'<div class="team-empty">No audit events yet.</div>'}</div></section>
+        </main>
+        <aside class="team-stack team-side"><section class="team-card"><div class="team-card-head"><h2>Members</h2><small>${mm.members.length} seats</small></div><div class="team-list">${mm.members.map(m=>`<div class="team-row"><span class="team-avatar">${H((m.name||m.email||'?').slice(0,2))}</span><div class="team-row-main"><b>${H(m.name||m.email)}</b><small>${H(m.email)}</small></div><span class="bx">${H(m.role)}</span></div>`).join('')}</div>${canManage?`<div class="team-form"><input class="fi" id="tm-email" placeholder="teammate@example.com"><select class="fi" id="tm-role"><option>engineer</option><option>analyst</option><option>developer</option><option>viewer</option><option>admin</option></select><button class="btn btn-p" onclick="teamInviteMember('${H(orgId)}')">Invite</button></div>`:''}</section>
+          <section class="team-card"><div class="team-card-head"><h2>Projects</h2><small>${pp.projects.length} scopes</small></div><div class="team-list">${pp.projects.map(p=>`<div class="team-row"><div class="team-row-main"><b>${H(p.name)}</b><small>${H(p.environment)} environment</small></div><span class="bx ${p.criticality==='critical'?'bx-r':p.criticality==='high'?'bx-o':''}">${H(p.criticality)}</span></div>`).join('')||'<div class="team-empty">No projects yet.</div>'}</div>${canProject?`<div class="team-form"><input class="fi" id="tp-name" placeholder="Project name"><select class="fi" id="tp-criticality"><option>medium</option><option>high</option><option>critical</option><option>low</option></select><button class="btn btn-p" onclick="teamCreateProject('${H(orgId)}')">Create</button></div>`:''}</section>
+        </aside>
+      </div><div class="team-footer"><button class="btn btn-g" onclick="teamCreateOrg()">+ Create organization</button></div>
     </div>`;
   }catch(e){M.innerHTML=`<div class="pg"><div class="empty"><h2>Team workspace unavailable</h2><p>${H(e.detail||e.message)}</p></div></div>`}
 }
@@ -2521,66 +2558,160 @@ function pgDefender() {
   CID = null; sList();
   M.innerHTML = `
     <style>
-      .defpg h1{font-size:21px;line-height:1.2;margin:0 0 3px}
-      .defpg .lead{font-size:13px;opacity:.7;margin:0 0 16px}
-      .defpg h3{font-size:13px;letter-spacing:.02em;margin:0 0 9px}
-      .defpg .crd{padding:14px 16px}
-      .defpg .steps{margin:0;padding-left:17px;font-size:12.5px;line-height:1.75}
-      .defpg .fine{font-size:11px;line-height:1.55;opacity:.55;margin:11px 0 0}
-      .defpg input{width:100%;margin:2px 0 9px;font-size:13px;padding:8px 10px}
-      .defpg .row{font-size:12.5px}
-      .defpg .row code{font-size:11.5px}
+      .defpg{max-width:1380px;width:100%;box-sizing:border-box;--def-line:#35353d;--def-soft:#18181c}.def-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:22px}.def-head h1{font-size:32px;line-height:1.1;margin:4px 0 7px}.def-head p{font-size:13.5px;color:var(--t2);max-width:700px;margin:0}.def-head-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+      .def-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}.def-kpi{min-height:108px;padding:17px 18px;border:1px solid var(--def-line);border-radius:14px;background:linear-gradient(145deg,var(--s1),var(--def-soft));display:grid;align-content:space-between;box-sizing:border-box}.def-kpi span{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--t3);font-weight:700}.def-kpi strong{font-size:30px;line-height:1}.def-kpi small{font-size:10.5px;color:var(--t3)}.def-kpi.danger strong{color:var(--red)}.def-kpi.warn strong{color:var(--org)}.def-kpi.good strong{color:var(--grn)}
+      .def-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,.8fr);gap:16px;align-items:start}.def-stack{display:grid;gap:16px;min-width:0}.def-card{background:linear-gradient(180deg,var(--s1),var(--s2));border:1px solid var(--def-line);border-radius:14px;padding:20px;min-width:0;overflow:hidden;box-sizing:border-box}.def-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.def-card-head h2,.def-card-head h3{font-size:16px;margin:0;display:flex;align-items:center;gap:8px}.def-card-head small{font-size:10.5px;color:var(--t3)}
+      .def-incident{display:grid;grid-template-columns:82px minmax(0,1fr) 118px 138px;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid var(--brd)}.def-incident:last-child{border-bottom:0}.def-incident-main{min-width:0}.def-incident-main b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.def-incident-main small{display:block;color:var(--t3);font-size:10.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.def-incident .fi{padding:7px 8px;font-size:10.5px;width:100%}.def-scroll{max-height:430px;overflow:auto;padding-right:3px}
+      .def-sev{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}.def-sev-critical{color:var(--red)}.def-sev-high{color:var(--org)}.def-sev-medium{color:#60a5fa}.def-sev-low{color:var(--grn)}
+      .def-bars{display:grid;gap:10px}.def-bar-label{display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px}.def-bar-track{height:6px;border-radius:999px;background:var(--bg);overflow:hidden}.def-bar-fill{height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--acc-deep),var(--acc))}
+      .def-deploy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:16px}.def-deploy .def-card{display:flex;flex-direction:column}.def-deploy-body{flex:1;color:var(--t2);font-size:12px;line-height:1.6}.def-fine{font-size:10.5px;line-height:1.55;color:var(--t3)}.def-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}.def-actions .btn{padding:7px 10px;font-size:11px}
+      .def-route-form{display:grid;grid-template-columns:1fr 1.25fr 110px auto;gap:8px;align-items:stretch;margin-bottom:12px}.def-route-form .fi,.def-route-form .btn{width:100%;min-width:0;box-sizing:border-box}.def-row{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 0;border-bottom:1px solid var(--brd)}.def-row:last-child{border-bottom:0}.def-row-main{flex:1;min-width:0}.def-row-main b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.def-row-main small{display:block;color:var(--t3);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.def-row-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.def-row-actions .btn{padding:6px 9px;font-size:10.5px}.def-empty{padding:24px 12px;border:1px dashed var(--brd);border-radius:10px;text-align:center;color:var(--t3);font-size:12px}
+      .def-code{background:var(--bg);border:1px solid var(--brd);border-radius:9px;padding:11px;overflow:auto;font-size:10.5px;line-height:1.55;max-height:190px}.def-live{font-size:11px;line-height:1.6;max-height:250px;overflow:auto}.def-local{margin-top:16px}.def-local summary{cursor:pointer;font-size:12px;font-weight:700;color:var(--t2)}.def-local-body{margin-top:14px}.def-local-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.def-local-form .fi{width:100%;box-sizing:border-box}
+      @media(max-width:1100px){.def-grid{grid-template-columns:1fr}.def-deploy{grid-template-columns:1fr 1fr}.def-deploy .def-card:last-child{grid-column:1/-1}}
+      @media(max-width:760px){.def-head{align-items:stretch;flex-direction:column}.def-head-actions{justify-content:flex-start}.def-kpis{grid-template-columns:1fr 1fr}.def-deploy{grid-template-columns:1fr}.def-deploy .def-card:last-child{grid-column:auto}.def-route-form{grid-template-columns:1fr 1fr}.def-route-form .btn{grid-column:1/-1}.def-incident{grid-template-columns:75px minmax(0,1fr)}.def-incident>:nth-child(3),.def-incident>:nth-child(4){grid-column:auto}.def-row{align-items:flex-start;flex-wrap:wrap}.def-row-actions{width:100%;justify-content:flex-start}}
+      @media(max-width:480px){.defpg{padding-left:14px;padding-right:14px}.def-kpis{gap:8px}.def-kpi{min-height:98px;padding:14px}.def-card{padding:16px}.def-route-form,.def-local-form{grid-template-columns:1fr}.def-route-form .btn{grid-column:auto}.def-incident{grid-template-columns:1fr}.def-head-actions .btn{flex:1}}
     </style>
     <div class="pg defpg">
-      <h1>Defender</h1>
-      <p class="lead">Blocks live attacks on a system you own.</p>
-
-      <div class="crd">
-        <h3>How it works</h3>
-        <ol class="steps">
-          <li><b>Verify</b> the domain is yours — Domains page.</li>
-          <li><b>Connect</b> it here; Shannon gives you a proxy URL.</li>
-          <li><b>Route</b> your app's traffic through that URL.</li>
-          <li><b>Watch</b> in Monitor, then switch to Enforce to start blocking.</li>
-        </ol>
-        <p class="fine">Matches each request's URL and body (not headers or cookies) against the
-        engine's signatures. Enforce blocks only path-traversal, NoSQL and LLM-prompt-injection —
-        everything else is alerted and forwarded, since those signatures would also match ordinary
-        requests. The proxy is loopback-only plain HTTP on this dashboard's host, its port changes
-        on restart, and connected defenders are lost on restart.</p>
-      </div>
-
-      <div class="crd">
-        <h3>Connect a web app</h3>
-        <input id="def-origin" placeholder="https://app.example.com" autocomplete="off" spellcheck="false"
-          onkeydown="if(event.key==='Enter')defConnect()">
-        <button class="btn btn-p" onclick="defConnect()">Connect</button>
-        <div id="def-connect-out"></div>
-      </div>
-
-      <div class="crd">
-        <h3>This dashboard</h3>
-        <div id="def-self">Checking…</div>
-      </div>
-
-      <div class="crd">
-        <h3>Protect another app</h3>
-        <div id="def-sdk">Checking…</div>
-      </div>
-
-      <div class="crd">
-        <h3>Protected systems</h3>
-        <div id="def-list">Loading…</div>
-      </div>
-
-      <div class="crd">
-        <h3>Live activity</h3>
-        <div id="def-live"><em>Connect a system to see live defenses.</em></div>
-      </div>
+      <header class="def-head"><div><div class="ey">Detection &amp; response</div><h1>Defender Operations</h1><p>Organization-wide runtime protection, edge enforcement, incident triage, and evidence delivery from one control plane.</p></div><div class="def-head-actions"><button class="btn btn-g" onclick="defExportEvents()">Export evidence</button><button class="btn btn-p" onclick="defRefreshAll()">Refresh posture</button></div></header>
+      <div class="def-kpis" id="def-kpis">${[0,1,2,3].map(()=>'<div class="def-kpi"><span>Loading</span><strong>—</strong><small>collecting telemetry</small></div>').join('')}</div>
+      <div class="def-grid"><main class="def-stack"><section class="def-card"><div class="def-card-head"><h2>${ico('alert-octagon',{cls:'ico-sm'})} Incident queue</h2><small id="def-incident-count">Loading telemetry…</small></div><div id="def-incidents" class="def-scroll"><div class="def-empty">Loading incidents…</div></div></section>
+        <section class="def-card"><div class="def-card-head"><h2>${ico('radar',{cls:'ico-sm'})} Edge routes</h2><small>public multi-tenant enforcement</small></div><div class="def-route-form"><input class="fi" id="def-route-host" placeholder="app.customer.com"><input class="fi" id="def-route-origin" placeholder="https://origin.customer.com"><select class="fi" id="def-route-mode"><option value="monitor">monitor</option><option value="enforce">enforce</option></select><button class="btn btn-p" onclick="defEdgeSave()">Save route</button></div><div id="def-route-out"></div><div id="def-routes"><div class="def-empty">Loading routes…</div></div></section></main>
+        <aside class="def-stack"><section class="def-card"><div class="def-card-head"><h2>Attack surface signal</h2><small>top detection classes</small></div><div id="def-class-bars" class="def-bars"><div class="def-empty">No signal yet.</div></div></section><section class="def-card"><div class="def-card-head"><h2>Live activity</h2><small>local diagnostic stream</small></div><div id="def-live" class="def-live"><em>Start a diagnostic proxy to watch live defenses.</em></div></section></aside></div>
+      <div class="def-deploy"><section class="def-card"><div class="def-card-head"><h3>${ico('shield',{cls:'ico-sm'})} Dashboard protection</h3><span class="bx">platform</span></div><div class="def-deploy-body" id="def-self">Checking platform self-defense…</div></section>
+        <section class="def-card"><div class="def-card-head"><h3>${ico('file-text',{cls:'ico-sm'})} Application SDK</h3><span class="bx bx-g">recommended</span></div><div class="def-deploy-body" id="def-sdk">Loading SDK deployment…</div></section>
+        <section class="def-card"><div class="def-card-head"><h3>${ico('gauge',{cls:'ico-sm'})} Response automation</h3><span class="bx">SOC</span></div><div class="def-deploy-body"><p>Defender detections enter the durable incident queue and fan out to enabled Slack, Teams, Jira, Linear, webhook, and SIEM destinations.</p><p class="def-fine">Use Team Workspace to configure delivery targets and inspect retries or dead-letter jobs.</p><div class="def-actions"><button class="btn btn-g" onclick="go('team')">Open Team Workspace</button></div></div></section></div>
+      <details class="def-card def-local"><summary>Local diagnostic proxy (ephemeral development tool)</summary><div class="def-local-body"><p class="def-fine">Runs a loopback-only proxy inside this dashboard process. Production protection should use the SDK or durable edge routes above.</p><div class="def-local-form"><input class="fi" id="def-origin" placeholder="https://app.example.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')defConnect()"><button class="btn btn-g" onclick="defConnect()">Start diagnostic proxy</button></div><div id="def-connect-out"></div><div id="def-list" style="margin-top:10px">Loading…</div></div></details>
     </div>`;
-  defLoad();
-  defSelfLoad();
-  defSdkLoad();
+  defRefreshAll();
+}
+
+let DEF_OVERVIEW = { events: [], routes: [], systems: [], stats: {}, topClasses: [] };
+let DEF_SDK_KEY = '';
+let DEF_SDK_SNIPPET = '';
+
+async function defRefreshAll() {
+  const refresh = document.querySelector('.def-head-actions .btn-p');
+  if (refresh) refresh.disabled = true;
+  await Promise.allSettled([defOverviewLoad(), defSelfLoad(), defSdkLoad(), defLoad()]);
+  if (refresh) refresh.disabled = false;
+}
+
+async function defOverviewLoad() {
+  const kpis = $('def-kpis');
+  const incidents = $('def-incidents');
+  const routes = $('def-routes');
+  const bars = $('def-class-bars');
+  if (!kpis || !incidents || !routes || !bars) return;
+  try {
+    DEF_OVERVIEW = await api('/defender/overview');
+    const s = DEF_OVERVIEW.stats || {};
+    const assets = Number(s.edgeRoutes || 0) + Number(s.connectedSystems || 0);
+    kpis.innerHTML = [
+      ['Open incidents', s.open || 0, `${s.last24h || 0} detected in 24 hours`, 'danger'],
+      ['Active critical', s.critical || 0, 'excluding closed incidents', 'warn'],
+      ['Threats blocked', s.blocked || 0, `${s.total || 0} total detections`, 'good'],
+      ['Protected assets', assets, `${s.enforcingRoutes || 0} edge routes enforcing`, ''],
+    ].map(([label, value, note, cls]) => `<div class="def-kpi ${cls}"><span>${H(label)}</span><strong>${Number(value).toLocaleString()}</strong><small>${H(note)}</small></div>`).join('');
+
+    const eventRows = DEF_OVERVIEW.events || [];
+    $('def-incident-count').textContent = `${eventRows.length} recent · ${s.open || 0} requiring action`;
+    incidents.innerHTML = eventRows.length ? eventRows.map((event) => {
+      const severity = ['critical', 'high', 'medium', 'low'].includes(event.severity) ? event.severity : 'low';
+      const status = event.status || (event.enforced ? 'contained' : 'open');
+      const options = ['open', 'investigating', 'contained', 'closed'].map((value) => `<option value="${value}"${value === status ? ' selected' : ''}>${value}</option>`).join('');
+      const when = event.at || event.createdAt;
+      return `<div class="def-incident"><span class="def-sev def-sev-${severity}">${H(severity)}</span><div class="def-incident-main"><b>${H(event.cls || 'Unclassified detection')}</b><small>${H(event.method || 'REQUEST')} ${H(event.url || 'unknown target')} · ${H(event.source || 'sdk')}${event.srcIp ? ` · ${H(event.srcIp)}` : ''}</small></div><small>${when ? H(fmtDate(when)) : '—'}${event.enforced ? '<br><span style="color:var(--grn)">blocked</span>' : ''}</small><select class="fi" aria-label="Incident status" onchange="defIncidentStatus('${event.id}',this.value)">${options}</select></div>`;
+    }).join('') : '<div class="def-empty">No detections have been reported. Deploy the SDK or an edge route to begin collecting runtime evidence.</div>';
+
+    const top = DEF_OVERVIEW.topClasses || [];
+    const max = Math.max(1, ...top.map((row) => Number(row.count || 0)));
+    bars.innerHTML = top.length ? top.map((row) => `<div><div class="def-bar-label"><span>${H(row.name)}</span><b>${Number(row.count || 0).toLocaleString()}</b></div><div class="def-bar-track"><div class="def-bar-fill" style="width:${Math.max(5, Math.round(Number(row.count || 0) / max * 100))}%"></div></div></div>`).join('') : '<div class="def-empty">No attack classes observed yet.</div>';
+
+    const routeRows = DEF_OVERVIEW.routes || [];
+    routes.innerHTML = routeRows.length ? routeRows.map((route) => `<div class="def-row"><div class="def-row-main"><b>${H(route.host)}</b><small>${H(route.origin)} · ${route.createdAt ? H(fmtDate(route.createdAt)) : 'configured route'}</small></div><span class="bx ${route.mode === 'enforce' ? 'bx-r' : ''}">${H(route.mode)}</span><div class="def-row-actions"><button class="btn btn-g" onclick="defEdgeMode('${route.host}')">${route.mode === 'enforce' ? 'Monitor' : 'Enforce'}</button><button class="btn" onclick="defEdgeRemove('${route.host}')">Remove</button></div></div>`).join('') : '<div class="def-empty">No edge routes configured. Verify the public host and origin, then add the route here.</div>';
+  } catch (error) {
+    const message = H(error.detail || error.message || 'failed to load Defender posture');
+    kpis.innerHTML = `<div class="def-empty" style="grid-column:1/-1"><span class="err">${message}</span></div>`;
+    incidents.innerHTML = `<div class="def-empty"><span class="err">${message}</span></div>`;
+    routes.innerHTML = `<div class="def-empty"><span class="err">${message}</span></div>`;
+  }
+}
+
+async function defIncidentStatus(id, status) {
+  try {
+    await api(`/defender/events/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+    await defOverviewLoad();
+  } catch (error) {
+    alert(error.detail || error.message || 'Could not update incident status.');
+    await defOverviewLoad();
+  }
+}
+
+async function defEdgeSave() {
+  const host = $('def-route-host').value.trim();
+  const origin = $('def-route-origin').value.trim();
+  const mode = $('def-route-mode').value;
+  const out = $('def-route-out');
+  if (!host || !origin) {
+    out.innerHTML = '<p class="err">Enter both the public hostname and its origin URL.</p>';
+    return;
+  }
+  out.innerHTML = '<p class="fine"><span class="sp"></span> Validating ownership and public DNS…</p>';
+  try {
+    await api('/defender/edge/routes', { method: 'POST', body: JSON.stringify({ host, origin, mode }) });
+    $('def-route-host').value = '';
+    $('def-route-origin').value = '';
+    out.innerHTML = '<p style="color:var(--grn);font-size:11px">Route saved. The edge will receive it on its next configuration refresh.</p>';
+    await defOverviewLoad();
+  } catch (error) {
+    const needsVerification = error.status === 403;
+    out.innerHTML = `<p class="err">${H(error.detail || error.message || 'Could not save route.')}${needsVerification ? ' <a href="#" onclick="go(\'domains\');return false">Open domain verification →</a>' : ''}</p>`;
+  }
+}
+
+async function defEdgeMode(host) {
+  const route = (DEF_OVERVIEW.routes || []).find((item) => item.host === host);
+  if (!route) return;
+  const mode = route.mode === 'enforce' ? 'monitor' : 'enforce';
+  if (mode === 'enforce' && !confirm(`Enforce mode can block production traffic for ${host}. Continue?`)) return;
+  try {
+    await api('/defender/edge/routes', { method: 'POST', body: JSON.stringify({ host, origin: route.origin, mode }) });
+    await defOverviewLoad();
+  } catch (error) {
+    alert(error.detail || error.message || 'Could not change edge mode.');
+  }
+}
+
+async function defEdgeRemove(host) {
+  if (!confirm(`Remove the edge route for ${host}?`)) return;
+  try {
+    await api(`/defender/edge/routes/${encodeURIComponent(host)}`, { method: 'DELETE' });
+    await defOverviewLoad();
+  } catch (error) {
+    alert(error.detail || error.message || 'Could not remove edge route.');
+  }
+}
+
+function defExportEvents() {
+  const events = DEF_OVERVIEW.events || [];
+  if (!events.length) return alert('There are no Defender events to export yet.');
+  const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), events }, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `securovix-defender-evidence-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function defCopyText(value) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value).catch(() => {});
+  const input = document.createElement('textarea');
+  input.value = value;
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand('copy');
+  input.remove();
 }
 
 async function defSdkLoad() {
@@ -2588,24 +2719,26 @@ async function defSdkLoad() {
   if (!el) return;
   try {
     const s = await api('/defender/sdk');
-    const snippet = "import { shannonDefender } from '@securovix/defender';\n\n"
+    DEF_SDK_KEY = s.apiKey;
+    DEF_SDK_SNIPPET = "import { shannonDefender } from '@securovix/defender';\n\n"
       + 'app.use(shannonDefender({\n'
       + `  apiKey: '${s.apiKey}',\n`
       + `  endpoint: '${location.origin}',\n`
       + "  mode: 'monitor',   // switch to 'enforce' once you're happy\n"
       + '}));';
-    const rows = s.reports.length
-      ? s.reports.map((r) => `<div><code>${H(r.method)} ${H(r.url)}</code> — <b>${H(r.cls || '—')}</b>${r.enforced ? ' <b>(blocked)</b>' : ''}</div>`).join('')
-      : '<span class="fine">Nothing reported yet.</span>';
-    el.innerHTML = `<p class="fine" style="margin:0 0 8px">Add this to any Express app you own. It inspects
-      requests inside your app — no DNS change, no proxy, and if Securovix is down your site keeps serving.</p>
-      <pre style="background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:10px;overflow:auto;font-size:11.5px;margin:0 0 8px">${H(snippet)}</pre>
-      <p class="fine" style="margin:0 0 8px">Keep that key secret — it identifies your account. Rotating
-      <code>SHANNON_SESSION_SECRET</code> invalidates it.</p>
-      <div><b>Reported detections</b></div>
-      <div>${rows}</div>`;
+    el.innerHTML = `<p style="margin-top:0">Deploy inside Express services for in-process inspection with fail-open reporting to the organization incident queue.</p><pre class="def-code">${H(DEF_SDK_SNIPPET)}</pre><p class="def-fine">Treat the API key as a secret. Key rotation invalidates the previous credential immediately; update every service after rotating.</p><div class="def-actions"><button class="btn btn-p" onclick="defCopyText(DEF_SDK_SNIPPET)">Copy integration</button><button class="btn btn-g" onclick="defCopyText(DEF_SDK_KEY)">Copy key</button><button class="btn" onclick="defRotateSdkKey()">Rotate key</button></div><p class="def-fine">${Number((s.reports || []).length).toLocaleString()} recent detections available to this deployment.</p>`;
   } catch (e) {
     el.innerHTML = `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
+  }
+}
+
+async function defRotateSdkKey() {
+  if (!confirm('Rotate the Defender SDK key? Existing services will stop reporting until they receive the new key.')) return;
+  try {
+    await api('/defender/sdk/rotate', { method: 'POST' });
+    await defSdkLoad();
+  } catch (error) {
+    alert(error.detail || error.message || 'Could not rotate the SDK key.');
   }
 }
 
@@ -2615,21 +2748,12 @@ async function defSelfLoad() {
   try {
     const s = await api('/defender/self');
     if (!s.enabled) {
-      el.innerHTML = '<span class="fine">Not enabled. Set <code>SHANNON_DEFEND_SELF=1</code> in the environment '
-        + 'and Shannon inspects this dashboard\'s own incoming traffic — no proxy, no port, nothing to reconnect. '
-        + 'Starts monitor-only; <code>SHANNON_DEFEND_SELF_MODE=enforce</code> to block.</span>';
+      el.innerHTML = '<p style="margin-top:0">Protect the Securovix control plane itself with inline request analysis.</p><p class="def-fine">Set <code>SHANNON_DEFEND_SELF=1</code> in Railway. Start with <code>SHANNON_DEFEND_SELF_MODE=monitor</code>, review telemetry, then enforce.</p>';
       return;
     }
-    const rows = s.recent.length
-      ? s.recent.map((r) => `<div><code>${H(r.method)} ${H(r.url)}</code> — <b>${H(r.cls || '—')}</b> — ${H(r.action)}${r.enforced ? ' <b>(blocked)</b>' : ''}</div>`).join('')
-      : '<span class="fine">No detections yet.</span>';
-    el.innerHTML = `<div>Mode <b>${H(s.mode)}</b> · requests ${s.stats.events} · detections ${s.stats.defenses}</div>
-      <button class="btn" style="margin:8px 0" onclick="defSelfMode('${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">
-        Switch to ${s.mode === 'enforce' ? 'Monitor-only' : 'Enforce (block attacks)'}
-      </button>
-      <div>${rows}</div>`;
+    el.innerHTML = `<p style="margin-top:0">Mode <b>${H(s.mode)}</b> · ${Number(s.stats.events || 0).toLocaleString()} requests inspected · ${Number(s.stats.defenses || 0).toLocaleString()} detections</p><p class="def-fine">${(s.recent || []).length ? `${s.recent.length} recent detections retained in process.` : 'No dashboard threats detected in this process.'}</p><div class="def-actions"><button class="btn ${s.mode === 'enforce' ? 'btn-g' : 'btn-p'}" onclick="defSelfMode('${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">Switch to ${s.mode === 'enforce' ? 'monitor' : 'enforce'}</button></div>`;
   } catch (e) {
-    el.innerHTML = `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
+    el.innerHTML = e.status === 403 ? '<p class="def-fine">Platform self-defense controls are restricted to platform administrators. Organization Defender remains available.</p>' : `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
   }
 }
 
@@ -2651,20 +2775,8 @@ async function defLoad() {
   try {
     const { systems } = await api('/defender/list');
     $('def-list').innerHTML = systems.length
-      ? systems.map((s) => `
-        <div class="crd" style="margin:8px 0">
-          <b>${H(s.origin)}</b><br>
-          <small>Route your traffic through: <code>${H(s.proxyUrl || '—')}</code>
-          (loopback only, plain HTTP; this port changes on every dashboard restart)</small><br>
-          <small>Mode: <b>${H(s.mode)}</b> · events ${s.stats.events} · defenses ${s.stats.defenses}</small><br>
-          <button class="btn" onclick="defToggleMode('${s.id}','${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">
-            Switch to ${s.mode === 'enforce' ? 'Monitor-only' : 'Enforce (block attacks)'}
-          </button>
-          <button class="btn" onclick="defStream('${s.id}')">Watch live</button>
-          <button class="btn" onclick="defDisconnect('${s.id}')">Disconnect</button>
-          <div class="def-row-err" id="def-err-${s.id}"></div>
-        </div>`).join('')
-      : '<em>No systems connected yet.</em>';
+      ? systems.map((s) => `<div class="def-row"><div class="def-row-main"><b>${H(s.origin)}</b><small>${H(s.proxyUrl || 'starting…')} · ${H(s.mode)} · ${Number(s.stats.events || 0)} requests · ${Number(s.stats.defenses || 0)} defenses</small><div class="def-row-err" id="def-err-${s.id}"></div></div><div class="def-row-actions"><button class="btn" onclick="defToggleMode('${s.id}','${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">${s.mode === 'enforce' ? 'Monitor' : 'Enforce'}</button><button class="btn btn-g" onclick="defStream('${s.id}')">Watch</button><button class="btn" onclick="defDisconnect('${s.id}')">Disconnect</button></div></div>`).join('')
+      : '<div class="def-empty">No local diagnostic proxies are running.</div>';
   } catch (e) {
     $('def-list').innerHTML = `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
   }

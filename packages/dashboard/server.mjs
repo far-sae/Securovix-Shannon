@@ -75,6 +75,7 @@ import {
   saveUserSettings,
   saveUsers,
   touchMonitor,
+  updateDefenseEvent,
   waitForUserWrites,
 } from './db.mjs';
 import { openPullRequest } from './github-pr.mjs';
@@ -4227,11 +4228,10 @@ app.post('/api/defender/self/mode', (req, res) => {
 });
 
 // ── SDK reporting (@securovix/defender running in a customer's own app) ─────────────────────────
-// The key carries its own user id and is verified by HMAC, so there is no key table to keep in sync
-// and no lookup on the hot path — the same trick domainToken() already uses. Rotating
-// SHANNON_SESSION_SECRET invalidates every key, which is the (documented) revocation story for v1.
-function defenderApiKey(userId, orgId) {
-  const payload = Buffer.from(JSON.stringify({ uid: userId, oid: orgId })).toString('base64url');
+// The key carries its user, organization and revocation version and is verified by HMAC. A per-user
+// version permits targeted rotation while SHANNON_SESSION_SECRET remains the emergency global reset.
+function defenderApiKey(userId, orgId, version = 0) {
+  const payload = Buffer.from(JSON.stringify({ uid: userId, oid: orgId, v: Number(version || 0) })).toString('base64url');
   const sig = _crypto.createHmac('sha256', SESSION_SECRET).update(`defender-key:${payload}`).digest('base64url');
   return `sk_${payload}.${sig}`;
 }
@@ -4243,7 +4243,9 @@ function verifyDefenderKey(key) {
   try {
     const payload = JSON.parse(Buffer.from(m[1], 'base64url').toString());
     const membership = getMembership(payload.oid, payload.uid);
-    return membership && can(membership.role, 'defender.manage') ? { userId: payload.uid, orgId: payload.oid } : null;
+    const user = loadUsers()[payload.uid];
+    const versionMatches = user && Number(payload.v || 0) === Number(user.defenderKeyVersion || 0);
+    return membership && versionMatches && can(membership.role, 'defender.manage') ? { userId: payload.uid, orgId: payload.oid } : null;
   } catch {
     return null;
   }
@@ -4252,45 +4254,116 @@ function verifyDefenderKey(key) {
 // Limit each SDK batch; accepted events are persisted per organization.
 const SDK_REPORT_MAX = 200;
 
+function defenderSeverity(cls) {
+  const value = String(cls || '').toLowerCase();
+  if (/(rce|command|sqli|auth-bypass|metadata)/.test(value)) return 'critical';
+  if (/(path-traversal|nosql|ssrf|ssti|authz|idor)/.test(value)) return 'high';
+  if (/(xss|prompt|csrf|header|graphql)/.test(value)) return 'medium';
+  return 'low';
+}
+
 app.post('/api/defender/report', (req, res) => {
   const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
   if (!principal) return res.status(401).json({ error: 'invalid api key' });
   const incoming = Array.isArray(req.body?.detections) ? req.body.detections : [];
   if (!incoming.length) return res.json({ accepted: 0 });
 
-  for (const d of incoming.slice(0, SDK_REPORT_MAX)) {
-    appendDefenseEvent({
+  let accepted = 0;
+  for (const raw of incoming.slice(0, SDK_REPORT_MAX)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const d = raw;
+    const eventTime = typeof d.at === 'string' && Number.isFinite(Date.parse(d.at))
+      ? new Date(d.at).toISOString()
+      : new Date().toISOString();
+    const event = {
       id: randomUUID(),
       orgId: principal.orgId,
       userId: principal.userId,
-      at: typeof d.at === 'string' ? d.at : new Date().toISOString(),
+      at: eventTime,
       method: String(d.method || '').slice(0, 10),
       url: String(d.url || '').slice(0, 300),
       cls: String(d.cls || '').slice(0, 60),
       enforced: d.enforced === true,
       srcIp: d.srcIp ? String(d.srcIp).slice(0, 64) : null,
+      severity: defenderSeverity(d.cls),
+      source: 'sdk',
+      status: d.enforced === true ? 'contained' : 'open',
+      metadata: {},
       createdAt: Date.now(),
-    });
+    };
+    appendDefenseEvent(event);
+    accepted += 1;
+    queueIntegrationEvent(principal.orgId, {
+      id: `defender:${event.id}`,
+      type: 'defender.detection',
+      at: event.at,
+      data: event,
+    }, principal.userId).catch((error) => console.error('[defender] integration event failed:', error.message));
   }
-  res.json({ accepted: incoming.length });
+  res.json({ accepted });
 });
 
 app.get('/api/defender/sdk', (req, res) => {
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const user = ctx.user;
-  res.json({ apiKey: defenderApiKey(user.id, ctx.org.id), reports: listDefenseEvents(ctx.org.id, 25) });
+  res.json({ apiKey: defenderApiKey(user.id, ctx.org.id, user.defenderKeyVersion), reports: listDefenseEvents(ctx.org.id, 25) });
+});
+
+app.post('/api/defender/sdk/rotate', (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  ctx.user.defenderKeyVersion = Number(ctx.user.defenderKeyVersion || 0) + 1;
+  saveUsers(loadUsers());
+  audit(ctx, 'defender.sdk_key_rotated', 'organization', ctx.org.id, { version: ctx.user.defenderKeyVersion });
+  res.json({ apiKey: defenderApiKey(ctx.user.id, ctx.org.id, ctx.user.defenderKeyVersion) });
+});
+
+app.get('/api/defender/events', (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const severity = String(req.query.severity || '');
+  const status = String(req.query.status || '');
+  let events = listDefenseEvents(ctx.org.id, Number(req.query.limit) || 200);
+  if (severity) events = events.filter((event) => event.severity === severity);
+  if (status) events = events.filter((event) => event.status === status);
+  res.json({ ok: true, events });
+});
+
+app.patch('/api/defender/events/:id', (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const status = String(req.body?.status || '');
+  if (!['open', 'investigating', 'contained', 'closed'].includes(status)) {
+    return res.status(400).json({ error: 'Choose a valid incident status.' });
+  }
+  const current = listDefenseEvents(ctx.org.id, 500).find((event) => event.id === req.params.id);
+  if (!current) return res.status(404).json({ error: 'Defense incident not found.' });
+  const previousStatus = current.status;
+  const event = updateDefenseEvent(ctx.org.id, current.id, {
+    status,
+    metadata: { ...(current.metadata || {}), statusChangedAt: Date.now(), statusChangedBy: ctx.user.id },
+  });
+  audit(ctx, 'defender.incident_status_changed', 'defense-event', event.id, { from: previousStatus, to: status });
+  queueIntegrationEvent(ctx.org.id, {
+    id: `defender-status:${event.id}:${status}`,
+    type: 'defender.incident.updated',
+    at: new Date().toISOString(),
+    data: event,
+  }, ctx.user.id).catch((error) => console.error('[defender] incident integration event failed:', error.message));
+  res.json({ ok: true, event });
 });
 
 // ── Edge routes (consumed by packages/defender-edge) ────────────────────────────────────────────
-// hostname → origin for the public multi-tenant proxy. In memory for now, and the edge deliberately
-// ignores an empty list so a dashboard restart cannot 502 live customer traffic; the durable source
-// for production is the edge's own SHANNON_EDGE_ROUTES. Moving this into Supabase is the next step.
+// Durable hostname → origin mappings for the public multi-tenant proxy. The edge can pull this list
+// with a scoped SDK credential and keeps its last valid routes if the dashboard becomes unavailable.
 
 app.get('/api/defender/edge/routes', (req, res) => {
   const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
-  if (!principal) return res.status(401).json({ error: 'invalid api key' });
-  const list = listEdgeRoutes({ orgId: principal.orgId }).map((v) => ({ host: v.host, origin: v.origin, mode: v.mode }));
+  const ctx = principal ? null : requirePermission(req, res, 'defender.manage');
+  if (!principal && !ctx) return;
+  const orgId = principal?.orgId || ctx.org.id;
+  const list = listEdgeRoutes({ orgId }).map((v) => ({ host: v.host, origin: v.origin, mode: v.mode, createdAt: v.createdAt }));
   res.json({ routes: list });
 });
 
@@ -4425,7 +4498,7 @@ app.post('/api/defender/connect', async (req, res) => {
   }
 
   const id = `def-${Math.random().toString(16).slice(2, 10)}`;
-  const system = { id, userId: user.id, kind: 'web', origin, mode: 'monitor', createdAt: new Date().toISOString() };
+  const system = { id, userId: user.id, orgId: ctx.org.id, kind: 'web', origin, mode: 'monitor', createdAt: new Date().toISOString() };
   const entry = { system, runtime: null, sseClients: [], events: [] };
   defenders.set(id, entry);
 
@@ -4452,12 +4525,50 @@ app.post('/api/defender/connect', async (req, res) => {
 });
 
 app.get('/api/defender/list', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'auth required' });
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
   const rows = [...defenders.values()]
-    .filter((e) => e.system.userId === user.id)
+    .filter((e) => e.system.orgId === ctx.org.id)
     .map((e) => ({ ...e.system, proxyUrl: e.runtime?.meta?.url || null, stats: e.runtime?.stats?.() || { events: 0, defenses: 0 } }));
   res.json({ systems: rows });
+});
+
+app.get('/api/defender/overview', (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const events = listDefenseEvents(ctx.org.id, 500);
+  const routes = listEdgeRoutes({ orgId: ctx.org.id });
+  const systems = [...defenders.values()]
+    .filter((entry) => entry.system.orgId === ctx.org.id)
+    .map((entry) => ({
+      ...entry.system,
+      proxyUrl: entry.runtime?.meta?.url || null,
+      stats: entry.runtime?.stats?.() || { events: 0, defenses: 0 },
+    }));
+  const since = Date.now() - 24 * 60 * 60_000;
+  const last24h = events.filter((event) => Number(event.createdAt || new Date(event.at).getTime()) >= since);
+  const classes = {};
+  for (const event of events) classes[event.cls || 'unknown'] = (classes[event.cls || 'unknown'] || 0) + 1;
+  res.json({
+    ok: true,
+    stats: {
+      total: events.length,
+      last24h: last24h.length,
+      blocked: events.filter((event) => event.enforced).length,
+      open: events.filter((event) => ['open', 'investigating'].includes(event.status || 'open')).length,
+      critical: events.filter((event) => event.severity === 'critical' && event.status !== 'closed').length,
+      edgeRoutes: routes.length,
+      enforcingRoutes: routes.filter((route) => route.mode === 'enforce').length,
+      connectedSystems: systems.length,
+    },
+    topClasses: Object.entries(classes)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([name, count]) => ({ name, count })),
+    events: events.slice(0, 100),
+    routes,
+    systems,
+  });
 });
 
 app.post('/api/defender/:id/mode', (req, res) => {
@@ -4465,7 +4576,7 @@ app.post('/api/defender/:id/mode', (req, res) => {
   if (!ctx) return;
   const user = ctx.user;
   const entry = defenders.get(req.params.id);
-  if (!entry || entry.system.userId !== user.id) return res.status(404).json({ error: 'not found' });
+  if (!entry || entry.system.userId !== user.id || entry.system.orgId !== ctx.org.id) return res.status(404).json({ error: 'not found' });
   if (!entry.runtime) return res.status(409).json({ error: 'defender not running' });
   const mode = entry.runtime.setMode(req.body?.mode);
   entry.system.mode = mode;
@@ -4479,7 +4590,7 @@ app.post('/api/defender/:id/disconnect', async (req, res) => {
   if (!ctx) return;
   const user = ctx.user;
   const entry = defenders.get(req.params.id);
-  if (!entry || entry.system.userId !== user.id) return res.status(404).json({ error: 'not found' });
+  if (!entry || entry.system.userId !== user.id || entry.system.orgId !== ctx.org.id) return res.status(404).json({ error: 'not found' });
   try {
     await entry.runtime?.stop?.();
   } catch {}
@@ -4495,10 +4606,10 @@ app.post('/api/defender/:id/disconnect', async (req, res) => {
 });
 
 app.get('/api/defender/:id/events', (req, res) => {
-  const user = getUser(req);
-  if (!user) return res.status(401).end();
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
   const entry = defenders.get(req.params.id);
-  if (!entry || entry.system.userId !== user.id) return res.status(404).end();
+  if (!entry || entry.system.userId !== ctx.user.id || entry.system.orgId !== ctx.org.id) return res.status(404).end();
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
   const stats = entry.runtime?.stats?.() || { events: 0, defenses: 0 };
   res.write(`data: ${JSON.stringify({ type: 'hello', mode: entry.system.mode, stats })}\n\n`);

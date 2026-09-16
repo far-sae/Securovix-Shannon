@@ -19,8 +19,8 @@ after(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-async function request(path, { method = 'GET', cookie, body } = {}) {
-  const headers = {};
+async function request(path, { method = 'GET', cookie, body, headers: extraHeaders = {} } = {}) {
+  const headers = { ...extraHeaders };
   if (cookie) headers.cookie = cookie;
   if (body !== undefined) headers['content-type'] = 'application/json';
   const response = await fetch(base + path, {
@@ -81,4 +81,63 @@ test('dashboard APIs require authentication and enforce organization roles', asy
     body: { name: 'Should not exist' },
   });
   assert.equal(forbidden.response.status, 403);
+});
+
+test('Defender supports incident workflow and revocable SDK credentials', async () => {
+  const owner = await signup('defender-owner@example.test', 'Defender Owner');
+
+  const sdk = await request('/api/defender/sdk', { cookie: owner.cookie });
+  assert.equal(sdk.response.status, 200);
+  assert.match(sdk.json.apiKey, /^sk_/);
+
+  const reported = await request('/api/defender/report', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${sdk.json.apiKey}` },
+    body: {
+      detections: [
+        {
+          method: 'POST',
+          url: '/api/admin?next=../../etc/passwd',
+          cls: 'path-traversal',
+          enforced: false,
+          srcIp: '203.0.113.10',
+        },
+      ],
+    },
+  });
+  assert.equal(reported.response.status, 200);
+  assert.equal(reported.json.accepted, 1);
+
+  const overview = await request('/api/defender/overview', { cookie: owner.cookie });
+  assert.equal(overview.response.status, 200);
+  assert.equal(overview.json.stats.open, 1);
+  assert.equal(overview.json.events[0].severity, 'high');
+  assert.equal(overview.json.events[0].source, 'sdk');
+
+  const incident = overview.json.events[0];
+  const triaged = await request(`/api/defender/events/${incident.id}`, {
+    method: 'PATCH',
+    cookie: owner.cookie,
+    body: { status: 'investigating' },
+  });
+  assert.equal(triaged.response.status, 200);
+  assert.equal(triaged.json.event.status, 'investigating');
+
+  const rotated = await request('/api/defender/sdk/rotate', { method: 'POST', cookie: owner.cookie });
+  assert.equal(rotated.response.status, 200);
+  assert.notEqual(rotated.json.apiKey, sdk.json.apiKey);
+
+  const oldCredential = await request('/api/defender/report', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${sdk.json.apiKey}` },
+    body: { detections: [{ method: 'GET', url: '/', cls: 'xss' }] },
+  });
+  assert.equal(oldCredential.response.status, 401);
+
+  const newCredential = await request('/api/defender/report', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${rotated.json.apiKey}` },
+    body: { detections: [{ method: 'GET', url: '/', cls: 'xss' }] },
+  });
+  assert.equal(newCredential.response.status, 200);
 });

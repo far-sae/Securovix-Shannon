@@ -55,6 +55,11 @@ The web service refreshes its authorization cache from Supabase using `SHANNON_C
 
 Owners and admins can configure generic webhooks, SIEM HTTP, Slack, Teams, Jira Cloud, and Linear from Team Workspace. Connector credentials are encrypted at rest. Deliveries use the durable queue, exponential-backoff retries, and dead-letter status after exhaustion.
 
+Defender SDK detections and incident status changes use the same durable integration pipeline. Use
+the Defender Operations page to triage incidents, rotate the organization-scoped SDK credential,
+export evidence, and control durable edge routes. Keep edge routes in monitor mode until their
+telemetry has been reviewed, then promote individual routes to enforce.
+
 Monitoring endpoints:
 
 - `GET /healthz`: process liveness
@@ -69,5 +74,6 @@ Alert on readiness failures, dead-letter jobs, growing queue depth, and expired 
 2. Apply migrations before deploying code that uses them.
 3. Deploy a worker, then the web service.
 4. Verify `/readyz`, enqueue a test connector delivery, and run an authorized test scan.
-5. Confirm the scan survives a web restart and its report downloads from Supabase Storage.
-6. Test invitation, password reset, MFA recovery, OIDC, SCIM deactivation, backup restore, and secret rotation in staging.
+5. Send a staging Defender SDK detection, triage it, rotate the key, and confirm the previous key is rejected.
+6. Confirm the scan and Defender incident survive a web restart and the report downloads from Supabase Storage.
+7. Test invitation, password reset, MFA recovery, OIDC, SCIM deactivation, backup restore, and secret rotation in staging.

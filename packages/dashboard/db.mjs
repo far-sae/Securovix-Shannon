@@ -111,6 +111,7 @@ function userFromRow(r) {
     mfaEnabled: r.mfa_enabled === true,
     mfaSecretEnc: r.mfa_secret_enc || null,
     mfaRecoveryCodes: Array.isArray(r.mfa_recovery_codes) ? r.mfa_recovery_codes : [],
+    defenderKeyVersion: Number(r.defender_key_version || 0),
     createdAt: r.created_at ? Number(r.created_at) : Date.now(),
   };
 }
@@ -131,6 +132,7 @@ function userToRow(u) {
     mfa_enabled: u.mfaEnabled === true,
     mfa_secret_enc: u.mfaSecretEnc || null,
     mfa_recovery_codes: u.mfaRecoveryCodes || [],
+    defender_key_version: Number(u.defenderKeyVersion || 0),
     created_at: u.createdAt || Date.now(),
   };
 }
@@ -304,6 +306,10 @@ export async function initDb() {
           cls: r.cls,
           enforced: r.enforced === true,
           srcIp: r.src_ip || null,
+          severity: r.severity || 'medium',
+          source: r.source || 'sdk',
+          status: r.status || 'open',
+          metadata: r.metadata || {},
           createdAt: Number(r.created_at),
         });
       }
@@ -901,6 +907,10 @@ export function appendDefenseEvent(event) {
         cls: event.cls,
         enforced: event.enforced === true,
         src_ip: event.srcIp || null,
+        severity: event.severity || 'medium',
+        source: event.source || 'sdk',
+        status: event.status || 'open',
+        metadata: event.metadata || {},
         created_at: event.createdAt || Date.now(),
       }]),
     }).catch((e) => console.error('[db] defense event save failed:', e.message));
@@ -909,4 +919,22 @@ export function appendDefenseEvent(event) {
 
 export function listDefenseEvents(orgId, limit = 200) {
   return (_defenseEvents[orgId] || []).slice(0, Math.max(1, Math.min(500, limit)));
+}
+
+export function updateDefenseEvent(orgId, id, patch) {
+  const event = (_defenseEvents[orgId] || []).find((item) => item.id === id);
+  if (!event) return null;
+  Object.assign(event, patch);
+  if (USE_SUPABASE) {
+    const body = {};
+    if (patch.status !== undefined) body.status = patch.status;
+    if (patch.severity !== undefined) body.severity = patch.severity;
+    if (patch.metadata !== undefined) body.metadata = patch.metadata;
+    sb(`/shannon_defense_events?id=eq.${encodeURIComponent(id)}&org_id=eq.${encodeURIComponent(orgId)}`, {
+      method: 'PATCH',
+      headers: { prefer: 'return=minimal' },
+      body: JSON.stringify(body),
+    }).catch((e) => console.error('[db] defense event update failed:', e.message));
+  } else persistTeam();
+  return event;
 }

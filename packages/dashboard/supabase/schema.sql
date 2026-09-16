@@ -133,7 +133,11 @@ create table if not exists public.shannon_edge_routes (
 create table if not exists public.shannon_defense_events (
   id text primary key, org_id text not null references public.shannon_organizations(id) on delete cascade,
   user_id text not null references public.shannon_users(id) on delete restrict, at text not null,
-  method text, url text, cls text, enforced boolean not null default false, src_ip text, created_at bigint not null
+  method text, url text, cls text, enforced boolean not null default false, src_ip text,
+  severity text not null default 'medium' check (severity in ('info','low','medium','high','critical')),
+  source text not null default 'sdk',
+  status text not null default 'open' check (status in ('open','investigating','contained','closed')),
+  metadata jsonb not null default '{}'::jsonb, created_at bigint not null
 );
 
 alter table public.shannon_users             enable row level security;
@@ -269,6 +273,16 @@ alter table public.shannon_jobs enable row level security;
 alter table public.shannon_artifacts enable row level security;
 alter table public.shannon_delivery_events enable row level security;
 alter table public.shannon_operational_events enable row level security;
+
+alter table public.shannon_users
+  add column if not exists defender_key_version integer not null default 0;
+alter table public.shannon_defense_events
+  add column if not exists severity text not null default 'medium',
+  add column if not exists source text not null default 'sdk',
+  add column if not exists status text not null default 'open',
+  add column if not exists metadata jsonb not null default '{}'::jsonb;
+create index if not exists shannon_defense_events_workflow_idx
+  on public.shannon_defense_events(org_id,status,severity,created_at desc);
 
 insert into storage.buckets(id,name,public,file_size_limit)
 values('shannon-artifacts','shannon-artifacts',false,104857600)
