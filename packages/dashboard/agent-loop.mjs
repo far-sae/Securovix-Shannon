@@ -163,7 +163,7 @@ export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 
   emit(
     'report',
     findings.length
-      ? `${findings.length} finding${findings.length === 1 ? '' : 's'} PROVEN — zero false positives (each carries a benign proof).`
+      ? `${findings.length} finding${findings.length === 1 ? '' : 's'} PROVEN with a benign proof marker.`
       : 'No vulnerabilities confirmed. Every probe abstained — nothing proven, nothing invented.',
   );
   return { understanding, steps, findings, stats: { tasks: tasks.length, confirmed: findings.length }, testedIds };

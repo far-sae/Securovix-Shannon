@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import _crypto from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -86,8 +86,12 @@ import { applyLineFix, generatePatch } from './patch.mjs';
 import { runInSandbox, sandboxAvailable } from './sandbox.mjs';
 import {
   appendOperationalEvent,
+  consumeScanAuthGrant,
+  consumeUsage,
   consumeAuthToken,
+  createScanAuthGrant,
   createAuthToken,
+  deleteOrgSecret,
   deleteIntegration,
   enqueueJob,
   enterpriseHealth,
@@ -95,13 +99,19 @@ import {
   findSsoIdentity,
   getJob,
   getIntegration,
+  getEntitlement,
+  getOrgSecret,
   listArtifacts,
   listDeliveries,
   listIntegrations,
   listJobs,
+  listUsage,
   listOperationalEvents,
+  listOrgSecrets,
   readArtifact,
   saveIntegration,
+  saveEntitlement,
+  saveOrgSecret,
   saveSsoIdentity,
   signedArtifactUrl,
   updateJob,
@@ -146,7 +156,12 @@ const app = express();
 // Google OAuth redirect URI is built with http://, which Google rejects.
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({
+  limit: '2mb',
+  verify(req, _res, buffer) {
+    if (req.originalUrl === '/api/billing/webhook') req.rawBody = Buffer.from(buffer);
+  },
+}));
 app.use((req, res, next) => {
   res.setHeader('x-content-type-options', 'nosniff');
   res.setHeader('x-frame-options', 'DENY');
@@ -245,6 +260,9 @@ const COOKIE_SECURE = process.env.NODE_ENV === 'production';
 // but verifySession() fails, getUser() returns null, and every authenticated route answers 401 —
 // so the whole app appears broken with no error that points at the cause.
 if (!process.env.SHANNON_SESSION_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SHANNON_SESSION_SECRET is required in production; use an independent random value of at least 32 bytes');
+  }
   console.warn(
     '[auth] WARNING: SHANNON_SESSION_SECRET is not set — using a key stored on local disk.\n' +
       '       On an ephemeral filesystem this key changes on every deploy and silently logs out\n' +
@@ -254,14 +272,43 @@ if (!process.env.SHANNON_SESSION_SECRET) {
   );
 }
 
-// Billing is disabled: every feature is currently available on one free, unlimited plan.
+const FREE_LIMITS = { scans: 5, codeFiles: 25, agentRuns: 10 };
+const PRO_LIMITS = { scans: 100, codeFiles: 1000, agentRuns: 500 };
 const FREE_PLAN = {
   plan: 'free',
   label: 'Free',
   pricing: { monthly: 0, yearly: 0, currency: 'GBP' },
   features: ['Dashboard', 'Web pentest', 'AI Agent', 'Code Scan', 'Defender', 'Team Workspace'],
-  dailyLimit: -1,
+  limits: FREE_LIMITS,
 };
+const PRO_PLAN = {
+  plan: 'pro', label: 'Pro',
+  pricing: { monthly: Number(process.env.SHANNON_PRO_MONTHLY_GBP || 99), yearly: Number(process.env.SHANNON_PRO_YEARLY_GBP || 990), currency: 'GBP' },
+  features: ['Everything in Free', 'Higher organization limits', 'SSO and SCIM', 'Priority operations support'],
+  limits: PRO_LIMITS,
+};
+
+function billingEnabled() {
+  return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET && process.env.STRIPE_PRO_MONTHLY_PRICE_ID);
+}
+
+async function organizationPlan(orgId) {
+  const entitlement = await getEntitlement(orgId);
+  const paid = entitlement?.plan === 'pro' && ['active', 'trialing'].includes(entitlement.status)
+    && (!entitlement.currentPeriodEnd || entitlement.currentPeriodEnd > Date.now());
+  return { plan: paid ? 'pro' : 'free', limits: paid ? { ...PRO_LIMITS, ...(entitlement.limits || {}) } : FREE_LIMITS, entitlement };
+}
+
+async function consumeOrgQuota(ctx, res, metric, amount = 1) {
+  const current = await organizationPlan(ctx.org.id);
+  const limit = Number(current.limits[metric] || 0);
+  const usage = await consumeUsage(ctx.org.id, metric, amount, limit);
+  res.setHeader('x-shannon-limit', String(limit));
+  res.setHeader('x-shannon-remaining', String(Math.max(0, limit - usage.used)));
+  if (usage.allowed) return true;
+  res.status(429).json({ error: `Daily organization limit reached for ${metric}.`, code: 'ORG_USAGE_LIMIT', metric, used: usage.used, limit, plan: current.plan, upgradeAvailable: billingEnabled() });
+  return false;
+}
 
 // loadUsers / saveUsers now provided by db.mjs (Supabase or JSON-file backend).
 function findUserByEmail(email) {
@@ -316,6 +363,9 @@ function setSessionCookie(res, userId) {
     'Set-Cookie',
     `shannon_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}${COOKIE_SECURE ? '; Secure' : ''}`,
   );
+}
+if (process.env.NODE_ENV === 'production' && (String(process.env.SHANNON_SESSION_SECRET).length < 32 || /replace-me|change-me/i.test(process.env.SHANNON_SESSION_SECRET))) {
+  throw new Error('SHANNON_SESSION_SECRET must be a non-placeholder value of at least 32 characters');
 }
 function clearSessionCookie(res) {
   res.append(
@@ -461,6 +511,7 @@ const PUBLIC_API = new Set([
   '/auth/password/reset',
   '/auth/invitations/accept',
   '/auth/plans',
+  '/billing/webhook',
 ]);
 app.use('/api', async (req, res, next) => {
   try {
@@ -471,7 +522,10 @@ app.use('/api', async (req, res, next) => {
   const relative = req.path;
   const bearerRoute =
     req.headers.authorization &&
-    (relative === '/defender/report' || (relative === '/defender/edge/routes' && req.method === 'GET'));
+    (relative === '/defender/report'
+      || (relative === '/defender/edge/routes' && req.method === 'GET')
+      || relative === '/platform/defender/edge/routes'
+      || relative === '/platform/defender/edge/report');
   if (PUBLIC_API.has(relative) || bearerRoute) return next();
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Authentication required.' });
@@ -548,7 +602,7 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 app.post('/api/auth/signup', async (req, res) => {
-  if (limited(req, res, 'signup', 5, 60 * 60 * 1000)) return;
+  if (limited(req, res, 'signup', Number(process.env.SHANNON_SIGNUP_RATE_LIMIT || 5), 60 * 60 * 1000)) return;
   const email = String(req.body?.email || '')
     .trim()
     .toLowerCase();
@@ -998,23 +1052,164 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
-// Paid billing is deliberately absent until a real provider and webhook-backed entitlement flow exist.
-let OIDC_DISCOVERY_CACHE = null;
-async function oidcDiscovery() {
-  const issuer = String(process.env.OIDC_ISSUER || '').replace(/\/$/, '');
+// OIDC discovery is shared by the legacy platform provider and encrypted organization providers.
+const OIDC_DISCOVERY_CACHE = new Map();
+async function oidcDiscovery(configuredIssuer = process.env.OIDC_ISSUER) {
+  const issuer = String(configuredIssuer || '').replace(/\/$/, '');
   if (!issuer) throw new Error('OIDC_ISSUER is not configured');
-  if (OIDC_DISCOVERY_CACHE?.issuer === issuer && OIDC_DISCOVERY_CACHE.expiresAt > Date.now()) {
-    return OIDC_DISCOVERY_CACHE.value;
-  }
+  if (!(await publicOriginAllowed(issuer))) throw new Error('OIDC issuer must be a public HTTPS origin');
+  const cached = OIDC_DISCOVERY_CACHE.get(issuer);
+  if (cached?.expiresAt > Date.now()) return cached.value;
   const response = await fetch(`${issuer}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`OIDC discovery returned ${response.status}`);
   const value = await response.json();
   if (!value.authorization_endpoint || !value.token_endpoint || !value.userinfo_endpoint) {
     throw new Error('OIDC provider discovery is incomplete');
   }
-  OIDC_DISCOVERY_CACHE = { issuer, expiresAt: Date.now() + 60 * 60_000, value };
+  const endpointsArePublic = await Promise.all(
+    [value.authorization_endpoint, value.token_endpoint, value.userinfo_endpoint].map((endpoint) => publicOriginAllowed(endpoint)),
+  );
+  if (endpointsArePublic.some((allowed) => !allowed)) throw new Error('OIDC endpoints must use public HTTPS origins');
+  OIDC_DISCOVERY_CACHE.set(issuer, { expiresAt: Date.now() + 60 * 60_000, value });
   return value;
 }
+
+async function organizationIdentityConfig(orgId, kind) {
+  const row = await getOrgSecret(orgId, kind, 'default');
+  if (!row) return null;
+  let secret = {};
+  try { secret = decryptSecret(row.secretEnc) || {}; } catch {}
+  return { ...row.config, ...secret, updatedAt: row.updatedAt };
+}
+
+app.get('/api/team/:orgId/identity', async (req, res) => {
+  const ctx = orgContext(req, res, 'settings.manage');
+  if (!ctx) return;
+  const [oidc, scim] = await Promise.all([
+    getOrgSecret(ctx.org.id, 'oidc', 'default'),
+    getOrgSecret(ctx.org.id, 'scim', 'default'),
+  ]);
+  res.json({
+    ok: true,
+    oidc: oidc ? { configured: true, ...oidc.config, updatedAt: oidc.updatedAt, startUrl: `${publicBaseUrl(req)}/auth/sso/org/${encodeURIComponent(ctx.org.id)}/start` } : { configured: false },
+    scim: scim ? { configured: true, updatedAt: scim.updatedAt, baseUrl: `${publicBaseUrl(req)}/scim/v2/orgs/${encodeURIComponent(ctx.org.id)}` } : { configured: false },
+  });
+});
+
+app.put('/api/team/:orgId/identity/oidc', async (req, res) => {
+  const ctx = orgContext(req, res, 'settings.manage');
+  if (!ctx) return;
+  const issuer = String(req.body?.issuer || '').replace(/\/$/, '');
+  const clientId = String(req.body?.clientId || '').trim();
+  const clientSecret = String(req.body?.clientSecret || '');
+  if (!/^https:\/\//i.test(issuer) || !clientId || clientSecret.length < 8) return res.status(400).json({ error: 'Issuer, client ID, and client secret are required; issuer must use HTTPS.' });
+  try { await oidcDiscovery(issuer); } catch (error) { return res.status(400).json({ error: `OIDC discovery failed: ${error.message}` }); }
+  const previous = await getOrgSecret(ctx.org.id, 'oidc', 'default');
+  const now = Date.now();
+  const requestedDomains = String(req.body?.allowedDomains || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
+  if (!requestedDomains.length) return res.status(400).json({ error: 'At least one verified email domain is required.' });
+  const allowedDomains = [];
+  for (const value of requestedDomains) {
+    let domain;
+    try { domain = registrable(hostOf(value)); } catch { return res.status(400).json({ error: `Invalid email domain: ${value}` }); }
+    if (!domain.includes('.') || !isVerified(ctx.user.id, domain)) {
+      return res.status(403).json({ error: `Verify ownership of ${domain} in Domains before enabling it for SSO.` });
+    }
+    if (!allowedDomains.includes(domain)) allowedDomains.push(domain);
+  }
+  await saveOrgSecret({
+    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`, orgId: ctx.org.id, kind: 'oidc', name: 'default',
+    config: { issuer, clientId, scopes: String(req.body?.scopes || 'openid email profile'), name: sanitizeLabel(req.body?.name || 'Company SSO', 80), allowedDomains },
+    secretEnc: encryptSecret({ clientSecret }), createdBy: previous?.createdBy || ctx.user.id,
+    createdAt: previous?.createdAt || now, updatedAt: now,
+  });
+  audit(ctx, previous ? 'identity.oidc_rotated' : 'identity.oidc_created', 'organization', ctx.org.id);
+  res.json({ ok: true, startUrl: `${publicBaseUrl(req)}/auth/sso/org/${encodeURIComponent(ctx.org.id)}/start` });
+});
+
+app.delete('/api/team/:orgId/identity/oidc', async (req, res) => {
+  const ctx = orgContext(req, res, 'settings.manage');
+  if (!ctx) return;
+  await deleteOrgSecret(ctx.org.id, 'oidc', 'default');
+  audit(ctx, 'identity.oidc_deleted', 'organization', ctx.org.id);
+  res.json({ ok: true });
+});
+
+app.put('/api/team/:orgId/identity/scim', async (req, res) => {
+  const ctx = orgContext(req, res, 'settings.manage');
+  if (!ctx) return;
+  const token = String(req.body?.token || randomToken(36));
+  if (token.length < 24) return res.status(400).json({ error: 'SCIM token must be at least 24 characters.' });
+  const previous = await getOrgSecret(ctx.org.id, 'scim', 'default');
+  const now = Date.now();
+  await saveOrgSecret({
+    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`, orgId: ctx.org.id, kind: 'scim', name: 'default', config: {},
+    secretEnc: encryptSecret({ token }), createdBy: previous?.createdBy || ctx.user.id,
+    createdAt: previous?.createdAt || now, updatedAt: now,
+  });
+  audit(ctx, previous ? 'identity.scim_rotated' : 'identity.scim_created', 'organization', ctx.org.id);
+  res.json({ ok: true, token, baseUrl: `${publicBaseUrl(req)}/scim/v2/orgs/${encodeURIComponent(ctx.org.id)}` });
+});
+
+app.delete('/api/team/:orgId/identity/scim', async (req, res) => {
+  const ctx = orgContext(req, res, 'settings.manage');
+  if (!ctx) return;
+  await deleteOrgSecret(ctx.org.id, 'scim', 'default');
+  audit(ctx, 'identity.scim_deleted', 'organization', ctx.org.id);
+  res.json({ ok: true });
+});
+
+app.get('/auth/sso/org/:orgId/start', async (req, res) => {
+  const org = getOrganization(String(req.params.orgId || ''));
+  const config = org && await organizationIdentityConfig(org.id, 'oidc');
+  if (!org || !config?.issuer || !config?.clientId || !config?.clientSecret) return res.status(404).send('Organization SSO is not configured.');
+  try {
+    const discovery = await oidcDiscovery(config.issuer);
+    const state = randomToken(24), verifier = randomToken(48);
+    const flow = signChallenge({ state, verifier, orgId: org.id }, 'org-oidc-flow', 10 * 60_000);
+    const challenge = _crypto.createHash('sha256').update(verifier).digest('base64url');
+    res.append('Set-Cookie', `shannon_org_oidc_state=${flow}; HttpOnly; SameSite=Lax; Path=/auth/sso/org/callback; Max-Age=600${COOKIE_SECURE ? '; Secure' : ''}`);
+    const redirectUri = `${publicBaseUrl(req)}/auth/sso/org/callback`;
+    const target = new URL(discovery.authorization_endpoint);
+    target.search = new URLSearchParams({ client_id: config.clientId, redirect_uri: redirectUri, response_type: 'code', scope: config.scopes || 'openid email profile', state, code_challenge: challenge, code_challenge_method: 'S256' });
+    res.redirect(target.toString());
+  } catch (error) { res.status(502).send(`SSO initialization failed: ${error.message}`); }
+});
+
+app.get('/auth/sso/org/callback', async (req, res) => {
+  const flow = verifyChallenge(parseCookies(req).shannon_org_oidc_state || '', 'org-oidc-flow');
+  const expected = String(flow?.state || ''), actual = String(req.query?.state || '');
+  const stateOk = expected.length > 0 && expected.length === actual.length && _crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
+  if (!stateOk || !req.query?.code || !flow?.orgId) return res.status(400).send('Invalid SSO callback. Start sign-in again.');
+  res.append('Set-Cookie', `shannon_org_oidc_state=; HttpOnly; SameSite=Lax; Path=/auth/sso/org/callback; Max-Age=0${COOKIE_SECURE ? '; Secure' : ''}`);
+  try {
+    const config = await organizationIdentityConfig(flow.orgId, 'oidc');
+    if (!config) throw new Error('Organization SSO configuration was removed');
+    const discovery = await oidcDiscovery(config.issuer);
+    const redirectUri = `${publicBaseUrl(req)}/auth/sso/org/callback`;
+    const tokenResponse = await fetch(discovery.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri, client_id: config.clientId, client_secret: config.clientSecret, code_verifier: String(flow.verifier) }), signal: AbortSignal.timeout(10_000) });
+    const tokens = await tokenResponse.json();
+    if (!tokenResponse.ok || !tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'token exchange failed');
+    const profileResponse = await fetch(discovery.userinfo_endpoint, { headers: { authorization: `Bearer ${tokens.access_token}` }, signal: AbortSignal.timeout(10_000) });
+    const profile = await profileResponse.json();
+    if (!profileResponse.ok || !profile.sub || !profile.email || profile.email_verified === false) throw new Error('SSO user profile is incomplete or unverified');
+    const email = String(profile.email).toLowerCase();
+    const emailDomain = registrable(email.split('@')[1] || '');
+    if (!config.allowedDomains?.includes(emailDomain)) throw new Error('Your email domain is not allowed for this workspace');
+    const providerKey = `${config.issuer}#org=${flow.orgId}`;
+    const identity = await findSsoIdentity(providerKey, String(profile.sub));
+    const users = loadUsers();
+    let user = (identity && users[identity.userId]) || findUserByEmail(email);
+    if (!user) { const id = _crypto.randomBytes(8).toString('hex'); user = { id, email, name: profile.name || email, picture: profile.picture || null, emailVerifiedAt: Date.now(), disabledAt: null, mfaEnabled: false, mfaSecretEnc: null, mfaRecoveryCodes: [], createdAt: Date.now(), subscription: null }; users[id] = user; }
+    if (user.disabledAt) return res.status(403).send('This account is disabled.');
+    user.emailVerifiedAt ||= Date.now(); saveUsers(users); await waitForUserWrites();
+    await saveSsoIdentity({ provider: providerKey, subject: String(profile.sub), userId: user.id, email, createdAt: Date.now(), lastLoginAt: Date.now() });
+    if (!getMembership(flow.orgId, user.id)) saveMembership({ orgId: flow.orgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
+    setSessionCookie(res, user.id);
+    res.append('Set-Cookie', `shannon_org=${encodeURIComponent(flow.orgId)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}${COOKIE_SECURE ? '; Secure' : ''}`);
+    res.redirect('/');
+  } catch (error) { res.status(502).send(`SSO sign-in failed: ${error.message}`); }
+});
 
 app.get('/auth/sso', async (req, res) => {
   const clientId = process.env.OIDC_CLIENT_ID;
@@ -1107,15 +1302,16 @@ function requireScim(req, res, next) {
   const orgId = process.env.SHANNON_SCIM_ORG_ID;
   if (!orgId || !getOrganization(orgId)) return res.status(503).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '503', detail: 'SCIM organization is not configured' });
   req.scimOrgId = orgId;
+  req.scimTenantScoped = false;
   next();
 }
 
-function scimUser(user) {
+function scimUser(user, active = !user.disabledAt) {
   return {
     schemas: ['urn:ietf:params:scim:schemas:core:2.0:User'],
     id: user.id,
     userName: user.email,
-    active: !user.disabledAt,
+    active,
     displayName: user.name || user.email,
     name: { formatted: user.name || user.email },
     emails: [{ value: user.email, primary: true }],
@@ -1123,26 +1319,38 @@ function scimUser(user) {
   };
 }
 
-app.use('/scim/v2', requireScim);
-app.get('/scim/v2/ServiceProviderConfig', (_req, res) => res.json({
+async function requireOrgScim(req, res, next) {
+  const orgId = String(req.params.orgId || '');
+  const config = getOrganization(orgId) && await organizationIdentityConfig(orgId, 'scim');
+  const configured = String(config?.token || '');
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const valid = configured.length >= 24 && configured.length === supplied.length && _crypto.timingSafeEqual(Buffer.from(configured), Buffer.from(supplied));
+  if (!valid) return res.status(401).set('www-authenticate', 'Bearer').json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '401', detail: 'Unauthorized' });
+  req.scimOrgId = orgId;
+  req.scimTenantScoped = true;
+  next();
+}
+
+const scimRouter = express.Router();
+scimRouter.get('/ServiceProviderConfig', (_req, res) => res.json({
   schemas: ['urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig'],
   patch: { supported: true }, bulk: { supported: false }, filter: { supported: true, maxResults: 200 },
   changePassword: { supported: false }, sort: { supported: false }, etag: { supported: false },
 }));
-app.get('/scim/v2/Users', (req, res) => {
+scimRouter.get('/Users', (req, res) => {
   let users = listMembers(req.scimOrgId).map((member) => loadUsers()[member.userId]).filter(Boolean);
   const match = /^userName\s+eq\s+"([^"]+)"$/i.exec(String(req.query.filter || ''));
   if (match) users = users.filter((user) => user.email === match[1].toLowerCase());
   const resources = users.map(scimUser);
   res.json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:ListResponse'], totalResults: resources.length, startIndex: 1, itemsPerPage: resources.length, Resources: resources });
 });
-app.get('/scim/v2/Users/:id', (req, res) => {
+scimRouter.get('/Users/:id', (req, res) => {
   const membership = getMembership(req.scimOrgId, req.params.id);
   const user = membership && loadUsers()[req.params.id];
   if (!user) return res.status(404).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '404', detail: 'User not found' });
   res.json(scimUser(user));
 });
-app.post('/scim/v2/Users', async (req, res) => {
+scimRouter.post('/Users', async (req, res) => {
   const email = String(req.body?.userName || req.body?.emails?.[0]?.value || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '400', detail: 'A valid userName is required' });
   const users = loadUsers();
@@ -1151,17 +1359,17 @@ app.post('/scim/v2/Users', async (req, res) => {
     const id = _crypto.randomBytes(8).toString('hex');
     user = {
       id, email, name: sanitizeLabel(req.body?.displayName || req.body?.name?.formatted || email, 100),
-      emailVerifiedAt: Date.now(), disabledAt: req.body?.active === false ? Date.now() : null,
+      emailVerifiedAt: Date.now(), disabledAt: !req.scimTenantScoped && req.body?.active === false ? Date.now() : null,
       mfaEnabled: false, mfaSecretEnc: null, mfaRecoveryCodes: [], createdAt: Date.now(), subscription: null,
     };
     users[id] = user;
     saveUsers(users);
     await waitForUserWrites();
   }
-  if (!getMembership(req.scimOrgId, user.id)) saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
-  res.status(201).json(scimUser(user));
+  if (req.body?.active !== false && !getMembership(req.scimOrgId, user.id)) saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
+  res.status(201).json(scimUser(user, req.body?.active !== false && !user.disabledAt));
 });
-app.patch('/scim/v2/Users/:id', (req, res) => {
+scimRouter.patch('/Users/:id', (req, res) => {
   const membership = getMembership(req.scimOrgId, req.params.id);
   const user = membership && loadUsers()[req.params.id];
   if (!user) return res.status(404).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '404', detail: 'User not found' });
@@ -1169,36 +1377,116 @@ app.patch('/scim/v2/Users/:id', (req, res) => {
     const path = String(operation.path || '').toLowerCase();
     if (path === 'active' || (!path && Object.hasOwn(operation.value || {}, 'active'))) {
       const active = path === 'active' ? operation.value : operation.value.active;
-      user.disabledAt = active === false ? Date.now() : null;
+      if (req.scimTenantScoped) {
+        if (active === false) removeMembership(req.scimOrgId, user.id);
+        else if (!getMembership(req.scimOrgId, user.id)) saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
+      } else user.disabledAt = active === false ? Date.now() : null;
     }
     if (path === 'displayname') user.name = sanitizeLabel(operation.value, 100);
   }
   saveUsers(loadUsers());
-  res.json(scimUser(user));
+  res.json(scimUser(user, req.scimTenantScoped ? !!getMembership(req.scimOrgId, user.id) : !user.disabledAt));
 });
-app.delete('/scim/v2/Users/:id', (req, res) => {
+scimRouter.delete('/Users/:id', (req, res) => {
   const membership = getMembership(req.scimOrgId, req.params.id);
   const user = membership && loadUsers()[req.params.id];
   if (!user) return res.status(404).end();
-  user.disabledAt = Date.now();
-  saveUsers(loadUsers());
+  if (req.scimTenantScoped) removeMembership(req.scimOrgId, user.id);
+  else { user.disabledAt = Date.now(); saveUsers(loadUsers()); }
   res.status(204).end();
 });
 
-app.post('/api/auth/subscribe', (req, res) => {
-  const u = getUser(req);
-  if (!u) return res.status(401).json({ error: 'Login required.' });
-  res.status(410).json({ error: 'Paid subscriptions are disabled. Every feature is available on the free plan.' });
+app.use('/scim/v2/orgs/:orgId', requireOrgScim, scimRouter);
+app.use('/scim/v2', requireScim, scimRouter);
+
+async function stripeRequest(path, params) {
+  const response = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(params), signal: AbortSignal.timeout(15_000),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.error?.message || `Stripe returned ${response.status}`);
+  return data;
+}
+
+export function verifyStripeWebhook(raw, header, secret, now = Date.now()) {
+  header = String(header || '');
+  const timestamp = header.split(',').find((item) => item.startsWith('t='))?.slice(2);
+  const signatures = header.split(',').filter((item) => item.startsWith('v1=')).map((item) => item.slice(3));
+  if (!raw || !timestamp || !secret || Math.abs(now / 1000 - Number(timestamp)) > 300) return null;
+  const expected = _crypto.createHmac('sha256', secret).update(`${timestamp}.${raw.toString('utf8')}`).digest('hex');
+  const valid = signatures.some((value) => value.length === expected.length && _crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected)));
+  if (!valid) return null;
+  try { return JSON.parse(raw.toString('utf8')); } catch { return null; }
+}
+
+function verifiedStripeEvent(req) {
+  return verifyStripeWebhook(req.rawBody, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET || '');
+}
+
+app.post('/api/auth/subscribe', async (req, res) => {
+  const ctx = requirePermission(req, res, 'settings.manage');
+  if (!ctx) return;
+  if (!billingEnabled()) return res.status(503).json({ error: 'Billing is not configured.' });
+  const cycle = req.body?.cycle === 'yearly' ? 'yearly' : 'monthly';
+  const price = cycle === 'yearly' ? process.env.STRIPE_PRO_YEARLY_PRICE_ID : process.env.STRIPE_PRO_MONTHLY_PRICE_ID;
+  if (!price) return res.status(503).json({ error: `${cycle} billing is not configured.` });
+  try {
+    const base = publicBaseUrl(req);
+    const session = await stripeRequest('checkout/sessions', {
+      mode: 'subscription', 'line_items[0][price]': price, 'line_items[0][quantity]': '1',
+      customer_email: ctx.user.email, client_reference_id: ctx.org.id,
+      'metadata[orgId]': ctx.org.id, 'subscription_data[metadata][orgId]': ctx.org.id,
+      success_url: `${base}/?billing=success`, cancel_url: `${base}/?billing=cancelled`,
+      allow_promotion_codes: 'true',
+    });
+    audit(ctx, 'billing.checkout_created', 'organization', ctx.org.id, { cycle, sessionId: session.id });
+    res.json({ ok: true, url: session.url });
+  } catch (error) { res.status(502).json({ error: `Could not create checkout: ${error.message}` }); }
+});
+
+app.post('/api/billing/webhook', async (req, res) => {
+  if (!billingEnabled()) return res.status(503).json({ error: 'Billing is not configured.' });
+  const event = verifiedStripeEvent(req);
+  if (!event) return res.status(400).json({ error: 'Invalid Stripe signature.' });
+  const object = event.data?.object || {};
+  const orgId = String(object.metadata?.orgId || object.client_reference_id || '');
+  if (orgId && getOrganization(orgId)) {
+    const eventAt = Number(event.created || 0) * 1000 || Date.now();
+    const current = await getEntitlement(orgId);
+    if (current?.updatedAt && current.updatedAt >= eventAt) return res.json({ received: true, duplicateOrStale: true });
+    if (event.type === 'checkout.session.completed') {
+      const paid = object.payment_status === 'paid' || object.payment_status === 'no_payment_required';
+      await saveEntitlement({ orgId, plan: 'pro', status: paid ? 'active' : 'incomplete', provider: 'stripe', providerCustomerId: String(object.customer || ''), providerSubscriptionId: String(object.subscription || ''), currentPeriodEnd: null, limits: PRO_LIMITS, updatedAt: eventAt });
+    } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.created' || event.type === 'customer.subscription.deleted') {
+      await saveEntitlement({ orgId, plan: 'pro', status: event.type.endsWith('.deleted') ? 'canceled' : String(object.status || 'incomplete'), provider: 'stripe', providerCustomerId: String(object.customer || ''), providerSubscriptionId: String(object.id || ''), currentPeriodEnd: object.current_period_end ? Number(object.current_period_end) * 1000 : null, limits: PRO_LIMITS, updatedAt: eventAt });
+    }
+  }
+  res.json({ received: true });
 });
 
 app.get('/api/auth/plans', (_req, res) => {
-  res.json({ plans: [FREE_PLAN], billingEnabled: false });
+  res.json({ plans: billingEnabled() ? [FREE_PLAN, PRO_PLAN] : [FREE_PLAN], billingEnabled: billingEnabled() });
 });
 
-app.post('/api/auth/cancel', (req, res) => {
-  const u = getUser(req);
-  if (!u) return res.status(401).json({ error: 'Login required.' });
-  res.status(410).json({ error: 'There is no paid subscription to cancel. Every feature is free.' });
+app.post('/api/auth/cancel', async (req, res) => {
+  const ctx = requirePermission(req, res, 'settings.manage');
+  if (!ctx) return;
+  const entitlement = await getEntitlement(ctx.org.id);
+  if (!billingEnabled() || !entitlement?.providerCustomerId) return res.status(409).json({ error: 'This organization has no Stripe subscription.' });
+  try {
+    const portal = await stripeRequest('billing_portal/sessions', { customer: entitlement.providerCustomerId, return_url: `${publicBaseUrl(req)}/` });
+    res.json({ ok: true, url: portal.url });
+  } catch (error) { res.status(502).json({ error: `Could not open billing portal: ${error.message}` }); }
+});
+
+app.get('/api/team/:orgId/usage', async (req, res) => {
+  const ctx = orgContext(req, res, 'audit.read');
+  if (!ctx) return;
+  const current = await organizationPlan(ctx.org.id);
+  const usage = await listUsage(ctx.org.id);
+  res.json({ ok: true, plan: current.plan, limits: current.limits, usage, billingEnabled: billingEnabled() });
 });
 
 // ============================================================
@@ -1212,10 +1500,9 @@ function csIsLocalhost(req) {
   return a === '::1' || a === '127.0.0.1' || a === '::ffff:127.0.0.1';
 }
 
-// Code Scan access — FREE FOR ALL.
-// Subscription gating removed: every request gets an unlimited session.
-// Logged-in users keep their userId so per-user usage stats still tally,
-// anonymous users get an "owner" pseudo-session with no daily cap.
+// Code Scan access is authenticated and organization-scoped.
+// Every caller must have a workspace session. The handlers consume durable organization quotas;
+// this helper only resolves the user and active organization context.
 function csSession(req) {
   const u = getUser(req);
   if (!u) return null;
@@ -1260,7 +1547,7 @@ Rules:
 - Every patch must reference at least one finding id.
 - Output ONLY the JSON code fence — no prose before or after.`;
 
-app.get('/api/code-scan/me', (req, res) => {
+app.get('/api/code-scan/me', async (req, res) => {
   const u = getUser(req);
   const s = csSession(req);
   if (!s) {
@@ -1271,15 +1558,19 @@ app.get('/api/code-scan/me', (req, res) => {
       user: publicUser(u),
     });
   }
+  const ctx = requestContext(req);
+  const current = await organizationPlan(ctx.org.id);
+  const usage = await listUsage(ctx.org.id);
+  const used = Number(usage.find((item) => item.metric === 'codeFiles')?.quantity || 0);
   return res.json({
     subscribed: true,
     authed: !!u,
     user: publicUser(u),
     isOwner: s.isOwner,
-    plan: s.plan,
-    label: s.label,
-    used: s.used,
-    dailyLimit: s.dailyLimit,
+    plan: current.plan,
+    label: current.plan === 'pro' ? 'Pro' : 'Free',
+    used,
+    dailyLimit: current.limits.codeFiles,
   });
 });
 
@@ -1817,31 +2108,25 @@ async function csOrchestrate(runId) {
   csBc(run, { type: 'complete', result, agents });
 }
 
-app.post('/api/code-scan/multi/start', (req, res) => {
+app.post('/api/code-scan/multi/start', async (req, res) => {
   const ctx = requirePermission(req, res, 'scans.run');
   if (!ctx) return;
   if (limited(req, res, `code-scan:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
   const session = csSession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Authentication required.' });
-  const { code, filename, keys: bodyKeys } = req.body || {};
+  const { code, filename } = req.body || {};
   if (!code || typeof code !== 'string') return res.status(400).json({ ok: false, error: 'Provide source code.' });
   if (code.length > 1_000_000)
     return res.status(413).json({ ok: false, error: 'Code exceeds 1MB. Try splitting it into smaller files.' });
 
-  // Browser-supplied keys are the source of truth. Server settings file & env are LEGACY fallbacks only.
-  const legacy = settingsFor(req);
-  const keys = {
-    claude: bodyKeys?.claude || legacy.apiKey || process.env.ANTHROPIC_API_KEY || '',
-    openai: bodyKeys?.openai || legacy.openaiKey || '',
-    gemini: bodyKeys?.gemini || legacy.geminiKey || '',
-    glm: bodyKeys?.glm || legacy.glmKey || '',
-  };
+  const keys = await aiKeysForRequest(req);
   if (!keys.claude) {
     return res.status(400).json({
       ok: false,
-      error: 'Anthropic key required. Add it in Settings → War-Room Provider Keys (stored only in your browser).',
+      error: 'Anthropic key required. An organization owner or admin can add it in Settings.',
     });
   }
+  if (!(await consumeOrgQuota(ctx, res, 'codeFiles'))) return;
 
   const runId = randomUUID().slice(0, 8);
   const sessForRun = { isOwner: session.isOwner, userId: session.userId, orgId: ctx.org.id };
@@ -1996,13 +2281,13 @@ app.post('/api/code-scan/quick', async (req, res) => {
   if (limited(req, res, `quick-scan:${ctx.user.id}`, 60, 60 * 60 * 1000)) return;
   const session = csSession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Authentication required.' });
-  const { code, filename, keys: bodyKeys } = req.body || {};
+  const { code, filename } = req.body || {};
   if (!code || typeof code !== 'string') return res.status(400).json({ ok: false, error: 'Provide source code.' });
   if (code.length > 1_000_000) return res.status(413).json({ ok: false, error: 'File exceeds 1MB.' });
 
-  const legacy = settingsFor(req);
-  const apiKey = bodyKeys?.claude || legacy.apiKey || process.env.ANTHROPIC_API_KEY || '';
+  const apiKey = (await aiKeysForRequest(req)).claude;
   if (!apiKey) return res.status(400).json({ ok: false, error: 'Anthropic key required.' });
+  if (!(await consumeOrgQuota(ctx, res, 'codeFiles'))) return;
 
   try {
     const out = await quickScanFile({ apiKey, code, filename });
@@ -2072,17 +2357,44 @@ function settingsFor(req) {
   return user ? { ...loadSettings(), ...loadUserSettings(user.id) } : loadSettings();
 }
 
+const AI_PROVIDER_NAMES = new Set(['claude', 'openai', 'gemini', 'glm']);
+
+async function organizationAiKeys(orgId) {
+  const keys = { claude: '', openai: '', gemini: '', glm: '' };
+  if (!orgId) return keys;
+  for (const row of await listOrgSecrets(orgId, 'ai-provider', { includeSecrets: true })) {
+    if (!AI_PROVIDER_NAMES.has(row.name)) continue;
+    try { keys[row.name] = String(decryptSecret(row.secretEnc)?.apiKey || ''); } catch {}
+  }
+  return keys;
+}
+
+async function aiKeysForRequest(req) {
+  const ctx = requestContext(req);
+  const keys = await organizationAiKeys(ctx?.org?.id);
+  if (Object.values(keys).some(Boolean)) return keys;
+  const allowPlatform = process.env.SHANNON_ALLOW_PLATFORM_AI_KEYS === '1' || process.env.NODE_ENV !== 'production';
+  if (!allowPlatform) return keys;
+  const legacy = settingsFor(req);
+  return {
+    claude: legacy.apiKey || process.env.ANTHROPIC_API_KEY || '',
+    openai: legacy.openaiKey || process.env.OPENAI_API_KEY || '',
+    gemini: legacy.geminiKey || process.env.GOOGLE_API_KEY || '',
+    glm: legacy.glmKey || process.env.ZHIPU_API_KEY || '',
+  };
+}
+
 // Initialize from saved settings
 const initSettings = loadSettings();
 if (initSettings.apiKey && !process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = initSettings.apiKey;
 if (initSettings.model) process.env.SHANNON_MODEL = initSettings.model;
 
 // ---- API: Settings ----
-// Provider keys are NOT returned here — they live only in the browser's localStorage.
+// Provider key values are never returned; only organization-scoped configuration status is exposed.
 app.get('/api/settings', (req, res) => {
   const s = settingsFor(req);
   res.json({
-    keysStorage: 'browser',
+    keysStorage: 'encrypted-organization-store',
     model: s.model || process.env.SHANNON_MODEL || 'claude-opus-4-7',
     provider: s.provider || 'anthropic',
     baseUrl: s.baseUrl || '',
@@ -2095,6 +2407,53 @@ app.post('/api/settings', (req, res) => {
   const updated = { ...current, ...req.body };
   const sanitized = { provider: updated.provider, model: updated.model, baseUrl: updated.baseUrl };
   saveUserSettings(user.id, sanitized);
+  res.json({ ok: true });
+});
+
+app.get('/api/team/:orgId/ai-providers', async (req, res) => {
+  const ctx = orgContext(req, res, 'scans.read');
+  if (!ctx) return;
+  const rows = await listOrgSecrets(ctx.org.id, 'ai-provider');
+  res.json({
+    ok: true,
+    providers: [...AI_PROVIDER_NAMES].map((provider) => {
+      const row = rows.find((item) => item.name === provider);
+      return { provider, configured: !!row?.configured, updatedAt: row?.updatedAt || null };
+    }),
+  });
+});
+
+app.put('/api/team/:orgId/ai-providers/:provider', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  const provider = String(req.params.provider || '').toLowerCase();
+  if (!AI_PROVIDER_NAMES.has(provider)) return res.status(400).json({ error: 'Unsupported AI provider.' });
+  const apiKey = String(req.body?.apiKey || '').trim();
+  if (apiKey.length < 10 || apiKey.length > 8_192) return res.status(400).json({ error: 'API key is invalid.' });
+  const previous = await getOrgSecret(ctx.org.id, 'ai-provider', provider);
+  const now = Date.now();
+  await saveOrgSecret({
+    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`,
+    orgId: ctx.org.id,
+    kind: 'ai-provider',
+    name: provider,
+    config: {},
+    secretEnc: encryptSecret({ apiKey }),
+    createdBy: previous?.createdBy || ctx.user.id,
+    createdAt: previous?.createdAt || now,
+    updatedAt: now,
+  });
+  audit(ctx, previous ? 'ai_provider.rotated' : 'ai_provider.created', 'ai-provider', provider);
+  res.json({ ok: true, provider, configured: true, updatedAt: now });
+});
+
+app.delete('/api/team/:orgId/ai-providers/:provider', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  const provider = String(req.params.provider || '').toLowerCase();
+  if (!AI_PROVIDER_NAMES.has(provider)) return res.status(400).json({ error: 'Unsupported AI provider.' });
+  await deleteOrgSecret(ctx.org.id, 'ai-provider', provider);
+  audit(ctx, 'ai_provider.deleted', 'ai-provider', provider);
   res.json({ ok: true });
 });
 
@@ -2650,7 +3009,7 @@ app.get('/api/scans/:id', async (req, res) => {
 //   workspaces/<id>/broker/<category>/compliance.json (ComplianceReport)
 // We aggregate them across whatever classes ran into one verified-findings view +
 // a merged OWASP/CWE coverage roll-up. Tool-confirmed only → these are real, not noise.
-// Certification-grade pentest report (CVSS 3.1 + OWASP WSTG/ASVS + compliance + sign-off).
+// Automated evidence report (CVSS 3.1 + OWASP WSTG/ASVS + framework mappings + sign-off).
 // Open the HTML in a browser and Print → Save as PDF for a deliverable. ?format=md for Markdown.
 app.get('/api/scans/:id/report', async (req, res) => {
   const ctx = scanContext(req, res, req.params.id);
@@ -2675,7 +3034,7 @@ app.get('/api/scans/:id/report', async (req, res) => {
     const artifact = (await listArtifacts(ctx.org.id, req.params.id)).find(
       (item) => item.metadata?.relativePath === `purple/certification-report.${fmt}`,
     );
-    if (!artifact) return res.status(404).json({ error: 'No certification report for this scan yet.' });
+    if (!artifact) return res.status(404).json({ error: 'No evidence report for this scan yet.' });
     res.setHeader('content-type', fmt === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
     res.setHeader('content-disposition', `inline; filename="shannon-pentest-${req.params.id}.${fmt}"`);
     return res.end(await readArtifact(artifact));
@@ -3012,11 +3371,21 @@ function agentDeps(target, headers = {}) {
 async function resolveAuthHeaders(req, target) {
   const b = req.body || {};
   const q = req.query || {};
-  const cookie = String(b.cookie || q.cookie || '').trim();
+  const ctx = requestContext(req);
+  const grantId = String(b.authGrantId || q.authGrantId || '').trim();
+  let credentials = b;
+  if (grantId) {
+    if (!ctx) throw Object.assign(new Error('Authentication required.'), { status: 401 });
+    const targetOrigin = new URL(target).origin;
+    const grant = await consumeScanAuthGrant(grantId, ctx.user.id, ctx.org.id, targetOrigin);
+    if (!grant) throw Object.assign(new Error('The authenticated-session grant is invalid, expired, or already used.'), { status: 401 });
+    credentials = decryptSecret(grant.secretEnc) || {};
+  }
+  const cookie = String(credentials.cookie || '').trim();
   if (cookie) return { Cookie: cookie };
-  const loginUrl = String(b.loginUrl || q.loginUrl || '').trim();
-  const username = String(b.username || q.username || '').trim();
-  const password = String(b.password || q.password || '');
+  const loginUrl = String(credentials.loginUrl || '').trim();
+  const username = String(credentials.username || '').trim();
+  const password = String(credentials.password || '');
   if (!loginUrl || !username) return {};
   try {
     const lh = hostOf(loginUrl);
@@ -3024,7 +3393,8 @@ async function resolveAuthHeaders(req, target) {
     if (!isLocalHost(lh) && registrable(lh) !== registrable(th)) return {}; // cross-domain login → refuse
     const sess = await login({ loginUrl, username, password });
     return sess?.Cookie ? sess : {};
-  } catch {
+  } catch (error) {
+    if (error?.status) throw error;
     return {};
   }
 }
@@ -3062,18 +3432,70 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
   }
   try {
     const headers = await resolveAuthHeaders(req, target);
+    const plan = await organizationPlan(ctx.org.id);
+    const quota = await consumeUsage(ctx.org.id, 'agentRuns', 1, Number(plan.limits.agentRuns || 0));
+    if (!quota.allowed) return { status: 429, error: `Daily organization limit reached for agent runs (${quota.used}/${quota.limit}).` };
     const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120, headers });
     return { target, surface, headers, ctx };
   } catch (e) {
-    return { status: 502, error: `Could not reach the target: ${e.message}` };
+    return e?.status
+      ? { status: e.status, error: e.message }
+      : { status: 502, error: `Could not reach the target: ${e.message}` };
   }
 }
+
+// EventSource can only issue GET requests. Never place target credentials in its URL: exchange
+// them over a protected POST for an encrypted, exact-origin-bound, single-use grant instead.
+app.post('/api/agent/auth-grant', async (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.run');
+  if (!ctx) return;
+  const raw = String(req.body?.target || '').trim();
+  if (!raw) return res.status(400).json({ error: 'Provide a target URL.' });
+  let target;
+  try {
+    target = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch {
+    return res.status(400).json({ error: 'That does not look like a valid URL.' });
+  }
+  const host = target.hostname.toLowerCase();
+  if (!isLocalHost(host) && !isVerified(ctx.user.id, host)) {
+    return res.status(403).json({ error: `Verify ownership of ${registrable(host)} first.`, needsVerification: registrable(host) });
+  }
+  const cookie = String(req.body?.cookie || '').trim();
+  const loginUrl = String(req.body?.loginUrl || '').trim();
+  const username = String(req.body?.username || '').trim();
+  const password = String(req.body?.password || '');
+  if (!cookie && !(loginUrl && username)) return res.json({ ok: true, authGrantId: null });
+  if (cookie.length > 16_384 || loginUrl.length > 2_048 || username.length > 512 || password.length > 4_096) {
+    return res.status(400).json({ error: 'Authentication data is too large.' });
+  }
+  if (loginUrl) {
+    let loginHost;
+    try { loginHost = hostOf(loginUrl); } catch { return res.status(400).json({ error: 'Login URL is invalid.' }); }
+    if (!isLocalHost(loginHost) && registrable(loginHost) !== registrable(host)) {
+      return res.status(400).json({ error: 'The login URL must use the same registrable domain as the scan target.' });
+    }
+  }
+  const now = Date.now();
+  const id = `sag_${randomToken(32)}`;
+  await createScanAuthGrant({
+    id,
+    userId: ctx.user.id,
+    orgId: ctx.org.id,
+    targetOrigin: target.origin,
+    secretEnc: encryptSecret(cookie ? { cookie } : { loginUrl, username, password }),
+    expiresAt: now + 5 * 60_000,
+    createdAt: now,
+  });
+  audit(ctx, 'agent.auth_grant_created', 'scan-auth-grant', id, { targetOrigin: target.origin, expiresAt: now + 5 * 60_000 });
+  res.status(201).json({ ok: true, authGrantId: id, expiresInSeconds: 300 });
+});
 
 app.post('/api/agent/understand', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   const understanding = analyzeSurface(r.surface);
-  const key = settingsFor(req).apiKey || process.env.ANTHROPIC_API_KEY;
+  const key = (await aiKeysForRequest(req)).claude;
   understanding.aiAvailable = !!key;
   understanding.narrative = await aiNarrative(understanding, key);
   res.json({ ok: true, understanding });
@@ -3484,7 +3906,7 @@ app.post('/api/agent/custom-check', async (req, res) => {
   }
   let proposed = check;
   if (!proposed && instruction) {
-    const key = settingsFor(req).apiKey || process.env.ANTHROPIC_API_KEY;
+    const key = (await aiKeysForRequest(req)).claude;
     if (!key)
       return res
         .status(400)
@@ -3556,6 +3978,7 @@ async function llmWriteCode(instruction, lang, key) {
 app.post('/api/agent/sandbox', async (req, res) => {
   const active = requirePermission(req, res, 'scans.run');
   if (!active) return;
+  if (limited(req, res, `sandbox:${active.user.id}`, 10, 60 * 60 * 1000)) return;
   const { target, code, lang = 'python', instruction } = req.body || {};
   if (!target) return res.status(400).json({ error: 'Provide a target.' });
   let host;
@@ -3583,7 +4006,7 @@ app.post('/api/agent/sandbox', async (req, res) => {
       });
   let src = code;
   if (!src && instruction) {
-    const key = settingsFor(req).apiKey || process.env.ANTHROPIC_API_KEY;
+    const key = (await aiKeysForRequest(req)).claude;
     if (!key)
       return res
         .status(400)
@@ -3592,6 +4015,7 @@ app.post('/api/agent/sandbox', async (req, res) => {
     if (!src) return res.status(502).json({ error: 'The AI could not write the code — try pasting it.' });
   }
   if (!src) return res.status(400).json({ error: 'Provide an instruction (AI) or paste code.' });
+  if (!(await consumeOrgQuota(active, res, 'agentRuns'))) return;
   let input = '';
   try {
     setSessionHeaders({});
@@ -3675,7 +4099,7 @@ app.post('/api/agent/patch', async (req, res) => {
     .replace(/-extract$|-context$|-metadata$/, '');
   const patch = generatePatch({ finding, snippet, guidance: detectionRule(cls) });
   if (!patch) return res.json({ ok: true, patch: null });
-  const key = settingsFor(req).apiKey || process.env.ANTHROPIC_API_KEY;
+  const key = (await aiKeysForRequest(req)).claude;
   if (key) patch.llm = await llmPatch({ snippet, cls, key });
   // If we have a confident rewrite AND the caller passed the full file + line, apply it so they can
   // copy the corrected file back (the usable step before an actual PR).
@@ -3738,9 +4162,7 @@ app.post('/api/scans', async (req, res) => {
     retryPreset,
     focusUrls,
     avoidUrls,
-    apiKey: bodyKey,
     warRoom,
-    providerKeys,
   } = req.body;
   if (!targetUrl) return res.status(400).json({ error: 'Target URL is required' });
 
@@ -3762,12 +4184,13 @@ app.post('/api/scans', async (req, res) => {
   }
 
   const settings = settingsFor(req);
-  // Browser-supplied key takes precedence; fall back to env or legacy file for backward compat.
-  const apiKey = bodyKey || settings.apiKey || process.env.ANTHROPIC_API_KEY;
+  const providerKeys = await aiKeysForRequest(req);
+  const apiKey = providerKeys.claude;
   if (!apiKey)
     return res
       .status(400)
-      .json({ error: 'Anthropic API key required. Add it in Settings → API Keys (browser-only storage).' });
+      .json({ error: 'Anthropic API key required. An organization owner or admin can add it in Settings.' });
+  if (!(await consumeOrgQuota(ctx, res, 'scans'))) return;
 
   const scanId = randomUUID().slice(0, 8);
   const projectId = req.body?.projectId || null;
@@ -3887,14 +4310,25 @@ app.post('/api/scans', async (req, res) => {
     return res.status(202).json({ scanId, jobId: job.id, status: 'queued' });
   }
 
-  const configPath = join(ROOT, `scan-${scanId}.yaml`);
-  writeFileSync(configPath, yamlDump(config, 0));
+  // Authentication belongs in a short-lived, private file—not a repository artifact.
+  // Durable jobs already keep it in the encrypted job secret above.
+  const scanTempDir = mkdtempSync(join(os.tmpdir(), 'shannon-dashboard-scan-'));
+  const configPath = join(scanTempDir, 'scan.yaml');
+  writeFileSync(configPath, yamlDump(config, 0), { mode: 0o600 });
 
   const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], {
     cwd: ROOT,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const cleanScanConfig = () => {
+    try {
+      rmSync(scanTempDir, { recursive: true, force: true });
+    } catch (error) {
+      console.error('[scan] temporary credential cleanup failed:', error.message);
+    }
+  };
+  child.once('error', cleanScanConfig);
 
   const phasePatterns = [
     { re: /\[Phase 0\]/, id: 'http-recon', name: 'HTTP Recon' },
@@ -3970,6 +4404,7 @@ app.post('/api/scans', async (req, res) => {
   child.stdout.on('data', (d) => process_(d));
   child.stderr.on('data', (d) => process_(d));
   child.on('close', (code) => {
+    cleanScanConfig();
     scan.status = code === 0 ? 'completed' : 'failed';
     if (code === 0) {
       try {
@@ -4207,12 +4642,15 @@ app.get('/api/system/readiness', async (req, res) => {
   if (!ctx) return;
   const now = Date.now();
   const strong = (value) => !!value && String(value).length >= 32 && !/replace-me|change-me/i.test(String(value));
-  const [database, workerEvents, edgeEvents, dockerSandbox, browserRuntime] = await Promise.all([
+  const recentDate = (value, maxAgeDays) => Number.isFinite(Date.parse(value || '')) && now - Date.parse(value) <= maxAgeDays * 86_400_000;
+  const [database, workerEvents, edgeEvents, dockerSandbox, browserRuntime, orgOidc, orgScim] = await Promise.all([
     enterpriseHealth().catch((error) => ({ ok: false, error: error.message })),
     listOperationalEvents('worker', 5).catch(() => []),
     listOperationalEvents('edge', 5, ctx.org.id).catch(() => []),
     sandboxAvailable().catch(() => false),
     import('playwright').then(() => true).catch(() => false),
+    getOrgSecret(ctx.org.id, 'oidc', 'default').catch(() => null),
+    getOrgSecret(ctx.org.id, 'scim', 'default').catch(() => null),
   ]);
   const workerHeartbeat = workerEvents.find((event) => ['worker.heartbeat', 'worker.started'].includes(event.event));
   const edgeHeartbeat = edgeEvents.find((event) => event.event === 'edge.heartbeat');
@@ -4224,13 +4662,17 @@ app.get('/api/system/readiness', async (req, res) => {
     { key: 'email', label: 'Transactional email', status: process.env.RESEND_API_KEY || process.env.SHANNON_EMAIL_WEBHOOK_URL ? 'ready' : 'configure', detail: process.env.RESEND_API_KEY ? 'Resend configured' : process.env.SHANNON_EMAIL_WEBHOOK_URL ? 'HTTPS relay configured' : 'Verification, reset and invitation mail cannot be delivered' },
     { key: 'worker', label: 'Durable background worker', status: recent(workerHeartbeat, 180_000) ? 'ready' : 'configure', detail: workerHeartbeat ? `Last heartbeat ${new Date(workerHeartbeat.createdAt).toISOString()}` : 'Deploy railway.worker.json' },
     { key: 'browser', label: 'Headless browser proofs', status: process.env.SHANNON_HEADLESS === '1' && browserRuntime ? 'ready' : 'configure', detail: browserRuntime ? 'Set SHANNON_HEADLESS=1' : 'Playwright runtime is not installed' },
-    { key: 'sandbox', label: 'Isolated code sandbox', status: dockerSandbox ? 'ready' : 'optional', detail: dockerSandbox ? 'Docker isolation available' : 'Requires a Docker-capable dedicated runner; custom checks remain available' },
+    { key: 'sandbox', label: 'Isolated code sandbox', status: dockerSandbox ? 'ready' : process.env.SHANNON_SANDBOX_RUNNER_URL ? 'configure' : 'optional', detail: dockerSandbox ? 'Authenticated dedicated runner and Docker isolation available' : process.env.SHANNON_SANDBOX_RUNNER_URL ? 'Configured runner is unreachable or Docker is unavailable' : 'Requires a Docker-capable dedicated runner; custom checks remain available' },
     { key: 'edge', label: 'Public Defender Edge', status: recent(edgeHeartbeat, 300_000) ? 'ready' : 'optional', detail: edgeHeartbeat ? `Last heartbeat ${new Date(edgeHeartbeat.createdAt).toISOString()}` : 'Deploy railway.edge.json when public reverse-proxy protection is required' },
-    { key: 'sso', label: 'Company SSO', status: process.env.OIDC_ISSUER && process.env.OIDC_CLIENT_ID && process.env.OIDC_CLIENT_SECRET ? 'ready' : 'optional', detail: process.env.OIDC_ISSUER || 'OIDC is optional' },
-    { key: 'scim', label: 'SCIM provisioning', status: strong(process.env.SHANNON_SCIM_TOKEN) && process.env.SHANNON_SCIM_ORG_ID ? 'ready' : 'optional', detail: process.env.SHANNON_SCIM_ORG_ID || 'SCIM is optional' },
+    { key: 'sso', label: 'Company SSO', status: orgOidc || (process.env.OIDC_ISSUER && process.env.OIDC_CLIENT_ID && process.env.OIDC_CLIENT_SECRET) ? 'ready' : 'optional', detail: orgOidc?.config?.issuer || process.env.OIDC_ISSUER || 'OIDC is optional' },
+    { key: 'scim', label: 'SCIM provisioning', status: orgScim || (strong(process.env.SHANNON_SCIM_TOKEN) && process.env.SHANNON_SCIM_ORG_ID) ? 'ready' : 'optional', detail: orgScim ? `Configured for ${ctx.org.name}` : process.env.SHANNON_SCIM_ORG_ID || 'SCIM is optional' },
     { key: 'metrics', label: 'Protected metrics', status: strong(process.env.SHANNON_METRICS_TOKEN) ? 'ready' : 'configure', detail: 'Prometheus endpoint bearer token' },
+    { key: 'backups', label: 'Backup restore test', status: recentDate(process.env.SHANNON_BACKUPS_VERIFIED_AT, 100) ? 'ready' : 'configure', detail: process.env.SHANNON_BACKUPS_VERIFIED_AT || 'Set SHANNON_BACKUPS_VERIFIED_AT after a successful staging restore (repeat quarterly)' },
+    { key: 'alerts', label: 'Production alert test', status: recentDate(process.env.SHANNON_ALERTS_VERIFIED_AT, 45) ? 'ready' : 'configure', detail: process.env.SHANNON_ALERTS_VERIFIED_AT || 'Set SHANNON_ALERTS_VERIFIED_AT after an end-to-end on-call alert test' },
+    { key: 'incident-contact', label: 'Security incident contact', status: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(process.env.SHANNON_SECURITY_CONTACT || '') ? 'ready' : 'configure', detail: process.env.SHANNON_SECURITY_CONTACT || 'Set the monitored security contact address' },
+    { key: 'billing', label: 'Stripe billing', status: billingEnabled() ? 'ready' : 'optional', detail: billingEnabled() ? 'Checkout and signed webhooks configured' : 'Optional; paid checkout remains disabled' },
   ];
-  const requiredKeys = new Set(['database', 'secrets', 'public-url', 'email', 'worker', 'browser', 'metrics']);
+  const requiredKeys = new Set(['database', 'secrets', 'public-url', 'email', 'worker', 'browser', 'metrics', 'backups', 'alerts', 'incident-contact']);
   const required = checks.filter((item) => requiredKeys.has(item.key));
   res.json({
     ok: required.every((item) => item.status === 'ready'),
@@ -4420,6 +4862,65 @@ app.patch('/api/defender/events/:id', (req, res) => {
 
 const EDGE_HEARTBEATS = new Map();
 
+function edgePlatformAuthorized(req) {
+  const configured = String(process.env.SHANNON_EDGE_PLATFORM_TOKEN || '');
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  return configured.length >= 32 && supplied.length === configured.length
+    && _crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
+}
+
+function recordEdgeHeartbeat(req, orgId, routeCount) {
+  if (Date.now() - Number(EDGE_HEARTBEATS.get(orgId) || 0) <= 60_000) return;
+  EDGE_HEARTBEATS.set(orgId, Date.now());
+  appendOperationalEvent({
+    service: 'edge',
+    instanceId: String(req.headers['x-shannon-edge-instance'] || req.headers['user-agent'] || 'edge').slice(0, 160),
+    level: 'info',
+    event: 'edge.heartbeat',
+    orgId,
+    metadata: { routes: routeCount },
+    createdAt: Date.now(),
+  }).catch(() => {});
+}
+
+// The shared edge uses one platform credential to fetch every tenant route. Organization identity
+// is derived from the stored hostname mapping, never trusted from edge-supplied telemetry.
+app.get('/api/platform/defender/edge/routes', (req, res) => {
+  if (!edgePlatformAuthorized(req)) return res.status(401).json({ error: 'invalid edge platform token' });
+  const list = listEdgeRoutes().map((v) => ({ host: v.host, origin: v.origin, mode: v.mode, createdAt: v.createdAt }));
+  const counts = new Map();
+  for (const route of listEdgeRoutes()) counts.set(route.orgId, (counts.get(route.orgId) || 0) + 1);
+  for (const [orgId, count] of counts) recordEdgeHeartbeat(req, orgId, count);
+  res.json({ routes: list });
+});
+
+app.post('/api/platform/defender/edge/report', (req, res) => {
+  if (!edgePlatformAuthorized(req)) return res.status(401).json({ error: 'invalid edge platform token' });
+  const routesByHost = new Map(listEdgeRoutes().map((route) => [route.host, route]));
+  const incoming = Array.isArray(req.body?.detections) ? req.body.detections : [];
+  let accepted = 0;
+  for (const raw of incoming.slice(0, SDK_REPORT_MAX)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const host = String(raw.host || '').toLowerCase().split(':')[0];
+    const route = routesByHost.get(host);
+    if (!route) continue;
+    const event = {
+      id: randomUUID(), orgId: route.orgId, userId: route.userId,
+      at: typeof raw.at === 'string' && Number.isFinite(Date.parse(raw.at)) ? new Date(raw.at).toISOString() : new Date().toISOString(),
+      method: String(raw.method || '').slice(0, 10), url: String(raw.url || '').slice(0, 300),
+      cls: String(raw.cls || '').slice(0, 60), enforced: raw.enforced === true,
+      srcIp: raw.srcIp ? String(raw.srcIp).slice(0, 64) : null,
+      severity: defenderSeverity(raw.cls), source: 'edge', status: raw.enforced === true ? 'contained' : 'open',
+      metadata: { host }, createdAt: Date.now(),
+    };
+    appendDefenseEvent(event);
+    accepted += 1;
+    queueIntegrationEvent(route.orgId, { id: `defender:${event.id}`, type: 'defender.detection', at: event.at, data: event }, route.userId)
+      .catch((error) => console.error('[defender] integration event failed:', error.message));
+  }
+  res.json({ accepted });
+});
+
 app.get('/api/defender/edge/routes', (req, res) => {
   const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
   const ctx = principal ? null : requirePermission(req, res, 'defender.manage');
@@ -4427,16 +4928,7 @@ app.get('/api/defender/edge/routes', (req, res) => {
   const orgId = principal?.orgId || ctx.org.id;
   const list = listEdgeRoutes({ orgId }).map((v) => ({ host: v.host, origin: v.origin, mode: v.mode, createdAt: v.createdAt }));
   if (principal && Date.now() - Number(EDGE_HEARTBEATS.get(orgId) || 0) > 60_000) {
-    EDGE_HEARTBEATS.set(orgId, Date.now());
-    appendOperationalEvent({
-      service: 'edge',
-      instanceId: String(req.headers['x-shannon-edge-instance'] || req.headers['user-agent'] || 'edge').slice(0, 160),
-      level: 'info',
-      event: 'edge.heartbeat',
-      orgId,
-      metadata: { routes: list.length },
-      createdAt: Date.now(),
-    }).catch(() => {});
+    recordEdgeHeartbeat(req, orgId, list.length);
   }
   res.json({ routes: list });
 });
@@ -4471,6 +4963,9 @@ app.post('/api/defender/edge/routes', async (req, res) => {
   if (!(await publicOriginAllowed(parsed))) {
     return res.status(400).json({ error: 'origin must resolve only to public IP addresses' });
   }
+
+  const occupied = listEdgeRoutes().find((item) => item.host === h && item.orgId !== ctx.org.id);
+  if (occupied) return res.status(409).json({ error: 'This public hostname is already assigned to another organization.' });
 
   const route = {
     host: h,

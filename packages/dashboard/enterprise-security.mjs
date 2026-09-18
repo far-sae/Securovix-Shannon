@@ -3,10 +3,10 @@ import crypto from 'node:crypto';
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 function masterKey() {
-  const source = process.env.SHANNON_ENCRYPTION_KEY || process.env.SHANNON_SESSION_SECRET || '';
-  if (!source && process.env.NODE_ENV === 'production') {
-    throw new Error('SHANNON_ENCRYPTION_KEY is required in production');
+  if (process.env.NODE_ENV === 'production' && (String(process.env.SHANNON_ENCRYPTION_KEY || '').length < 32 || /replace-me|change-me/i.test(process.env.SHANNON_ENCRYPTION_KEY || ''))) {
+    throw new Error('SHANNON_ENCRYPTION_KEY must be a non-placeholder value of at least 32 characters in production');
   }
+  const source = process.env.SHANNON_ENCRYPTION_KEY || process.env.SHANNON_SESSION_SECRET || '';
   return crypto
     .createHash('sha256')
     .update(source || 'shannon-local-development-key')

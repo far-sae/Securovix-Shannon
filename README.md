@@ -1,7 +1,7 @@
 # Securovix Shannon
 
 **Autonomous, proof-based penetration-testing platform.** Every finding is confirmed by a
-benign proof signal before it is ever reported — **zero false positives by construction**. The
+benign proof signal before it is reported as confirmed, reducing false-positive risk. The
 current engine is **pure Node.js (no Docker)** and runs on **Windows, macOS, and Linux**.
 
 > Shannon does not "flag suspicious responses." A vulnerability is recorded **only** when a
@@ -168,7 +168,7 @@ node packages/dashboard/server.mjs
 # → Securovix Dashboard running at http://localhost:3000   (override with PORT)
 ```
 
-It surfaces the SARIF export, the certification report, and the "Advanced options" (monitoring
+It surfaces the SARIF export, the evidence report, and the "Advanced options" (monitoring
 webhook, opt-in network scan) for each scan.
 
 ### Team workspace
@@ -192,7 +192,7 @@ workspaces/purple-<id>/
   purple/
     exploit-defend.json          # machine-readable findings + defense results
     exploit-defend-report.md     # combined attack/defense report
-    certification-report.md/.html# exploit → impact → chain narrative, CVSS + compliance
+    certification-report.md/.html# evidence → impact → chain narrative, CVSS + framework mappings
     report.sarif                 # SARIF 2.1.0 — GitHub code scanning / CI
   broker/
     <class>/findings.json        # per-class confirmed findings + proofs
@@ -204,6 +204,9 @@ workspaces/purple-<id>/
 
 Findings map to **CVSS 3.1**, **OWASP** (WSTG · ASVS · Top 10), **CWE**, **MITRE ATT&CK**,
 **PCI DSS 4.0**, and **ISO 27001**.
+
+These framework mappings are informational evidence references, not an audit, certification,
+attestation, or statement that Securovix or a customer is compliant.
 
 ---
 

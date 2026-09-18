@@ -2,7 +2,7 @@
 
 How to run Shannon **inside** your organisation's network to find provable
 security issues in internal web apps, APIs, AI features, and a few exposed
-services — continuously, with zero false positives.
+services continuously, with confirmed and unverified results kept in separate confidence tiers.
 
 > **Scope and authorisation first.** Only scan systems your organisation owns and
 > you are authorised to test. Get that authorisation in writing. On the command

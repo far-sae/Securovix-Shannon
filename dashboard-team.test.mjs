@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
+import http from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,10 +10,14 @@ const dataDir = mkdtempSync(join(tmpdir(), 'shannon-team-test-'));
 process.env.SHANNON_DATA_DIR = dataDir;
 process.env.SHANNON_FORCE_LOCAL_DB = '1';
 process.env.SHANNON_SESSION_SECRET = 'dashboard-team-test-secret-that-is-long-enough';
+process.env.SHANNON_EDGE_PLATFORM_TOKEN = 'dashboard-team-edge-platform-token-long-enough';
+process.env.SHANNON_SIGNUP_RATE_LIMIT = '50';
 process.env.NODE_ENV = 'test';
 
-const { startDashboard } = await import('./packages/dashboard/server.mjs');
-const { totpCode } = await import('./packages/dashboard/enterprise-security.mjs');
+const { startDashboard, verifyStripeWebhook } = await import('./packages/dashboard/server.mjs');
+const { decryptSecret, totpCode } = await import('./packages/dashboard/enterprise-security.mjs');
+const database = await import('./packages/dashboard/db.mjs');
+const enterpriseDatabase = await import('./packages/dashboard/enterprise-db.mjs');
 const server = await startDashboard({ port: 0, scheduleMonitors: false });
 const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -82,6 +88,83 @@ test('dashboard APIs require authentication and enforce organization roles', asy
     body: { name: 'Should not exist' },
   });
   assert.equal(forbidden.response.status, 403);
+});
+
+test('organization AI keys and SCIM credentials are encrypted and tenant scoped', async () => {
+  const owner = await signup('secrets-owner@example.test', 'Secrets Owner');
+  const orgId = owner.json.organizations[0].id;
+  const apiKey = 'sk-ant-customer-private-value';
+  const saved = await request(`/api/team/${orgId}/ai-providers/claude`, { method: 'PUT', cookie: owner.cookie, body: { apiKey } });
+  assert.equal(saved.response.status, 200);
+  const statuses = await request(`/api/team/${orgId}/ai-providers`, { cookie: owner.cookie });
+  assert.equal(statuses.json.providers.find((item) => item.provider === 'claude').configured, true);
+  assert.ok(!JSON.stringify(statuses.json).includes(apiKey));
+  const stored = await enterpriseDatabase.getOrgSecret(orgId, 'ai-provider', 'claude');
+  assert.equal(decryptSecret(stored.secretEnc).apiKey, apiKey);
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => String(url) === 'https://1.1.1.1/.well-known/openid-configuration'
+    ? new Response(JSON.stringify({ authorization_endpoint: 'https://1.1.1.1/authorize', token_endpoint: 'https://1.1.1.1/token', userinfo_endpoint: 'https://1.1.1.1/userinfo' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    : realFetch(url, options);
+  try {
+    const unverified = await request(`/api/team/${orgId}/identity/oidc`, { method: 'PUT', cookie: owner.cookie, body: { issuer: 'https://1.1.1.1', clientId: 'customer-client', clientSecret: 'customer-secret-value', allowedDomains: 'example.test' } });
+    assert.equal(unverified.response.status, 403);
+    database.addVerified(owner.json.user.id, 'example.test', { verifiedAt: Date.now(), method: 'test' });
+    const oidc = await request(`/api/team/${orgId}/identity/oidc`, { method: 'PUT', cookie: owner.cookie, body: { issuer: 'https://1.1.1.1', clientId: 'customer-client', clientSecret: 'customer-secret-value', allowedDomains: 'example.test' } });
+    assert.equal(oidc.response.status, 200);
+    assert.match(oidc.json.startUrl, new RegExp(`/auth/sso/org/${orgId}/start$`));
+  } finally { globalThis.fetch = realFetch; }
+
+  const scim = await request(`/api/team/${orgId}/identity/scim`, { method: 'PUT', cookie: owner.cookie, body: {} });
+  assert.equal(scim.response.status, 200);
+  assert.ok(scim.json.token.length >= 24);
+  const identity = await request(`/api/team/${orgId}/identity`, { cookie: owner.cookie });
+  assert.equal(identity.json.scim.configured, true);
+  assert.equal(identity.json.oidc.configured, true);
+  assert.ok(!JSON.stringify(identity.json).includes('customer-secret-value'));
+  assert.ok(!JSON.stringify(identity.json).includes(scim.json.token));
+  const wrong = await request(`/scim/v2/orgs/${orgId}/ServiceProviderConfig`, { headers: { authorization: 'Bearer wrong-token-value-that-is-long' } });
+  assert.equal(wrong.response.status, 401);
+  const serviceConfig = await request(`/scim/v2/orgs/${orgId}/ServiceProviderConfig`, { headers: { authorization: `Bearer ${scim.json.token}` } });
+  assert.equal(serviceConfig.response.status, 200);
+  assert.equal(serviceConfig.json.patch.supported, true);
+
+  const secondOrg = await request('/api/team/organizations', { method: 'POST', cookie: owner.cookie, body: { name: 'Second Tenant' } });
+  const secondOrgId = secondOrg.json.organization.id;
+  const secondScim = await request(`/api/team/${secondOrgId}/identity/scim`, { method: 'PUT', cookie: owner.cookie, body: {} });
+  const provisioned = await request(`/scim/v2/orgs/${orgId}/Users`, { method: 'POST', headers: { authorization: `Bearer ${scim.json.token}` }, body: { userName: 'shared-scim-user@example.test', displayName: 'Shared User', active: true } });
+  assert.equal(provisioned.response.status, 201);
+  const provisionedSecond = await request(`/scim/v2/orgs/${secondOrgId}/Users`, { method: 'POST', headers: { authorization: `Bearer ${secondScim.json.token}` }, body: { userName: 'shared-scim-user@example.test', displayName: 'Shared User', active: true } });
+  assert.equal(provisionedSecond.response.status, 201);
+  const removedFirst = await request(`/scim/v2/orgs/${orgId}/Users/${provisioned.json.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${scim.json.token}` } });
+  assert.equal(removedFirst.response.status, 204);
+  const stillInSecond = await request(`/scim/v2/orgs/${secondOrgId}/Users/${provisioned.json.id}`, { headers: { authorization: `Bearer ${secondScim.json.token}` } });
+  assert.equal(stillInSecond.response.status, 200);
+});
+
+test('authenticated scan sessions use exact-origin, encrypted, single-use grants', async () => {
+  const account = await signup('grant-owner@example.test', 'Grant Owner');
+  let observedCookie = '';
+  const target = http.createServer((req, res) => {
+    observedCookie = String(req.headers.cookie || '');
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><body>test target</body></html>');
+  });
+  await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
+  const targetUrl = `http://127.0.0.1:${target.address().port}`;
+  try {
+    const grant = await request('/api/agent/auth-grant', { method: 'POST', cookie: account.cookie, body: { target: targetUrl, cookie: 'target_session=private-value' } });
+    assert.equal(grant.response.status, 201);
+    assert.match(grant.json.authGrantId, /^sag_/);
+    assert.ok(!JSON.stringify(grant.json).includes('private-value'));
+    const used = await request('/api/agent/understand', { method: 'POST', cookie: account.cookie, body: { target: targetUrl, authGrantId: grant.json.authGrantId } });
+    assert.equal(used.response.status, 200);
+    assert.equal(observedCookie, 'target_session=private-value');
+    const replay = await request('/api/agent/understand', { method: 'POST', cookie: account.cookie, body: { target: targetUrl, authGrantId: grant.json.authGrantId } });
+    assert.equal(replay.response.status, 401);
+  } finally {
+    await new Promise((resolve) => target.close(resolve));
+  }
 });
 
 test('MFA supports password reauthentication, TOTP login, recovery rotation and secure disable', async () => {
@@ -193,7 +276,18 @@ test('production readiness reports real dependencies and billing never grants fa
     cookie: owner.cookie,
     body: { plan: 'pro', cycle: 'monthly' },
   });
-  assert.equal(subscribe.response.status, 410);
+  assert.equal(subscribe.response.status, 503);
+});
+
+test('Stripe webhook verification rejects tampering and stale signatures', () => {
+  const secret = 'whsec_test_secret';
+  const now = Date.now();
+  const timestamp = Math.floor(now / 1000);
+  const body = Buffer.from(JSON.stringify({ id: 'evt_1', type: 'checkout.session.completed', data: { object: {} } }));
+  const signature = createHmac('sha256', secret).update(`${timestamp}.${body.toString('utf8')}`).digest('hex');
+  assert.equal(verifyStripeWebhook(body, `t=${timestamp},v1=${signature}`, secret, now).id, 'evt_1');
+  assert.equal(verifyStripeWebhook(Buffer.from('{}'), `t=${timestamp},v1=${signature}`, secret, now), null);
+  assert.equal(verifyStripeWebhook(body, `t=${timestamp - 1000},v1=${signature}`, secret, now), null);
 });
 
 test('Defender supports incident workflow and revocable SDK credentials', async () => {
@@ -260,4 +354,37 @@ test('Defender supports incident workflow and revocable SDK credentials', async 
     body: { detections: [{ method: 'GET', url: '/', cls: 'xss' }] },
   });
   assert.equal(newCredential.response.status, 200);
+});
+
+test('shared Defender Edge routes and attributes detections to the hostname owner', async () => {
+  const first = await signup('edge-one@example.test', 'Edge One');
+  const second = await signup('edge-two@example.test', 'Edge Two');
+  const firstOrg = first.json.organizations[0].id;
+  const secondOrg = second.json.organizations[0].id;
+  database.saveEdgeRoute({ host: 'one.edge.example.test', origin: 'https://one-origin.example.test', mode: 'monitor', orgId: firstOrg, userId: first.json.user.id, createdAt: Date.now() });
+  database.saveEdgeRoute({ host: 'two.edge.example.test', origin: 'https://two-origin.example.test', mode: 'enforce', orgId: secondOrg, userId: second.json.user.id, createdAt: Date.now() });
+
+  const unauthorized = await request('/api/platform/defender/edge/routes');
+  assert.equal(unauthorized.response.status, 401);
+  const headers = { authorization: `Bearer ${process.env.SHANNON_EDGE_PLATFORM_TOKEN}`, 'x-shannon-edge-instance': 'shared-edge-test' };
+  const allRoutes = await request('/api/platform/defender/edge/routes', { headers });
+  assert.equal(allRoutes.response.status, 200);
+  assert.ok(allRoutes.json.routes.some((route) => route.host === 'one.edge.example.test'));
+  assert.ok(allRoutes.json.routes.some((route) => route.host === 'two.edge.example.test'));
+
+  const report = await request('/api/platform/defender/edge/report', {
+    method: 'POST', headers,
+    body: { detections: [
+      { host: 'one.edge.example.test', method: 'GET', url: '/?q=attack', cls: 'xss', enforced: false },
+      { host: 'two.edge.example.test', method: 'POST', url: '/admin', cls: 'sqli', enforced: true },
+      { host: 'unknown.edge.example.test', method: 'GET', url: '/', cls: 'xss' },
+    ] },
+  });
+  assert.equal(report.response.status, 200);
+  assert.equal(report.json.accepted, 2);
+  const firstEvents = await request('/api/defender/events', { cookie: first.cookie });
+  const secondEvents = await request('/api/defender/events', { cookie: second.cookie });
+  assert.ok(firstEvents.json.events.some((event) => event.metadata.host === 'one.edge.example.test'));
+  assert.ok(!firstEvents.json.events.some((event) => event.metadata.host === 'two.edge.example.test'));
+  assert.ok(secondEvents.json.events.some((event) => event.metadata.host === 'two.edge.example.test'));
 });

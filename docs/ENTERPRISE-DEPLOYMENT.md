@@ -58,18 +58,19 @@ the minimal `Dockerfile.edge`, starts the public reverse proxy, and checks `/__e
 Set these variables on the Edge service:
 
 - `SHANNON_DASHBOARD_URL=https://YOUR-DASHBOARD-DOMAIN`
-- `SHANNON_EDGE_API_KEY=` the organization SDK key shown on the Defender page
+- `SHANNON_EDGE_PLATFORM_TOKEN=` a new 32-byte random token, set to the same value on the Dashboard and Edge services
 - `SHANNON_EDGE_REFRESH_MS=60000`
 - optionally `SHANNON_EDGE_ROUTES=[]` as a static recovery floor
 
-Attach a public Railway domain to Edge. Keep the dashboard and worker on `Dockerfile.dashboard`; only
-the Edge service uses `Dockerfile.edge`. Start every route in monitor mode, verify telemetry, and
+Attach a public Railway domain to Edge. Do not use a customer's SDK key for the shared service:
+`SHANNON_EDGE_API_KEY` is retained only for
+legacy single-organization deployments. The Edge service uses `Dockerfile.edge`. Start every route in monitor mode, verify telemetry, and
 only then switch that route to enforce.
 
 ## 5. Identity and provisioning
 
-- OIDC: configure `OIDC_ISSUER`, client credentials, callback URL `https://YOUR_DOMAIN/auth/sso/callback`, and optional allowed domains.
-- SCIM: configure a random `SHANNON_SCIM_TOKEN` and `SHANNON_SCIM_ORG_ID`. The base URL is `https://YOUR_DOMAIN/scim/v2`.
+- OIDC: owners/admins configure each organization separately. Its start URL is `/auth/sso/org/ORG_ID/start`; register `/auth/sso/org/callback` with the provider. Global `OIDC_*` variables are legacy fallback only.
+- SCIM: owners/admins create/rotate a separate bearer token for each organization. Its base URL is `/scim/v2/orgs/ORG_ID`. Global `SHANNON_SCIM_*` variables are legacy fallback only.
 - MFA: users enable TOTP from the MFA profile control and receive one-time recovery codes.
 - Invitations, verification, and password-reset links require a working email provider in production.
 
@@ -91,6 +92,16 @@ Monitoring endpoints:
 
 Alert on readiness failures, dead-letter jobs, growing queue depth, and expired worker leases. Retention runs at worker startup; completed jobs, tokens, delivery logs, operational logs, and artifacts use the configurable retention-day variables.
 
+Use [Production operations and incident response](./PRODUCTION-OPERATIONS.md) for backup restore tests,
+Railway alerts/log retention, incident handling, Sandbox Runner release evidence, and independent review.
+
+## Billing and organization limits
+
+Daily limits are enforced atomically per organization in Supabase. To enable paid Pro checkout, set
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRO_MONTHLY_PRICE_ID`, and optionally
+`STRIPE_PRO_YEARLY_PRICE_ID`, then register `https://YOUR_DOMAIN/api/billing/webhook` in Stripe.
+Until all required values are present, paid checkout stays disabled and no paid entitlement is granted.
+
 The arbitrary-code AI sandbox deliberately remains unavailable on standard Railway because Railway
 does not expose a Docker daemon to application containers. Use the bounded custom-check workflow on
 Railway unless you deploy the separate runner described in [Production sandbox runner](#production-sandbox-runner).
@@ -110,6 +121,7 @@ network-disabled, non-root, read-only container with CPU, memory, process, and t
    ```env
    SANDBOX_RUNNER_DOMAIN=sandbox-runner.yourdomain.com
    SHANNON_SANDBOX_RUNNER_TOKEN=YOUR_NEW_LONG_RANDOM_SECRET
+   SHANNON_SANDBOX_MAX_CONCURRENT=2
    ```
 
 3. Create a DNS record for `sandbox-runner.yourdomain.com` pointing to the VM public IP, then run:

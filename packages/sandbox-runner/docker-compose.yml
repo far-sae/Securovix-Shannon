@@ -4,9 +4,17 @@ services:
       context: ../..
       dockerfile: packages/sandbox-runner/Dockerfile
     restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
     environment:
       PORT: 8080
       SHANNON_SANDBOX_RUNNER_TOKEN: ${SHANNON_SANDBOX_RUNNER_TOKEN:?set_a_long_random_token}
+      SHANNON_SANDBOX_MAX_CONCURRENT: ${SHANNON_SANDBOX_MAX_CONCURRENT:-2}
       SHANNON_SANDBOX_PYTHON_IMAGE: python:3.12-slim
       SHANNON_SANDBOX_NODE_IMAGE: node:20-bookworm-slim
     volumes:

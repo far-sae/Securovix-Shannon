@@ -1600,7 +1600,7 @@ async function defendAndReport(report, ws, log) {
       ? confirmed
           .flatMap((e) => e.findings.map((f) => `- **${e.cls}** (${f.severity}) — ${f.detail} @ ${f.target}`))
           .join('\n')
-      : '_None confirmed (zero false positives)._',
+      : '_None confirmed within the executed checks._',
     '',
     '## Defenses',
     report.defenses.length

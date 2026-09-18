@@ -55,11 +55,12 @@ test('buildFindings: scores, sorts by severity, maps methodology, honors inline 
   assert.equal(f[1].severity, 'low');
 });
 
-test('buildCertReport: md + html include CVSS, methodology, compliance, sign-off', () => {
+test('buildCertReport: md + html include evidence, framework mappings, sign-off, and no certification claim', () => {
   const r = buildCertReport(report, { compliance: COMP, classesTested: ['rce-ssti', 'security-headers', 'rce-deser'] });
   assert.equal(r.risk, 'Critical');
-  for (const needle of ['CVSS 3.1', 'WSTG-INPV-18', 'ASVS', 'PCI DSS', 'ISO 27001', 'Sign-off', 'OSCP'])
+  for (const needle of ['CVSS 3.1', 'WSTG-INPV-18', 'ASVS', 'PCI DSS', 'ISO 27001', 'Sign-off', 'Reviewer credentials'])
     assert.match(r.md, new RegExp(needle.replace(/[.]/g, '\\.')));
-  for (const needle of ['Penetration Test Report', '9.8', 'Overall risk'])
+  assert.doesNotMatch(r.md, /certified penetration test/i);
+  for (const needle of ['Automated Security Evidence Report', '9.8', 'Overall risk'])
     assert.match(r.html, new RegExp(needle.replace(/[.]/g, '\\.')));
 });

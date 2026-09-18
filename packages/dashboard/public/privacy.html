@@ -45,12 +45,12 @@
   </div>
 
   <h1>Privacy Policy</h1>
-  <div class="updated">Last updated: 4 May 2026</div>
+  <div class="updated">Last updated: 18 September 2026</div>
 
   <p>This policy describes what data Securovix collects, why, and what we do with it. We follow the principle of <strong>data minimisation</strong> — we keep only what we need to run the Service.</p>
 
   <div class="ok">
-    <strong>✓ Your API keys never touch our server.</strong> Anthropic / OpenAI / Google / Zhipu keys are stored exclusively in your browser's <code>localStorage</code> and sent directly from your browser to each provider. We have no copy. Same for your scan source code in Code Scan mode — it's POSTed straight to the LLM provider.
+    <strong>AI keys are isolated by organization.</strong> Anthropic / OpenAI / Google / Zhipu keys are encrypted before storage, are never returned by our API, and are decrypted only inside the service that performs an authorized scan.
   </div>
 
   <h2>1. Data we collect</h2>
@@ -61,8 +61,10 @@
       <tr><td>Display name</td><td>Greeting on the dashboard</td><td>Our server</td></tr>
       <tr><td>Google profile (if you use Google sign-in)</td><td>Account creation + avatar</td><td>Our server</td></tr>
       <tr><td>Scan target URLs + run history</td><td>So you can revisit past scans</td><td>Our server</td></tr>
-      <tr><td>LLM API keys</td><td>Routing inference requests</td><td><strong>Your browser only</strong> (localStorage)</td></tr>
-      <tr><td>Source code submitted to Code Scan</td><td>Sending to the LLM</td><td><strong>Not persisted server-side</strong> beyond the run window</td></tr>
+      <tr><td>LLM API keys</td><td>Routing inference requests</td><td>Encrypted organization secret store (Supabase in production)</td></tr>
+      <tr><td>Source code submitted to Code Scan</td><td>Security analysis and sending to the selected LLM provider</td><td>Process memory during the run and for up to 30 minutes afterward; not written to the database by Code Scan</td></tr>
+      <tr><td>Findings, reports, audit and operational events</td><td>Delivering the security service, support, and incident investigation</td><td>Supabase database and private object storage</td></tr>
+      <tr><td>Usage and billing records</td><td>Enforcing plan limits and administering subscriptions</td><td>Our database and Stripe when billing is enabled</td></tr>
       <tr><td>Session cookie</td><td>Keep you signed in</td><td>HttpOnly, SameSite=Lax cookie</td></tr>
       <tr><td>Acceptance of Terms + Privacy timestamp</td><td>Legal record</td><td>Our server</td></tr>
     </tbody>
@@ -72,12 +74,12 @@
   <ul>
     <li>We do not run analytics trackers (no Google Analytics, no Segment, no Mixpanel).</li>
     <li>We do not sell, rent, or share your data with advertisers.</li>
-    <li>We do not log the contents of your LLM prompts or responses on our server — those go directly between your browser and the LLM provider.</li>
+    <li>We do not use your scan data to advertise to you or others.</li>
     <li>We do not use your scan data to train models.</li>
   </ul>
 
   <h2>3. Third-party providers</h2>
-  <p>When you connect an LLM API key, your prompts and responses pass through that provider under <em>their</em> privacy policy:</p>
+  <p>When you connect an LLM API key, Securovix sends scan inputs and prompts to that provider under <em>their</em> privacy policy:</p>
   <ul>
     <li><a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Anthropic</a></li>
     <li><a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noopener">OpenAI</a></li>
@@ -87,14 +89,17 @@
   <p>If you use Google Sign-In, you also agree to Google's terms.</p>
 
   <h2>4. Cookies</h2>
-  <p>We use a single first-party HttpOnly cookie (<code>shannon_session</code>) to keep you signed in. It's HMAC-signed, set with <code>SameSite=Lax</code>, and expires after 30 days. We do not use third-party cookies.</p>
+  <p>We use first-party HttpOnly cookies for the signed-in session, active organization, and short-lived OAuth/OIDC state. The session is HMAC-signed, uses <code>SameSite=Lax</code>, and expires after 30 days. We do not use advertising cookies.</p>
 
   <h2>5. Data retention</h2>
   <ul>
     <li><strong>Account data</strong> — kept until you delete your account.</li>
-    <li><strong>Scan history</strong> — kept until you delete the scan or your account.</li>
+    <li><strong>Scan artifacts</strong> — 90 days by default; an enterprise deployment may configure a different period.</li>
+    <li><strong>Completed job records</strong> — 30 days by default.</li>
+    <li><strong>Operational logs</strong> — 30 days by default; integration delivery history is 90 days.</li>
+    <li><strong>Verification/reset tokens</strong> — expired records are removed after 7 days by default.</li>
     <li><strong>Session cookies</strong> — 30 days.</li>
-    <li><strong>Submitted source code</strong> — discarded after the scan completes; not retained.</li>
+    <li><strong>Code Scan source</strong> — removed from process memory within approximately 30 minutes after the run ends; not written to the database by Code Scan.</li>
   </ul>
 
   <h2>6. Your rights (UK GDPR / EU GDPR)</h2>
@@ -109,7 +114,7 @@
   <p>To exercise any of these rights, email <a href="mailto:privacy@securovix.com">privacy@securovix.com</a>. We respond within 30 days.</p>
 
   <h2>7. Security</h2>
-  <p>Passwords are hashed with PBKDF2-SHA256 (120,000 iterations, 16-byte salt). Sessions are HMAC-SHA256 signed. Production deployments use HTTPS exclusively. We do not store payment information.</p>
+  <p>Passwords are hashed with PBKDF2-SHA256 (120,000 iterations, 16-byte salt). Sessions are HMAC-SHA256 signed. Organization credentials are encrypted at rest. Production deployments use HTTPS. Payment-card data is handled by Stripe when billing is enabled; Securovix does not store full card numbers.</p>
 
   <h2>8. International transfers</h2>
   <p>Our servers and Supabase database may be located outside your country. By using the Service you consent to your data being transferred and processed in those locations under appropriate safeguards (Standard Contractual Clauses where required).</p>

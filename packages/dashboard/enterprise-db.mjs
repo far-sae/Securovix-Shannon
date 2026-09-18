@@ -26,6 +26,10 @@ let local = {
   artifacts: [],
   deliveries: [],
   operations: [],
+  orgSecrets: [],
+  scanAuthGrants: [],
+  entitlements: {},
+  usageDaily: [],
 };
 
 try {
@@ -99,6 +103,18 @@ function integrationFromRow(row) {
       updatedAt: Number(row.updated_at),
     }
   );
+}
+
+function orgSecretFromRow(row) {
+  return row && { id: row.id, orgId: row.org_id, kind: row.kind, name: row.name, config: row.config || {}, secretEnc: row.secret_enc, createdBy: row.created_by || null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
+}
+
+function scanAuthGrantFromRow(row) {
+  return row && { id: row.id, userId: row.user_id, orgId: row.org_id, targetOrigin: row.target_origin, secretEnc: row.secret_enc, expiresAt: Number(row.expires_at), consumedAt: row.consumed_at ? Number(row.consumed_at) : null, createdAt: Number(row.created_at) };
+}
+
+function entitlementFromRow(row) {
+  return row && { orgId: row.org_id, plan: row.plan, status: row.status, provider: row.provider || null, providerCustomerId: row.provider_customer_id || null, providerSubscriptionId: row.provider_subscription_id || null, currentPeriodEnd: row.current_period_end ? Number(row.current_period_end) : null, limits: row.limits || {}, updatedAt: Number(row.updated_at) };
 }
 
 function jobFromRow(row) {
@@ -287,6 +303,96 @@ export async function deleteIntegration(orgId, id) {
     headers: { prefer: 'return=minimal' },
   });
   return true;
+}
+
+export async function listOrgSecrets(orgId, kind, { includeSecrets = false } = {}) {
+  const source = USE_SUPABASE
+    ? await rest(`/shannon_org_secrets?org_id=eq.${encodeURIComponent(orgId)}${kind ? `&kind=eq.${encodeURIComponent(kind)}` : ''}&order=created_at.asc`)
+    : local.orgSecrets.filter((item) => item.orgId === orgId && (!kind || item.kind === kind));
+  const rows = USE_SUPABASE ? (source || []).map(orgSecretFromRow) : source;
+  return rows.map((item) => includeSecrets ? item : { ...item, secretEnc: undefined, configured: !!item.secretEnc });
+}
+
+export async function getOrgSecret(orgId, kind, name) {
+  const rows = await listOrgSecrets(orgId, kind, { includeSecrets: true });
+  return rows.find((item) => item.name === name) || null;
+}
+
+export async function saveOrgSecret(record) {
+  if (!USE_SUPABASE) {
+    local.orgSecrets = local.orgSecrets.filter((item) => !(item.orgId === record.orgId && item.kind === record.kind && item.name === record.name));
+    local.orgSecrets.push(record); persist(); return record;
+  }
+  const rows = await rest('/shannon_org_secrets', { method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([{ id: record.id, org_id: record.orgId, kind: record.kind, name: record.name, config: record.config || {}, secret_enc: record.secretEnc, created_by: record.createdBy || null, created_at: record.createdAt, updated_at: record.updatedAt }]) });
+  return orgSecretFromRow(rows?.[0]);
+}
+
+export async function deleteOrgSecret(orgId, kind, name) {
+  if (!USE_SUPABASE) {
+    local.orgSecrets = local.orgSecrets.filter((item) => !(item.orgId === orgId && item.kind === kind && item.name === name)); persist(); return true;
+  }
+  await rest(`/shannon_org_secrets?org_id=eq.${encodeURIComponent(orgId)}&kind=eq.${encodeURIComponent(kind)}&name=eq.${encodeURIComponent(name)}`, { method: 'DELETE', headers: { prefer: 'return=minimal' } });
+  return true;
+}
+
+export async function createScanAuthGrant(record) {
+  if (!USE_SUPABASE) {
+    local.scanAuthGrants = local.scanAuthGrants.filter((item) => item.expiresAt > Date.now());
+    local.scanAuthGrants.push(record);
+    persist();
+    return record;
+  }
+  await rest(`/shannon_scan_auth_grants?expires_at=lt.${Date.now()}`, { method: 'DELETE', headers: { prefer: 'return=minimal' } });
+  const rows = await rest('/shannon_scan_auth_grants', { method: 'POST', body: JSON.stringify([{ id: record.id, user_id: record.userId, org_id: record.orgId, target_origin: record.targetOrigin, secret_enc: record.secretEnc, expires_at: record.expiresAt, consumed_at: null, created_at: record.createdAt }]) });
+  return scanAuthGrantFromRow(rows?.[0]);
+}
+
+export async function consumeScanAuthGrant(id, userId, orgId, targetOrigin) {
+  const now = Date.now();
+  if (!USE_SUPABASE) {
+    const index = local.scanAuthGrants.findIndex((item) => item.id === id && item.userId === userId && item.orgId === orgId && item.targetOrigin === targetOrigin && item.expiresAt > now);
+    if (index < 0) return null;
+    const [grant] = local.scanAuthGrants.splice(index, 1);
+    persist();
+    return grant;
+  }
+  const rows = await rest('/rpc/shannon_consume_scan_auth_grant', { method: 'POST', body: JSON.stringify({ p_id: id, p_user_id: userId, p_org_id: orgId, p_target_origin: targetOrigin, p_now: now }) });
+  return scanAuthGrantFromRow(rows?.[0]);
+}
+
+export async function getEntitlement(orgId) {
+  if (!USE_SUPABASE) return local.entitlements[orgId] || null;
+  const rows = await rest(`/shannon_org_entitlements?org_id=eq.${encodeURIComponent(orgId)}&limit=1`);
+  return entitlementFromRow(rows?.[0]);
+}
+
+export async function saveEntitlement(record) {
+  if (!USE_SUPABASE) { local.entitlements[record.orgId] = record; persist(); return record; }
+  const rows = await rest('/shannon_org_entitlements', { method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([{ org_id: record.orgId, plan: record.plan, status: record.status, provider: record.provider || null, provider_customer_id: record.providerCustomerId || null, provider_subscription_id: record.providerSubscriptionId || null, current_period_end: record.currentPeriodEnd || null, limits: record.limits || {}, updated_at: record.updatedAt || Date.now() }]) });
+  return entitlementFromRow(rows?.[0]);
+}
+
+export async function consumeUsage(orgId, metric, amount, limit, day = new Date().toISOString().slice(0, 10)) {
+  const requested = Math.max(1, Number(amount || 1));
+  const cap = Math.max(0, Number(limit || 0));
+  if (!USE_SUPABASE) {
+    const row = local.usageDaily.find((item) => item.orgId === orgId && item.day === day && item.metric === metric);
+    const used = Number(row?.quantity || 0);
+    if (used + requested > cap) return { allowed: false, used, limit: cap, day };
+    if (row) { row.quantity = used + requested; row.updatedAt = Date.now(); }
+    else local.usageDaily.push({ orgId, day, metric, quantity: requested, updatedAt: Date.now() });
+    persist();
+    return { allowed: true, used: used + requested, limit: cap, day };
+  }
+  const quantity = await rest('/rpc/shannon_consume_usage', { method: 'POST', body: JSON.stringify({ p_org_id: orgId, p_day: day, p_metric: metric, p_amount: requested, p_limit: cap, p_now: Date.now() }) });
+  const used = Number(quantity || 0);
+  return { allowed: used > 0, used, limit: cap, day };
+}
+
+export async function listUsage(orgId, day = new Date().toISOString().slice(0, 10)) {
+  if (!USE_SUPABASE) return local.usageDaily.filter((item) => item.orgId === orgId && item.day === day);
+  const rows = await rest(`/shannon_usage_daily?org_id=eq.${encodeURIComponent(orgId)}&day=eq.${encodeURIComponent(day)}&order=metric.asc`);
+  return (rows || []).map((row) => ({ orgId: row.org_id, day: row.day, metric: row.metric, quantity: Number(row.quantity), updatedAt: Number(row.updated_at) }));
 }
 
 export async function enqueueJob(job) {

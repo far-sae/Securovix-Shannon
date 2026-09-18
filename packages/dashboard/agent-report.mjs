@@ -19,7 +19,7 @@ export function toMarkdown(run = {}, meta = {}) {
   );
   out.push('');
   out.push(
-    '> **Proven** findings are confirmed by a benign proof — zero false positives. **Potential** items are UNPROVEN leads surfaced for manual review; they are kept strictly separate and must not be treated as confirmed.',
+    '> **Proven** findings include a benign proof marker. **Potential** items are UNPROVEN leads surfaced for manual review; they are kept strictly separate and must not be treated as confirmed.',
   );
 
   out.push('');

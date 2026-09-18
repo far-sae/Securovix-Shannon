@@ -25,6 +25,10 @@ const PORT = process.env.PORT || 8080;
 const HOST = process.env.SHANNON_EDGE_BIND || '0.0.0.0';
 const DASHBOARD = (process.env.SHANNON_DASHBOARD_URL || '').replace(/\/$/, '');
 const API_KEY = process.env.SHANNON_EDGE_API_KEY || '';
+const PLATFORM_TOKEN = process.env.SHANNON_EDGE_PLATFORM_TOKEN || '';
+const EDGE_TOKEN = PLATFORM_TOKEN || API_KEY;
+const ROUTES_PATH = PLATFORM_TOKEN ? '/api/platform/defender/edge/routes' : '/api/defender/edge/routes';
+const REPORT_PATH = PLATFORM_TOKEN ? '/api/platform/defender/edge/report' : '/api/defender/report';
 const INSTANCE = process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_DEPLOYMENT_ID || 'edge';
 const ROUTES_REFRESH_MS = Number(process.env.SHANNON_EDGE_REFRESH_MS || 60_000);
 const MAX_CLASSIFIED_BODY = 1024 * 1024;
@@ -88,17 +92,16 @@ function loadRoutesFromEnv() {
 }
 
 async function refreshRoutes() {
-  if (!DASHBOARD || !API_KEY) return;
+  if (!DASHBOARD || !EDGE_TOKEN) return;
   try {
-    const r = await fetch(`${DASHBOARD}/api/defender/edge/routes`, {
-      headers: { authorization: `Bearer ${API_KEY}`, 'x-shannon-edge-instance': INSTANCE },
+    const r = await fetch(`${DASHBOARD}${ROUTES_PATH}`, {
+      headers: { authorization: `Bearer ${EDGE_TOKEN}`, 'x-shannon-edge-instance': INSTANCE },
     });
     if (!r.ok) return;
     const { routes: list } = await r.json();
     if (!Array.isArray(list)) return;
-    // An EMPTY list never replaces live routes. The dashboard keeps its registry in memory, so a
-    // dashboard restart briefly reports zero routes — obeying that would 502 every customer site
-    // this proxy is fronting. Only a non-empty list is allowed to redefine routing.
+    // A successful response is authoritative, including an empty list. This makes route deletion
+    // and emergency revocation effective; transport/dashboard failures retain the last valid set.
     routes.clear();
     loadRoutesFromEnv(); // env entries are the floor; the dashboard adds to them
     for (const x of list) {
@@ -115,12 +118,12 @@ async function refreshRoutes() {
 }
 
 async function flushDetections() {
-  if (!pending.length || !DASHBOARD || !API_KEY) return;
+  if (!pending.length || !DASHBOARD || !EDGE_TOKEN) return;
   const batch = pending.splice(0, pending.length);
   try {
-    await fetch(`${DASHBOARD}/api/defender/report`, {
+    await fetch(`${DASHBOARD}${REPORT_PATH}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${EDGE_TOKEN}` },
       body: JSON.stringify({ detections: batch }),
     });
   } catch {
@@ -259,6 +262,7 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
           if (pending.length < 500) {
             pending.push({
               at: new Date().toISOString(),
+              host,
               method: req.method,
               url: `${host}${req.url}`,
               cls: verdict.cls,
@@ -299,10 +303,12 @@ if (isDirectExecution()) {
   t2.unref?.();
   createEdgeServer().listen(PORT, HOST, () => {
     console.log(`[edge] Shannon Defender edge listening on ${HOST}:${PORT} — ${routes.size} route(s)`);
-    if (!DASHBOARD || !API_KEY) {
+    if (!DASHBOARD || !EDGE_TOKEN) {
       console.warn(
-        '[edge] SHANNON_DASHBOARD_URL / SHANNON_EDGE_API_KEY unset — routes come from SHANNON_EDGE_ROUTES only, and detections are not reported',
+        '[edge] SHANNON_DASHBOARD_URL / SHANNON_EDGE_PLATFORM_TOKEN unset — routes come from SHANNON_EDGE_ROUTES only, and detections are not reported',
       );
+    } else if (!PLATFORM_TOKEN) {
+      console.warn('[edge] SHANNON_EDGE_API_KEY is legacy single-organization mode; set SHANNON_EDGE_PLATFORM_TOKEN for shared multi-tenant routing');
     }
   });
 }

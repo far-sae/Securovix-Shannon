@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildDockerArgs, sandboxImage } from './packages/dashboard/sandbox.mjs';
-import { validateRunRequest } from './packages/sandbox-runner/exec.mjs';
+import { dockerArgs as runnerDockerArgs, validateRunRequest } from './packages/sandbox-runner/exec.mjs';
 
 test('buildDockerArgs: every isolation flag is present (no silent weakening)', () => {
   const args = buildDockerArgs({ image: 'python:3-slim', cmd: ['python3', '-'], name: 'sx1' });
@@ -37,6 +37,19 @@ test('sandbox runner: accepts only bounded Python or Node jobs', () => {
   });
   assert.equal(validateRunRequest({ lang: 'bash', code: 'echo bad' }).error, 'lang must be python or node');
   assert.equal(validateRunRequest({ lang: 'node', code: '' }).error, 'code must be between 1 and 65536 characters');
+});
+
+test('sandbox runner: production Docker invocation preserves every isolation boundary', () => {
+  const args = runnerDockerArgs({ lang: 'node', input: 'safe', name: 'sx-runner-test' });
+  const value = args.join(' ');
+  assert.match(value, /--network none/);
+  assert.match(value, /--cap-drop ALL/);
+  assert.match(value, /--security-opt no-new-privileges/);
+  assert.match(value, /--read-only/);
+  assert.match(value, /--user 65534:65534/);
+  assert.match(value, /--memory 256m --memory-swap 256m/);
+  assert.match(value, /--cpus 0\.5 --pids-limit 128/);
+  assert.match(value, /node:20-bookworm-slim node -$/);
 });
 
 test('sandboxImage: hosted SHANNON_SANDBOX_IMAGE wins; per-language public fallback otherwise', () => {

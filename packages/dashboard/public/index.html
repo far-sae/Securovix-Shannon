@@ -2159,13 +2159,18 @@ function agentAuthBody(){
   const loginUrl=($('ag-loginurl')?.value||'').trim(),username=($('ag-user')?.value||'').trim(),password=($('ag-pass')?.value||'');
   return (loginUrl&&username)?{loginUrl,username,password}:{};
 }
-function agentAuthQuery(){const a=agentAuthBody();return Object.keys(a).map(k=>'&'+k+'='+encodeURIComponent(a[k])).join('');}
+async function agentAuthGrant(target){
+  const credentials=agentAuthBody();
+  if(!Object.keys(credentials).length)return null;
+  const data=await api('/agent/auth-grant',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target,...credentials})});
+  return data.authGrantId||null;
+}
 async function agentUnderstand(){
   const t=($('ag-target')?.value||'').trim();if(!t)return;
   const out=$('ag-out'),btn=$('ag-go');btn.disabled=true;
   out.innerHTML=`<div style="display:flex;align-items:center;gap:10px;color:var(--t2)"><span class="sp"></span> Crawling &amp; understanding <b style="color:var(--t0)">${H(t)}</b>…</div>`;
   let data;
-  try{ data=await api('/agent/understand',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target:t,...agentAuthBody()})}); }
+  try{ const authGrantId=await agentAuthGrant(t);data=await api('/agent/understand',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target:t,authGrantId})}); }
   catch(e){
     btn.disabled=false;
     if(e.status===403){out.innerHTML=`<p style="color:var(--red)">You must verify ownership of this domain first. <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Go to Domains →</a></p>`;return;}
@@ -2205,8 +2210,11 @@ function renderUnderstanding(u){
 }
 function prefillScan(origin){ try{ if(origin&&typeof WIZ==='object')WIZ.targetUrl=origin; }catch(e){} go('new'); setTimeout(()=>{const i=$('turl');if(i&&origin&&!i.value)i.value=origin;},60); }
 // Shared SSE runner — streams one agent run; callbacks fire per step / on done / on error.
-function streamAgent(target,{onStep,onDone,onError}={}){
-  const es=new EventSource('/api/agent/run/stream?target='+encodeURIComponent(target)+(typeof agentAuthQuery==='function'?agentAuthQuery():''));
+async function streamAgent(target,{onStep,onDone,onError}={}){
+  let authGrantId=null;
+  try{authGrantId=await agentAuthGrant(target);}catch(e){onError&&onError(e.message||'Could not prepare the authenticated session.');return null;}
+  const url='/api/agent/run/stream?target='+encodeURIComponent(target)+(authGrantId?'&authGrantId='+encodeURIComponent(authGrantId):'');
+  const es=new EventSource(url);
   let done=false;
   es.onmessage=e=>{try{onStep&&onStep(JSON.parse(e.data))}catch(x){}};
   es.addEventListener('done',e=>{done=true;try{es.close()}catch(x){}let run=null;try{run=JSON.parse(e.data).run}catch(x){}onDone&&onDone(run);});
@@ -2214,13 +2222,13 @@ function streamAgent(target,{onStep,onDone,onError}={}){
   return es;
 }
 let AG_ES=null;
-function agentRun(){
+async function agentRun(){
   const t=($('ag-target')?.value||'').trim();if(!t)return;
   const btn=$('ag-run');if(btn)btn.disabled=true;
   if(AG_ES){try{AG_ES.close()}catch(e){}AG_ES=null;}
   $('ag-run-out').innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin:4px 0 12px"><div style="font-size:15px;font-weight:700" id="ag-status">Agent working…</div><span class="sp" id="ag-spin"></span></div><div id="ag-graph" style="margin:2px 0 10px"></div><div id="ag-tl" style="border:1px solid var(--brd);border-radius:10px;padding:4px 14px"></div><div id="ag-finds" style="margin-top:16px"></div><div id="ag-locate" style="margin-top:20px"></div>`;
   const fin=()=>{if(btn)btn.disabled=false;const sp=$('ag-spin');if(sp)sp.remove();AG_ES=null;};
-  AG_ES=streamAgent(t,{
+  AG_ES=await streamAgent(t,{
     onStep:s=>{appendStep(s,$('ag-tl'));agentGraphStep(s);},
     onDone:run=>{fin();const st=$('ag-status');if(st)st.textContent='Agent run complete';finishRun(run,$('ag-finds'),true);renderLocate((run&&run.findings)||[]);},
     onError:(msg,nv)=>{fin();const st=$('ag-status');if(st)st.textContent='Agent stopped';const tl=$('ag-tl');if(tl)tl.innerHTML=`<div style="padding:10px;color:var(--red)">${H(msg)}${nv?` <a href="#" onclick="go('domains');return false" style="color:var(--acc2)">Verify ownership →</a>`:(msg.indexOf('Sign in')>=0?` <a href="#" onclick="go('cfg');return false" style="color:var(--acc2)">Sign in →</a>`:'')}</div>`;}
@@ -2251,7 +2259,7 @@ async function agentBatch(){
 }
 // ── Multi-agent SECURITY TEAM: stream the blackboard-coordinated run + a role-typed handoff graph ──
 let TEAM_ES=null;
-function teamRun(){
+async function teamRun(){
   const t=($('ag-target')?.value||'').trim();if(!t){go('agent');return;}
   const btn=$('ag-team-go');if(btn)btn.disabled=true;
   if(TEAM_ES){try{TEAM_ES.close()}catch(e){}TEAM_ES=null;}
@@ -2259,7 +2267,9 @@ function teamRun(){
   out.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin:4px 0 12px"><div style="font-size:15px;font-weight:700" id="tm-status">The security team is working…</div><span class="sp" id="tm-spin"></span></div><div id="tm-graph" style="margin:2px 0 10px"></div><div id="tm-tl" style="border:1px solid var(--brd);border-radius:10px;padding:4px 14px"></div><div id="tm-finds" style="margin-top:16px"></div><div id="tm-fixes" style="margin-top:16px"></div>`;
   buildTeamGraph($('tm-graph'),4);
   const fin=()=>{if(btn)btn.disabled=false;const sp=$('tm-spin');if(sp)sp.remove();TEAM_ES=null;};
-  const es=new EventSource('/api/agent/team/stream?target='+encodeURIComponent(t)+(typeof agentAuthQuery==='function'?agentAuthQuery():''));
+  let authGrantId=null;
+  try{authGrantId=await agentAuthGrant(t);}catch(e){fin();const tl=$('tm-tl');if(tl)tl.innerHTML=`<div style="padding:10px;color:var(--red)">${H(e.message||'Could not prepare the authenticated session.')}</div>`;return;}
+  const es=new EventSource('/api/agent/team/stream?target='+encodeURIComponent(t)+(authGrantId?'&authGrantId='+encodeURIComponent(authGrantId):''));
   TEAM_ES=es;let done=false;
   es.onmessage=e=>{let s=null;try{s=JSON.parse(e.data)}catch(x){}if(!s)return;appendStep(s,$('tm-tl'));pulseTeam($('tm-graph'),s);};
   es.addEventListener('done',e=>{done=true;try{es.close()}catch(x){}fin();let team=null;try{team=JSON.parse(e.data).team}catch(x){}
@@ -2380,7 +2390,7 @@ function finishRun(run,el,withLocate){
     </div>`).join('');
   el.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px;flex-wrap:wrap"><span class="bx ${n?'bx-o':'bx-g'}">${n} proven</span>${L.length?`<span class="bx" style="border-color:#f59e0b;color:#f59e0b">${L.length} potential</span>`:''}<span style="color:var(--t3);font-size:12px">${rounds} round${rounds>1?'s':''} &middot; ${tested} probes run</span>${withLocate?`<span style="margin-left:auto;display:flex;gap:6px"><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="downloadReport('md')">Download .md</button><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="downloadReport('json')">.json</button><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="downloadReport('sarif')">.sarif</button></span>`:''}</div>
-    ${n?`<h2 style="font-size:17px;margin:6px 0 12px">Proven findings (${n}) <span style="color:var(--grn);font-size:12px;font-weight:400">zero false positives</span></h2>${finds}`:`<p style="color:var(--t2)">The agent proved nothing on this target — every probe abstained. That's the zero-FP guarantee working: no proof, no finding.</p>`}
+    ${n?`<h2 style="font-size:17px;margin:6px 0 12px">Proven findings (${n}) <span style="color:var(--grn);font-size:12px;font-weight:400">evidence-backed</span></h2>${finds}`:`<p style="color:var(--t2)">The agent proved nothing on this target — every probe abstained, so no confirmed finding was created.</p>`}
     ${L.length?`<div style="margin-top:22px;border-top:1px solid var(--brd);padding-top:16px"><h2 style="font-size:15px;margin:0 0 4px;color:#f59e0b">&#9888; Potential — needs review <span style="color:var(--t3);font-weight:400;font-size:13px">(${L.length}, UNPROVEN)</span></h2><p style="color:var(--t3);font-size:12px;margin:0 0 12px;line-height:1.45">These are NOT confirmed — the agent has no proof for them. They are surfaced for manual verification and kept strictly separate from the proven results above.</p>${leadCards}</div>`:''}`;
 }
 async function downloadReport(fmt){
@@ -3211,7 +3221,7 @@ function wizRender(){
         <div style="width:32px;height:32px;border-radius:8px;background:radial-gradient(circle at 30% 30%,#ff8888,var(--rt) 60%,#a02020);display:flex;align-items:center;justify-content:center;font-family:'Inter',system-ui,sans-serif;font-weight:800;color:#0b0b0b;flex-shrink:0">C</div>
         <div style="flex:1;min-width:200px">
           <div style="font-size:12.5px;font-weight:700;color:var(--t0)">Anthropic key required</div>
-          <div style="font-size:11.5px;color:var(--t3);margin-top:2px">Persisted only in your browser; sent to the scan runtime for this engagement and never stored in Supabase.</div>
+          <div style="font-size:11.5px;color:var(--t3);margin-top:2px">Encrypted for the active organization; plaintext is never returned to the browser.</div>
         </div>
         <button class="btn btn-p" type="button" style="padding:8px 14px;font-size:12px" onclick="promptForAnthropicKey('Add your Anthropic key to unlock scans.').then(kk=>{if(kk)wizRender()})">+ Add key</button>
       </div>`:''}
@@ -3299,6 +3309,7 @@ async function doScan(){
     try{const webhook=new URL(WIZ.alertWebhook);if(webhook.protocol!=='https:')throw new Error('HTTPS required')}
     catch{alert('The monitoring webhook must be a complete HTTPS URL.');return}
   }
+  await csRefreshKeys();
   let keys=csLoadKeys();
   if(!keys.claude){
     const k=await promptForAnthropicKey('Anthropic API key required to launch a pentest.');
@@ -3320,9 +3331,7 @@ async function doScan(){
       username:WIZ.username,password:WIZ.password,
       retryPreset:WIZ.retryPreset||'default',
       focusUrls:WIZ.focusUrls,avoidUrls:WIZ.avoidUrls,
-      apiKey:keys.claude,
       warRoom:WIZ.warRoom!==false,
-      providerKeys:keys,
       authorized,
       accessControl:(()=>{const lu=(WIZ.acLoginUrl||'').trim();const mk=(label,role,user,pass,ck)=>{user=(user||'').trim();ck=(ck||'').trim();if(lu&&user)return{label,role,loginUrl:lu,username:user,password:(pass||'').trim()};if(ck)return{label,role,cookie:ck};return null;};const ids=[mk('userA','user',WIZ.acAuser,WIZ.acApass,WIZ.acAck),mk('userB','user',WIZ.acBuser,WIZ.acBpass,WIZ.acBck),mk('admin','admin',WIZ.acAdmUser,WIZ.acAdmPass,WIZ.acAdmCk)].filter(Boolean);return ids.length>=2?{identities:ids}:undefined})(),
       monitor:WIZ.monitor===true,
@@ -3426,7 +3435,7 @@ function promptForAnthropicKey(reason){
             <div style="font-size:11px;color:var(--t3);margin-top:2px">${H(reason||'Required to call Claude')}</div>
           </div>
         </div>
-        <p style="font-size:12.5px;color:var(--t2);line-height:1.6;margin-bottom:14px">Paste your Anthropic key. <strong style="color:var(--t1)">Persisted only in your browser</strong>; it is sent to the scan runtime when used and is never written to Supabase.</p>
+        <p style="font-size:12.5px;color:var(--t2);line-height:1.6;margin-bottom:14px">Paste your Anthropic key. It is encrypted for the active organization and plaintext is never returned to the browser.</p>
         <input id="qk-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"
                style="width:100%;padding:12px 14px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font-family:'JetBrains Mono',monospace;font-size:12.5px;outline:0;margin-bottom:6px">
         <div id="qk-err" style="font-size:11px;color:var(--red);min-height:14px;margin-bottom:8px"></div>
@@ -3440,11 +3449,12 @@ function promptForAnthropicKey(reason){
     const inp=ov.querySelector('#qk-input');inp.focus();
     const close=v=>{ov.remove();resolve(v)};
     ov.querySelector('#qk-cancel').onclick=()=>close(null);
-    ov.querySelector('#qk-save').onclick=()=>{
+    ov.querySelector('#qk-save').onclick=async()=>{
       const v=inp.value.trim();
       if(v.length<10){ov.querySelector('#qk-err').textContent='Key looks too short.';return}
       if(!v.startsWith('sk-ant-')){ov.querySelector('#qk-err').textContent='Anthropic keys start with "sk-ant-". Double-check before continuing.';return}
-      const stored=csLoadKeys();stored.claude=v;csSaveKeys(stored);close(v);
+      const save=ov.querySelector('#qk-save');save.disabled=true;save.textContent='Saving…';
+      try{await csSaveKeys({claude:v});close(v)}catch(e){save.disabled=false;save.textContent='Save & continue';ov.querySelector('#qk-err').textContent=e.message||'Could not save the key.'}
     };
     inp.addEventListener('keydown',e=>{
       if(e.key==='Enter')ov.querySelector('#qk-save').click();
@@ -4208,8 +4218,8 @@ function stab(id,el){
 }
 
 // ===== VERIFIED EXPLOITS TAB (Track B/C) =====
-// Surfaces the broker's tool-CONFIRMED exploitation findings (zero false positives by
-// construction — each is proven by a benign marker/canary) and their OWASP/CWE/MITRE map.
+// Surfaces the broker's tool-confirmed exploitation findings. Each confirmed result includes
+// reproducible evidence; customers should still review it in the context of their application.
 function renderVerified(){
   const b=window._broker||{findings:[],rows:[],owaspCoverage:{},cweCoverage:{}};
   const findings=b.findings||[],rows=b.rows||[];
@@ -4221,11 +4231,11 @@ function renderVerified(){
       <h3 class="h-display" style="font-size:22px;color:var(--t0)">Tool-Verified Exploits</h3>
       <span class="bx bx-g" style="font-size:11px">${findings.length} confirmed</span>
       <span style="flex:1"></span>
-      <a class="btn btn-p" style="padding:6px 12px;font-size:12px;display:inline-flex;align-items:center;gap:6px" href="/api/scans/${window._sid}/report?format=html" target="_blank" rel="noopener" title="CVSS 3.1 + OWASP WSTG/ASVS + compliance report — open and Print → Save as PDF">${ico('file-text',{cls:'ico-sm'})} Certification report</a>
+      <a class="btn btn-p" style="padding:6px 12px;font-size:12px;display:inline-flex;align-items:center;gap:6px" href="/api/scans/${window._sid}/report?format=html" target="_blank" rel="noopener" title="CVSS 3.1 + OWASP WSTG/ASVS + framework-mapping report — open and Print → Save as PDF">${ico('file-text',{cls:'ico-sm'})} Evidence report</a>
       <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${window._sid}/report?format=md" target="_blank" rel="noopener">Markdown</a>
       <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${window._sid}/report?format=sarif" target="_blank" rel="noopener" title="SARIF 2.1.0 — import into CI / GitHub code scanning">SARIF</a>
     </div>
-    <p style="color:var(--t2);margin-bottom:18px;line-height:1.6;max-width:760px">Findings here were exploited through the scope-locked tool broker and confirmed by a benign proof marker (arithmetic eval, planted canary, or cross-identity read). Unlike inferred findings, these carry <strong style="color:var(--t1)">zero false positives by construction</strong>${classes.length?` — across ${classes.length} vuln class${classes.length>1?'es':''}: ${classes.map(H).join(', ')}.`:'.'}</p>
+    <p style="color:var(--t2);margin-bottom:18px;line-height:1.6;max-width:760px">Findings here were exercised through the scope-locked tool broker and supported by a benign proof marker (arithmetic eval, planted canary, or cross-identity read). Inferred or unverified observations are kept separate${classes.length?` — across ${classes.length} vuln class${classes.length>1?'es':''}: ${classes.map(H).join(', ')}.`:'.'}</p>
 
     ${(b.chains&&b.chains.length)?`<div style="border:1px solid var(--red);border-radius:var(--rs);background:rgba(179,64,31,.06);padding:14px 16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><strong style="color:var(--t0);font-size:14px">Attack Paths</strong><span class="bx bx-g" style="font-size:11px">${b.chains.length} correlated</span><span style="color:var(--t3);font-size:11px">how findings combine into full compromise</span></div>
@@ -4612,10 +4622,32 @@ function posturePhrase(s){
 }
 
 // ===== SETTINGS =====
-// ---- Browser-only API key storage ----
+// Organization AI keys are encrypted server-side. The browser receives status only, never key values.
 const KEYS_LS='shannon_provider_keys';
-function csLoadKeys(){try{return JSON.parse(localStorage.getItem(KEYS_LS)||'{}')}catch{return{}}}
-function csSaveKeys(k){localStorage.setItem(KEYS_LS,JSON.stringify(k))}
+try{localStorage.removeItem(KEYS_LS)}catch{}
+let ORG_AI_KEYS={},ACTIVE_AI_ORG='';
+function csLoadKeys(){return {...ORG_AI_KEYS}}
+async function csRefreshKeys(){
+  const team=await api('/team/context');
+  ACTIVE_AI_ORG=team.active?.organization?.id||'';
+  if(!ACTIVE_AI_ORG){ORG_AI_KEYS={};return ORG_AI_KEYS}
+  const data=await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/ai-providers`);
+  ORG_AI_KEYS=Object.fromEntries((data.providers||[]).filter(p=>p.configured).map(p=>[p.provider,true]));
+  return csLoadKeys();
+}
+async function csSaveKeys(keys){
+  if(!ACTIVE_AI_ORG)await csRefreshKeys();
+  for(const [provider,apiKey] of Object.entries(keys||{})){
+    if(typeof apiKey!=='string'||apiKey.length<10)continue;
+    await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/ai-providers/${encodeURIComponent(provider)}`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({apiKey})});
+  }
+  return csRefreshKeys();
+}
+async function csRemoveKey(provider){
+  if(!ACTIVE_AI_ORG)await csRefreshKeys();
+  await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/ai-providers/${encodeURIComponent(provider)}`,{method:'DELETE'});
+  return csRefreshKeys();
+}
 function saveGithubToken(){
   try{
     const t=(($('s-gh-token')||{}).value||'').trim(),r=(($('s-gh-repo')||{}).value||'').trim();
@@ -4624,7 +4656,7 @@ function saveGithubToken(){
     const m=$('s-gh-msg');if(m){m.textContent='Saved ✓';setTimeout(()=>{if(m)m.textContent=''},1600);}
   }catch(e){}
 }
-function csKeyMask(v){return v?(v.slice(0,6)+'…'+v.slice(-4)):''}
+function csKeyMask(v){return typeof v==='string'&&v?(v.slice(0,6)+'…'+v.slice(-4)):'Stored securely'}
 
 const PROVIDER_ROWS=[
   {field:'claude',name:'Anthropic — Claude Opus 4.7', provider:'claude',placeholder:'sk-ant-…',         note:'Required — also the safety-net fallback when other agents fail.', strength:'Most capable model — flagship red-team reasoning. Required as the system fallback.', getUrl:'https://console.anthropic.com/settings/keys', getLabel:'console.anthropic.com', short:'C',gradient:'background:radial-gradient(circle at 30% 30%,#ff8888,var(--rt) 60%,#a02020)'},
@@ -4634,10 +4666,11 @@ const PROVIDER_ROWS=[
 ];
 
 async function pgCfg(){
+  await csRefreshKeys();
   const stored=csLoadKeys();
   const ghTok=(()=>{try{return localStorage.getItem('shannon_gh_token')||''}catch(e){return''}})();
   const ghRepo=(()=>{try{return localStorage.getItem('shannon_gh_repo')||''}catch(e){return''}})();
-  const [st,models,lb,readiness]=await Promise.all([api('/settings'),api('/models'),api('/code-scan/leaderboard').catch(()=>({leaderboard:[]})),api('/system/readiness').catch(()=>null)]);
+  const [st,models,lb,readiness,identity,usage,plans]=await Promise.all([api('/settings'),api('/models'),api('/code-scan/leaderboard').catch(()=>({leaderboard:[]})),api('/system/readiness').catch(()=>null),api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity`).catch(()=>null),api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/usage`).catch(()=>null),api('/auth/plans').catch(()=>({plans:[],billingEnabled:false}))]);
   const totalRuns=lb.leaderboard.reduce((a,r)=>a+(r.runs||0),0);
 
   const connectedCount=PROVIDER_ROWS.filter(p=>!!stored[p.field]).length;
@@ -4654,21 +4687,25 @@ async function pgCfg(){
       <p>Bring your own AI keys. Securovix ranks every provider on real scan results and auto-casts them as Red Lead, Red Operator, Blue Architect, and Blue Engineer — you don't pick who plays what.</p>
       <div class="set-hero-meter">
         <span class="set-hero-pill ${meterCopy.cls}"><span class="dot"></span>${H(meterCopy.label)}</span>
-        <span class="set-hero-pill muted"><span class="dot"></span>Browser-only storage · keys never touch our DB</span>
+        <span class="set-hero-pill muted"><span class="dot"></span>Encrypted organization secret store</span>
         ${lb.leaderboard?.length?`<span class="set-hero-pill muted"><span class="dot"></span>${totalRuns} scored war-room turns</span>`:''}
       </div>
     </section>
 
     <div class="sec-kpis"><div class="sec-kpi ${claudeOk?'good':'warn'}"><span>Provider readiness</span><strong>${connectedCount}/4</strong><small>${claudeOk?'required fallback connected':'Anthropic key required'}</small></div><div class="sec-kpi ${CURRENT_USER?.mfaEnabled?'good':'warn'}"><span>Account MFA</span><strong>${CURRENT_USER?.mfaEnabled?'on':'off'}</strong><small>${CURRENT_USER?.mfaEnabled?'TOTP protects this account':'enable MFA for administrators'}</small></div><div class="sec-kpi ${ghTok?'good':''}"><span>Remediation PRs</span><strong>${ghTok?'ready':'not set'}</strong><small>${ghRepo?H(ghRepo):'optional GitHub integration'}</small></div><div class="sec-kpi"><span>Learning signal</span><strong>${totalRuns}</strong><small>scored war-room turns</small></div></div>
-    <section class="sec-card settings-security"><div class="sec-card-head"><h2>${ico('shield-check',{cls:'ico-sm'})} Account security baseline</h2><small>local and account controls</small></div><div class="settings-security-grid"><div class="sec-check"><span class="sec-check-mark ${CURRENT_USER?.mfaEnabled?'':'warn'}">${CURRENT_USER?.mfaEnabled?'✓':'!'}</span><div><b>Multi-factor authentication</b><small>${CURRENT_USER?.mfaEnabled?'Enabled for this account.':'Recommended for every owner and administrator.'}</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Provider credential isolation</b><small>Keys persist only in this browser and are never written to Supabase.</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Organization authorization</b><small>Server-side role checks protect scans, findings, Defender, and settings.</small></div></div><div class="settings-security-actions"><button class="btn btn-p" onclick="authMfaManage()">${CURRENT_USER?.mfaEnabled?'Manage MFA':'Enable MFA'}</button><button class="btn btn-g" onclick="settingsClearProviderKeys()">Clear browser keys</button></div></div></section>
+    <section class="sec-card settings-security"><div class="sec-card-head"><h2>${ico('shield-check',{cls:'ico-sm'})} Account security baseline</h2><small>account and organization controls</small></div><div class="settings-security-grid"><div class="sec-check"><span class="sec-check-mark ${CURRENT_USER?.mfaEnabled?'':'warn'}">${CURRENT_USER?.mfaEnabled?'✓':'!'}</span><div><b>Multi-factor authentication</b><small>${CURRENT_USER?.mfaEnabled?'Enabled for this account.':'Recommended for every owner and administrator.'}</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Provider credential isolation</b><small>Keys are encrypted per organization and never returned by the API.</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Organization authorization</b><small>Server-side role checks protect scans, findings, Defender, and settings.</small></div></div><div class="settings-security-actions"><button class="btn btn-p" onclick="authMfaManage()">${CURRENT_USER?.mfaEnabled?'Manage MFA':'Enable MFA'}</button><button class="btn btn-g" onclick="settingsClearProviderKeys()">Remove organization keys</button></div></div></section>
 
     ${readiness?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>${ico('gauge',{cls:'ico-sm'})} Production readiness</h2><small>live server and service checks</small></div><div class="readiness-summary"><strong>${readiness.ready}/${readiness.required}</strong><span class="bx ${readiness.ok?'bx-g':'bx-y'}">${readiness.ok?'required services ready':'configuration required'}</span><button class="btn btn-g" style="margin-left:auto;padding:6px 10px;font-size:10px" onclick="pgCfg()">Refresh</button></div><div class="readiness-grid">${(readiness.checks||[]).map(c=>`<div class="readiness-row ${H(c.status)}"><span class="readiness-dot"></span><div><b>${H(c.label)} <span style="color:var(--t3);font-size:9px;text-transform:uppercase">· ${H(c.status)}</span></b><small>${H(c.detail||'')}</small></div></div>`).join('')}</div></section>`:''}
+
+    ${identity?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>${ico('lock',{cls:'ico-sm'})} Organization identity</h2><small>customer-specific SSO and provisioning</small></div><div class="readiness-grid"><div class="readiness-row ${identity.oidc?.configured?'ready':'optional'}"><span class="readiness-dot"></span><div><b>OIDC SSO</b><small>${identity.oidc?.configured?H(identity.oidc.issuer):'Not configured'}</small></div><button class="btn btn-g" onclick="settingsConfigureOidc()">${identity.oidc?.configured?'Rotate':'Configure'}</button>${identity.oidc?.configured?'<button class="btn" onclick="settingsDeleteIdentity(\'oidc\')">Remove</button>':''}</div><div class="readiness-row ${identity.scim?.configured?'ready':'optional'}"><span class="readiness-dot"></span><div><b>SCIM 2.0</b><small>${identity.scim?.configured?H(identity.scim.baseUrl):'Not configured'}</small></div><button class="btn btn-g" onclick="settingsRotateScim()">${identity.scim?.configured?'Rotate token':'Create token'}</button>${identity.scim?.configured?'<button class="btn" onclick="settingsDeleteIdentity(\'scim\')">Remove</button>':''}</div></div></section>`:''}
+
+    ${usage?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>${ico('gauge',{cls:'ico-sm'})} Plan and daily usage</h2><small>${H(usage.plan)} plan · counters reset at 00:00 UTC</small></div><div class="sec-kpis">${['scans','codeFiles','agentRuns'].map(metric=>{const used=(usage.usage||[]).find(x=>x.metric===metric)?.quantity||0,limit=usage.limits?.[metric]||0;return `<div class="sec-kpi ${used>=limit?'warn':'good'}"><span>${H(metric)}</span><strong>${used}/${limit}</strong><small>organization total today</small></div>`}).join('')}</div>${plans.billingEnabled&&usage.plan==='free'?'<button class="btn btn-p" onclick="settingsUpgrade()">Upgrade to Pro</button>':'<p style="font-size:12px;color:var(--t3);margin:0">Paid checkout is enabled only when the operator has configured and verified Stripe webhooks.</p>'}</section>`:''}
 
     <section class="set-section">
       <div class="set-section-head">
         <div>
           <h3>API Keys</h3>
-          <div class="sub">Paste once · stored only in your browser's localStorage</div>
+          <div class="sub">Encrypted at rest · isolated to the active organization</div>
         </div>
         <span class="bx bx-g" style="font-size:9.5px">${connectedCount}/${PROVIDER_ROWS.length} active</span>
       </div>
@@ -4699,7 +4736,7 @@ async function pgCfg(){
           </div>
           <div class="prov-foot">
             <a class="prov-link" href="${p.getUrl}" target="_blank" rel="noopener noreferrer">Get a key from ${H(p.getLabel)}</a>
-            ${have?`<span class="bx bx-g" style="font-size:9px">in browser</span>`:''}
+            ${have?`<span class="bx bx-g" style="font-size:9px">encrypted</span>`:''}
           </div>
         </div>`;
       }).join('')}
@@ -4818,30 +4855,61 @@ async function pgCfg(){
     if(!inp)return;
     if(inp.type==='password'){inp.type='text';btn.textContent='Hide'}else{inp.type='password';btn.textContent='Show'}
   });
-  document.querySelectorAll('.sw-clear').forEach(btn=>btn.onclick=()=>{
-    const k=csLoadKeys();delete k[btn.dataset.field];csSaveKeys(k);pgCfg();
+  document.querySelectorAll('.sw-clear').forEach(btn=>btn.onclick=async()=>{
+    btn.disabled=true;try{await csRemoveKey(btn.dataset.field);await pgCfg()}catch(e){alert(e.message)}
   });
-  $('s-save-keys').onclick=()=>{
-    const stored=csLoadKeys();
-    let saved=0;
+  $('s-save-keys').onclick=async()=>{
+    const pending={};
     document.querySelectorAll('.sw-key').forEach(inp=>{
       const v=inp.value.trim();
-      if(v&&v.length>=10){stored[inp.dataset.field]=v;saved++}
+      if(v&&v.length>=10)pending[inp.dataset.field]=v;
     });
-    csSaveKeys(stored);
+    const saved=Object.keys(pending).length;
+    if(saved)await csSaveKeys(pending);
     document.querySelectorAll('.sw-key').forEach(inp=>inp.value='');
     const m=$('s-keys-msg');
-    m.textContent=saved?`Saved ${saved} key${saved===1?'':'s'} to your browser`:'No new keys entered';
+    m.textContent=saved?`Encrypted ${saved} organization key${saved===1?'':'s'}`:'No new keys entered';
     m.style.color=saved?'var(--grn)':'var(--t3)';
     if(saved)m.classList.add('shown');else m.classList.remove('shown');
     setTimeout(()=>{m.textContent='';m.classList.remove('shown');pgCfg()},1400);
   };
 }
 
-function settingsClearProviderKeys(){
-  if(!confirm('Remove all AI provider keys stored in this browser? Running scans will require new keys.'))return;
-  try{localStorage.removeItem(KEYS_LS)}catch{}
+async function settingsClearProviderKeys(){
+  if(!confirm('Remove all AI provider keys from this organization? Running scans will require new keys.'))return;
+  for(const provider of Object.keys(csLoadKeys()))await csRemoveKey(provider);
   pgCfg();
+}
+
+async function settingsConfigureOidc(){
+  const issuer=prompt('OIDC issuer URL (HTTPS)');if(!issuer)return;
+  const clientId=prompt('OIDC client ID');if(!clientId)return;
+  const clientSecret=prompt('OIDC client secret');if(!clientSecret)return;
+  const allowedDomains=prompt('Verified email domains, comma-separated (required; verify them on the Domains page first)','')||'';
+  try{
+    const out=await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity/oidc`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({issuer,clientId,clientSecret,allowedDomains})});
+    prompt('Register this organization SSO start URL with your users. Register /auth/sso/org/callback as the provider callback.',out.startUrl);
+    pgCfg();
+  }catch(e){alert(e.message||'Could not configure OIDC.')}
+}
+
+async function settingsRotateScim(){
+  if(!confirm('Create a new SCIM token? Any previous token for this organization will stop working.'))return;
+  try{
+    const out=await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity/scim`,{method:'PUT',headers:{'content-type':'application/json'},body:'{}'});
+    try{await navigator.clipboard.writeText(out.token)}catch{}
+    prompt(`Copy this SCIM token now; it will not be shown again. Base URL: ${out.baseUrl}`,out.token);
+    pgCfg();
+  }catch(e){alert(e.message||'Could not create the SCIM token.')}
+}
+
+async function settingsDeleteIdentity(kind){
+  if(!confirm(`Remove this organization's ${kind.toUpperCase()} configuration?`))return;
+  try{await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity/${kind}`,{method:'DELETE'});pgCfg()}catch(e){alert(e.message)}
+}
+
+async function settingsUpgrade(){
+  try{const out=await api('/auth/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({plan:'pro',cycle:'monthly'})});if(out.url)location.href=out.url}catch(e){alert(e.message||'Could not start checkout.')}
 }
 
 async function csResetLb(){
@@ -4982,7 +5050,7 @@ function renderCodeScanner(me){
       <div class="empty-state-icon" style="margin:0;width:42px;height:42px;border-radius:11px;color:var(--acc2)">${ico('key-round',{cls:'ico-lg'})}</div>
       <div style="flex:1;min-width:220px;text-align:left">
         <h3 style="margin:0 0 4px;font-size:14px">Anthropic key required</h3>
-        <p style="margin:0;font-size:12.5px;color:var(--t2);max-width:none">Persisted only in your browser and sent to the scan runtime when used. Optional providers fall back to Claude.</p>
+        <p style="margin:0;font-size:12.5px;color:var(--t2);max-width:none">Encrypted for the active organization. Optional providers fall back to Claude.</p>
       </div>
       <button class="btn btn-p" type="button" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" onclick="promptForAnthropicKey('Add your Anthropic key to unlock the war room.').then(k=>{if(k)pgCode()})">${ico('plus',{cls:'ico-sm'})} Add key</button>
     </div>`:''}
@@ -5148,6 +5216,7 @@ async function csQuickScanFile(file){
   if(!file)return;
   if(file.size>256_000){status.innerHTML=`<span style="color:var(--red)">${H(file.name)} is too large (${(file.size/1024).toFixed(0)}KB). Maximum 256KB — try Project mode.</span>`;return}
   const text=await file.text();
+  await csRefreshKeys();
   const keys=csLoadKeys();
   if(!keys.claude){const k=await promptForAnthropicKey('Anthropic key required to start the scan.');if(!k)return}
 
@@ -5155,7 +5224,7 @@ async function csQuickScanFile(file){
   resultBox.innerHTML='';
 
   try{
-    const r=await fetch('/api/code-scan/quick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:text,filename:file.name,keys:csLoadKeys()})});
+    const r=await fetch('/api/code-scan/quick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:text,filename:file.name})});
     const d=await r.json();
     if(!d.ok){throw new Error(d.error||'Scan failed')}
     if(!d.result){throw new Error(d.error||'No result')}
@@ -5381,6 +5450,7 @@ function csSelectAll(on){
 }
 
 async function csScanProject(){
+  await csRefreshKeys();
   const keys=csLoadKeys();
   if(!keys.claude){const k=await promptForAnthropicKey('Anthropic key required to scan the project.');if(!k)return}
   const sel=Array.from(CS_PROJECT.selected);
@@ -5402,7 +5472,7 @@ async function csScanProject(){
       if(!file||!file.content)continue;
       status.textContent=`Scanning (${done+1}/${total}) ${path}…`;
       try{
-        const r=await fetch('/api/code-scan/quick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:file.content,filename:path,keys:csLoadKeys()})});
+        const r=await fetch('/api/code-scan/quick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:file.content,filename:path})});
         const d=await r.json();
         if(d.ok&&d.result){
           const result=d.result;
@@ -5541,6 +5611,7 @@ async function csRunMulti(){
   const fname=$('cs-fname').value;
   const status=$('cs-status'),btn=$('cs-run'),cancel=$('cs-cancel');
   if(!code.trim()){status.textContent='Paste or attach code first';status.style.color='var(--red)';return}
+  await csRefreshKeys();
   let keys=csLoadKeys();
   if(!keys.claude){
     const k=await promptForAnthropicKey('Anthropic API key required to start the war room.');
@@ -5552,7 +5623,7 @@ async function csRunMulti(){
   status.style.color='var(--t3)';status.textContent='auto-picking agents from leaderboard…';
   csResetArena();
   try{
-    const r=await fetch('/api/code-scan/multi/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,filename:fname||undefined,keys})});
+    const r=await fetch('/api/code-scan/multi/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,filename:fname||undefined})});
     const d=await r.json();
     if(!d.ok){
       if(r.status===401){pgCode();return}
@@ -6082,6 +6153,7 @@ function renderAuthScreen(){
     <p class="auth-foot">
       <a href="/terms" target="_blank" rel="noopener">Terms</a> &middot;
       <a href="/privacy" target="_blank" rel="noopener">Privacy</a> &middot;
+      <a href="/security" target="_blank" rel="noopener">Security</a> &middot;
       Authorized testing only
     </p>
   </div>

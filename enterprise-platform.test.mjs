@@ -56,6 +56,36 @@ test('one-time auth tokens are consumed once', async () => {
   assert.equal(await database.consumeAuthToken(tokenHash, 'password-reset'), null);
 });
 
+test('organization secrets stay encrypted and scan-auth grants are single use', async () => {
+  const secretEnc = security.encryptSecret({ apiKey: 'customer-ai-key-value' });
+  await database.saveOrgSecret({
+    id: 'secret-1', orgId: 'org-1', kind: 'ai-provider', name: 'claude', config: {}, secretEnc,
+    createdBy: 'user-1', createdAt: Date.now(), updatedAt: Date.now(),
+  });
+  const publicRows = await database.listOrgSecrets('org-1', 'ai-provider');
+  assert.equal(publicRows[0].configured, true);
+  assert.equal(publicRows[0].secretEnc, undefined);
+  const stored = await database.getOrgSecret('org-1', 'ai-provider', 'claude');
+  assert.equal(security.decryptSecret(stored.secretEnc).apiKey, 'customer-ai-key-value');
+
+  const grantSecret = security.encryptSecret({ cookie: 'session=private' });
+  await database.createScanAuthGrant({
+    id: 'grant-1', userId: 'user-1', orgId: 'org-1', targetOrigin: 'https://app.example.test',
+    secretEnc: grantSecret, expiresAt: Date.now() + 60_000, createdAt: Date.now(),
+  });
+  assert.equal(await database.consumeScanAuthGrant('grant-1', 'user-1', 'org-1', 'https://wrong.example.test'), null);
+  const consumed = await database.consumeScanAuthGrant('grant-1', 'user-1', 'org-1', 'https://app.example.test');
+  assert.equal(security.decryptSecret(consumed.secretEnc).cookie, 'session=private');
+  assert.equal(await database.consumeScanAuthGrant('grant-1', 'user-1', 'org-1', 'https://app.example.test'), null);
+});
+
+test('organization usage limits are durable and enforced atomically', async () => {
+  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 2, 3, '2026-09-18'), { allowed: true, used: 2, limit: 3, day: '2026-09-18' });
+  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 1, 3, '2026-09-18'), { allowed: true, used: 3, limit: 3, day: '2026-09-18' });
+  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 1, 3, '2026-09-18'), { allowed: false, used: 3, limit: 3, day: '2026-09-18' });
+  assert.equal((await database.listUsage('org-quota', '2026-09-18'))[0].quantity, 3);
+});
+
 test('durable jobs are idempotent, claimed once and recovered after a stale lease', async () => {
   const first = await database.enqueueJob({
     orgId: 'org-1',

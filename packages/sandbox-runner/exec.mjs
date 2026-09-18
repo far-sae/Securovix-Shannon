@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 
 const IMAGES = {
   python: process.env.SHANNON_SANDBOX_PYTHON_IMAGE || 'python:3.12-slim',
@@ -18,7 +19,7 @@ export function validateRunRequest(body = {}) {
   return { lang, code, input, timeoutSecs };
 }
 
-function dockerArgs({ lang, input, name }) {
+export function dockerArgs({ lang, input, name }) {
   return [
     'run', '--rm', '-i', '--network', 'none', '--cap-drop', 'ALL',
     '--security-opt', 'no-new-privileges', '--read-only',
