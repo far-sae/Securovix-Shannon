@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildDockerArgs, sandboxImage } from './packages/dashboard/sandbox.mjs';
+import { validateRunRequest } from './packages/sandbox-runner/exec.mjs';
 
 test('buildDockerArgs: every isolation flag is present (no silent weakening)', () => {
   const args = buildDockerArgs({ image: 'python:3-slim', cmd: ['python3', '-'], name: 'sx1' });
@@ -28,6 +29,14 @@ test('buildDockerArgs: env is passed via -e (used to hand in the fetched respons
 test('buildDockerArgs: --rm and interactive stdin so the container is ephemeral and fed the code', () => {
   const args = buildDockerArgs({ image: 'x', cmd: ['sh'] });
   assert.ok(args.includes('--rm') && args.includes('-i'));
+});
+
+test('sandbox runner: accepts only bounded Python or Node jobs', () => {
+  assert.deepEqual(validateRunRequest({ lang: 'python', code: 'print(1)', input: 'safe' }), {
+    lang: 'python', code: 'print(1)', input: 'safe', timeoutSecs: 20,
+  });
+  assert.equal(validateRunRequest({ lang: 'bash', code: 'echo bad' }).error, 'lang must be python or node');
+  assert.equal(validateRunRequest({ lang: 'node', code: '' }).error, 'code must be between 1 and 65536 characters');
 });
 
 test('sandboxImage: hosted SHANNON_SANDBOX_IMAGE wins; per-language public fallback otherwise', () => {

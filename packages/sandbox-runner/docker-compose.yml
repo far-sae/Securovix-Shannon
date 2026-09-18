@@ -1,0 +1,34 @@
+services:
+  sandbox-runner:
+    build:
+      context: ../..
+      dockerfile: packages/sandbox-runner/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      SHANNON_SANDBOX_RUNNER_TOKEN: ${SHANNON_SANDBOX_RUNNER_TOKEN:?set_a_long_random_token}
+      SHANNON_SANDBOX_PYTHON_IMAGE: python:3.12-slim
+      SHANNON_SANDBOX_NODE_IMAGE: node:20-bookworm-slim
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "8080"
+    networks: [sandbox]
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SANDBOX_RUNNER_DOMAIN: ${SANDBOX_RUNNER_DOMAIN:?set_a_domain}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [sandbox]
+networks:
+  sandbox: {}
+volumes:
+  caddy-data: {}
+  caddy-config: {}

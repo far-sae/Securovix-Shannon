@@ -1,0 +1,3 @@
+{$SANDBOX_RUNNER_DOMAIN} {
+  reverse_proxy sandbox-runner:8080
+}

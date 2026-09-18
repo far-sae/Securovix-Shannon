@@ -93,8 +93,47 @@ Alert on readiness failures, dead-letter jobs, growing queue depth, and expired 
 
 The arbitrary-code AI sandbox deliberately remains unavailable on standard Railway because Railway
 does not expose a Docker daemon to application containers. Use the bounded custom-check workflow on
-Railway. Enable the sandbox only on a dedicated Docker-capable runner; never weaken it to execute
-LLM-authored code directly inside the dashboard container.
+Railway unless you deploy the separate runner described in [Production sandbox runner](#production-sandbox-runner).
+Never mount Docker into, or execute LLM-authored code directly inside, the Dashboard container.
+
+## Production sandbox runner
+
+The runner is a separate service under `packages/sandbox-runner`. It accepts authenticated requests
+from the Dashboard and is the *only* process allowed to talk to Docker. Each job is a disposable,
+network-disabled, non-root, read-only container with CPU, memory, process, and time limits.
+
+1. Provision a dedicated Linux VM (not Railway and not the Dashboard host), install Docker Engine and
+   clone this repository there.
+2. Create `packages/sandbox-runner/.env` from the following values. Use a newly generated secret of
+   at least 32 characters; do not reuse a session, encryption, Supabase, or Defender key.
+
+   ```env
+   SANDBOX_RUNNER_DOMAIN=sandbox-runner.yourdomain.com
+   SHANNON_SANDBOX_RUNNER_TOKEN=YOUR_NEW_LONG_RANDOM_SECRET
+   ```
+
+3. Create a DNS record for `sandbox-runner.yourdomain.com` pointing to the VM public IP, then run:
+
+   ```bash
+   cd packages/sandbox-runner
+   docker compose up -d --build
+   ```
+
+   Caddy obtains the TLS certificate and exposes HTTPS; port 8080 remains private inside Docker.
+   Firewall the VM to TCP 80/443 only. Do not expose Docker's port or `/var/run/docker.sock`.
+4. On the Railway **Dashboard** service only, set:
+
+   ```env
+   SHANNON_SANDBOX_RUNNER_URL=https://sandbox-runner.yourdomain.com
+   SHANNON_SANDBOX_RUNNER_TOKEN=THE_SAME_NEW_LONG_RANDOM_SECRET
+   ```
+
+   Redeploy Dashboard. The Settings readiness card changes the sandbox to **Ready** only after the
+   authenticated runner health check confirms Docker is available.
+
+The runner accepts only Python and Node jobs, caps source/input sizes, fixes execution to at most 20
+seconds, does not accept arbitrary image names or Docker arguments, and does not log code or input.
+Use a dedicated VM and keep it patched; treat the runner token as a production secret.
 
 ## 7. Release checklist
 

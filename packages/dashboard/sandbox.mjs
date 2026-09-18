@@ -45,7 +45,46 @@ export function buildDockerArgs({ image, cmd = [], name, memory = '256m', cpus =
 }
 
 let _dockerOk = null;
+const RUNNER_URL = String(process.env.SHANNON_SANDBOX_RUNNER_URL || '').replace(/\/$/, '');
+const RUNNER_TOKEN = String(process.env.SHANNON_SANDBOX_RUNNER_TOKEN || '');
+
+function remoteRunnerConfigured() {
+  if (!RUNNER_URL) return false;
+  try {
+    const url = new URL(RUNNER_URL);
+    // A production runner carries untrusted code, so never send it over cleartext HTTP.
+    return url.protocol === 'https:' && RUNNER_TOKEN.length >= 32;
+  } catch {
+    return false;
+  }
+}
+
+async function runnerRequest(path, init = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetch(`${RUNNER_URL}${path}`, {
+      ...init,
+      headers: { authorization: `Bearer ${RUNNER_TOKEN}`, ...(init.headers || {}) },
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Sandbox runner returned ${response.status}`);
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function sandboxAvailable() {
+  if (remoteRunnerConfigured()) {
+    try {
+      const status = await runnerRequest('/health');
+      return status.ok === true && status.docker === true;
+    } catch {
+      return false;
+    }
+  }
   if (_dockerOk !== null) return _dockerOk;
   _dockerOk = await new Promise((res) => {
     try {
@@ -69,6 +108,17 @@ export function sandboxImage(lang = 'python') {
 }
 
 export async function runInSandbox({ code, lang = 'python', input = '', timeoutSecs = 20 } = {}) {
+  if (remoteRunnerConfigured()) {
+    try {
+      return await runnerRequest('/v1/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code, lang, input, timeoutSecs }),
+      });
+    } catch (error) {
+      return { ok: false, unavailable: true, stdout: '', stderr: `Sandbox runner unavailable: ${error.message}` };
+    }
+  }
   if (!(await sandboxAvailable()))
     return {
       ok: false,
