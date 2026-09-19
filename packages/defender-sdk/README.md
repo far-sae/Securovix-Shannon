@@ -15,7 +15,8 @@ const app = express();
 app.use(express.json());          // mount AFTER a body parser so bodies can be inspected
 app.use(shannonDefender({
   apiKey: 'sk_...',               // from your dashboard → Defender
-  endpoint: 'https://securovix.com',
+  endpoint: 'https://origin.securovix.com',
+  assetId: 'dsa_...',             // from Defender asset inventory
   mode: 'monitor',                // 'enforce' to start blocking
 }));
 ```
@@ -49,7 +50,8 @@ blocking rule. They are reported so you can see them, never enforced.
 |---|---|---|
 | `apiKey` | — | Your key. Omit to run fully locally with no reporting. |
 | `mode` | `'monitor'` | `'enforce'` returns 403 on a confirmed attack. |
-| `endpoint` | `https://securovix.com` | Where detections are reported. |
+| `endpoint` | `https://origin.securovix.com` | Where detections and heartbeats are reported. |
+| `assetId` | â€” | Asset inventory ID. When set, the SDK reports live coverage every five minutes. |
 | `skip` | `[]` | `RegExp[]` of paths to leave uninspected. |
 | `onDetection` | — | Called locally for every detection. |
 | `maxBody` | 1 MB | Inspect the first N bytes; larger bodies pass unexamined. |
@@ -73,6 +75,7 @@ defender.stats();          // { requests, detections, blocked, reported, dropped
 defender.setMode('enforce');
 defender.getMode();
 await defender.flush();    // force-send queued detections
+await defender.heartbeat();// refresh asset coverage immediately
 defender.stop();           // stop the reporting timer
 ```
 

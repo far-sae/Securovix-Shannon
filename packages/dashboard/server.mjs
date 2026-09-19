@@ -93,6 +93,7 @@ import {
   createScanAuthGrant,
   createAuthToken,
   deleteOrgSecret,
+  deleteDefenseAsset,
   deleteIntegration,
   enqueueJob,
   enterpriseHealth,
@@ -101,9 +102,12 @@ import {
   getJob,
   getIntegration,
   getEntitlement,
+  getDefenseProgram,
   getOrgSecret,
   listArtifacts,
   listDeliveries,
+  listDefenseAssets,
+  listDefenseCycles,
   listIntegrations,
   listJobs,
   listUsage,
@@ -112,9 +116,12 @@ import {
   readArtifact,
   saveIntegration,
   saveEntitlement,
+  saveDefenseAsset,
+  saveDefenseProgram,
   saveOrgSecret,
   saveSsoIdentity,
   signedArtifactUrl,
+  updateDefenseAsset,
   updateJob,
 } from './enterprise-db.mjs';
 import { queueIntegrationEvent, sendEmail } from './enterprise-integrations.mjs';
@@ -524,6 +531,7 @@ app.use('/api', async (req, res, next) => {
   const bearerRoute =
     req.headers.authorization &&
     (relative === '/defender/report'
+      || relative === '/defender/sensors/heartbeat'
       || (relative === '/defender/edge/routes' && req.method === 'GET')
       || relative === '/platform/defender/edge/routes'
       || relative === '/platform/defender/edge/report');
@@ -4854,11 +4862,104 @@ app.get('/api/defender/events', (req, res) => {
   res.json({ ok: true, events });
 });
 
+app.get('/api/defender/program', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const [stored, assets, cycles] = await Promise.all([
+    getDefenseProgram(ctx.org.id), listDefenseAssets(ctx.org.id), listDefenseCycles(ctx.org.id, 20),
+  ]);
+  res.json({
+    ok: true,
+    program: stored || { orgId: ctx.org.id, enabled: false, cadenceHours: 24, responseMode: 'recommend', nextRunAt: null, lastRunAt: null, lastCycleId: null },
+    assets,
+    cycles,
+    safety: {
+      automaticRuleChanges: false,
+      note: 'Learning changes prioritization and recommendations only. Blocking requires an explicitly enforced Edge route or SDK policy.',
+    },
+  });
+});
+
+app.put('/api/defender/program', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const cadenceHours = Number(req.body?.cadenceHours || 24);
+  if (!Number.isInteger(cadenceHours) || cadenceHours < 1 || cadenceHours > 168) {
+    return res.status(400).json({ error: 'Cadence must be between 1 and 168 hours.' });
+  }
+  const program = await saveDefenseProgram({
+    orgId: ctx.org.id,
+    enabled: req.body?.enabled === true,
+    cadenceHours,
+    responseMode: req.body?.responseMode === 'bounded-auto' ? 'bounded-auto' : 'recommend',
+    createdBy: ctx.user.id,
+    nextRunAt: req.body?.enabled === true ? Date.now() : null,
+  });
+  audit(ctx, 'defender.program_updated', 'defense-program', ctx.org.id, { enabled: program.enabled, cadenceHours, responseMode: program.responseMode });
+  res.json({ ok: true, program });
+});
+
+app.post('/api/defender/program/run', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const program = await getDefenseProgram(ctx.org.id);
+  const cycleId = `dcy_${randomUUID()}`;
+  const job = await enqueueJob({
+    orgId: ctx.org.id, userId: ctx.user.id, type: 'defense-cycle',
+    payload: { cycleId, trigger: 'manual', responseMode: program?.responseMode || 'recommend' }, idempotencyKey: `defense-cycle:manual:${cycleId}`, maxAttempts: 3,
+  });
+  audit(ctx, 'defender.cycle_requested', 'defense-cycle', cycleId, { jobId: job.id });
+  res.status(202).json({ ok: true, cycleId, jobId: job.id });
+});
+
+app.post('/api/defender/assets', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const type = String(req.body?.type || '').toLowerCase();
+  const allowedTypes = ['web', 'api', 'domain', 'cidr', 'cloud', 'repository', 'identity', 'endpoint'];
+  if (!allowedTypes.includes(type)) return res.status(400).json({ error: 'Choose a valid asset type.' });
+  let locator = String(req.body?.locator || '').trim().slice(0, 500);
+  if (!locator) return res.status(400).json({ error: 'Asset locator is required.' });
+  if (['web', 'api', 'domain'].includes(type)) {
+    const host = hostOf(locator);
+    if (!host) return res.status(400).json({ error: 'Provide a valid domain or URL.' });
+    if (!isLocalHost(host) && !isVerified(ctx.user.id, host)) return res.status(403).json({ error: 'Verify ownership of this domain before adding it to continuous defense.', host });
+    locator = type === 'domain' ? host : locator;
+  }
+  if (type === 'cidr') {
+    if (!parseCidr(locator)) return res.status(400).json({ error: 'Provide a valid IPv4 CIDR range.' });
+    if (!Object.hasOwn(listCidrs(ctx.user.id), locator)) return res.status(403).json({ error: 'Verify control of this IP range before adding it.' });
+  }
+  const criticality = ['low', 'medium', 'high', 'critical'].includes(req.body?.criticality) ? req.body.criticality : 'medium';
+  const projectId = req.body?.projectId ? String(req.body.projectId) : null;
+  if (projectId && !listProjects(ctx.org.id).some((project) => project.id === projectId)) {
+    return res.status(400).json({ error: 'Choose a project from the active organization.' });
+  }
+  const asset = await saveDefenseAsset({
+    orgId: ctx.org.id, projectId, type, locator, criticality,
+    name: sanitizeLabel(req.body?.name || locator, 100) || locator.slice(0, 100),
+    status: 'active', coverage: 'inventory', createdBy: ctx.user.id,
+    config: { sensorRequired: !['web', 'api', 'domain'].includes(type) },
+  });
+  audit(ctx, 'defender.asset_added', 'defense-asset', asset.id, { type, locator, criticality });
+  res.status(201).json({ ok: true, asset, protected: asset.coverage === 'online', nextStep: ['web', 'api', 'domain'].includes(type) ? 'Add an Edge route or install the Defender SDK.' : 'Install or connect a supported sensor; inventory alone does not inspect this asset.' });
+});
+
+app.delete('/api/defender/assets/:id', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const existing = (await listDefenseAssets(ctx.org.id)).find((item) => item.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Asset not found.' });
+  await deleteDefenseAsset(ctx.org.id, existing.id);
+  audit(ctx, 'defender.asset_removed', 'defense-asset', existing.id, { type: existing.type, locator: existing.locator });
+  res.json({ ok: true });
+});
+
 app.patch('/api/defender/events/:id', (req, res) => {
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const status = String(req.body?.status || '');
-  if (!['open', 'investigating', 'contained', 'closed'].includes(status)) {
+  if (!['open', 'investigating', 'contained', 'closed', 'false-positive'].includes(status)) {
     return res.status(400).json({ error: 'Choose a valid incident status.' });
   }
   const current = listDefenseEvents(ctx.org.id, 500).find((event) => event.id === req.params.id);
@@ -4941,6 +5042,28 @@ app.post('/api/platform/defender/edge/report', (req, res) => {
       .catch((error) => console.error('[defender] integration event failed:', error.message));
   }
   res.json({ accepted });
+});
+
+// A customer-operated collector uses the same revocable organization SDK key to prove liveness.
+// Heartbeats never grant scanning scope; they only show that an explicitly inventoried asset has a
+// currently connected sensor. Coverage expires in the daily model when heartbeats stop.
+app.post('/api/defender/sensors/heartbeat', async (req, res) => {
+  if (limited(req, res, 'defender-sensor-heartbeat', 600, 5 * 60_000)) return;
+  const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+  if (!principal) return res.status(401).json({ error: 'invalid api key' });
+  const assetId = String(req.body?.assetId || '');
+  const asset = (await listDefenseAssets(principal.orgId)).find((item) => item.id === assetId);
+  if (!asset) return res.status(404).json({ error: 'asset not found in this organization' });
+  const at = Date.now();
+  const updated = await updateDefenseAsset(principal.orgId, asset.id, {
+    coverage: 'online',
+    config: {
+      ...(asset.config || {}), lastSeenAt: at,
+      sensorType: sanitizeLabel(req.body?.sensorType || 'collector', 60),
+      sensorVersion: sanitizeLabel(req.body?.sensorVersion || '', 40),
+    },
+  });
+  res.json({ ok: true, assetId: updated.id, coverage: 'online', lastSeenAt: at, heartbeatWithinMs: 15 * 60_000 });
 });
 
 app.get('/api/defender/edge/routes', (req, res) => {
@@ -5147,10 +5270,11 @@ app.get('/api/defender/overview', (req, res) => {
       last24h: last24h.length,
       blocked: events.filter((event) => event.enforced).length,
       open: events.filter((event) => ['open', 'investigating'].includes(event.status || 'open')).length,
-      critical: events.filter((event) => event.severity === 'critical' && event.status !== 'closed').length,
+      critical: events.filter((event) => event.severity === 'critical' && ['open', 'investigating'].includes(event.status || 'open')).length,
       edgeRoutes: routes.length,
       enforcingRoutes: routes.filter((route) => route.mode === 'enforce').length,
       connectedSystems: systems.length,
+      protectedAssets: routes.filter((route) => route.mode === 'enforce').length + systems.filter((system) => system.mode === 'enforce').length,
     },
     topClasses: Object.entries(classes)
       .sort((a, b) => b[1] - a[1])

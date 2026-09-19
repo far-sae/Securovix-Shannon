@@ -2663,7 +2663,8 @@ function pgDefender() {
       <header class="def-head"><div><div class="ey">Detection &amp; response</div><h1>Defender Operations</h1><p>Organization-wide runtime protection, edge enforcement, incident triage, and evidence delivery from one control plane.</p></div><div class="def-head-actions"><button class="btn btn-g" onclick="defExportEvents()">Export evidence</button><button class="btn btn-p" onclick="defRefreshAll()">Refresh posture</button></div></header>
       <div class="def-kpis" id="def-kpis">${[0,1,2,3].map(()=>'<div class="def-kpi"><span>Loading</span><strong>—</strong><small>collecting telemetry</small></div>').join('')}</div>
       <div class="def-grid"><main class="def-stack"><section class="def-card"><div class="def-card-head"><h2>${ico('alert-octagon',{cls:'ico-sm'})} Incident queue</h2><small id="def-incident-count">Loading telemetry…</small></div><div id="def-incidents" class="def-scroll"><div class="def-empty">Loading incidents…</div></div></section>
-        <section class="def-card"><div class="def-card-head"><h2>${ico('radar',{cls:'ico-sm'})} Edge routes</h2><small>public multi-tenant enforcement</small></div><div class="def-route-form"><input class="fi" id="def-route-host" placeholder="app.customer.com"><input class="fi" id="def-route-origin" placeholder="https://origin.customer.com"><select class="fi" id="def-route-mode"><option value="monitor">monitor</option><option value="enforce">enforce</option></select><button class="btn btn-p" onclick="defEdgeSave()">Save route</button></div><div id="def-route-out"></div><div id="def-routes"><div class="def-empty">Loading routes…</div></div></section></main>
+        <section class="def-card"><div class="def-card-head"><h2>${ico('radar',{cls:'ico-sm'})} Edge routes</h2><small>public multi-tenant enforcement</small></div><div class="def-route-form"><input class="fi" id="def-route-host" placeholder="app.customer.com"><input class="fi" id="def-route-origin" placeholder="https://origin.customer.com"><select class="fi" id="def-route-mode"><option value="monitor">monitor</option><option value="enforce">enforce</option></select><button class="btn btn-p" onclick="defEdgeSave()">Save route</button></div><div id="def-route-out"></div><div id="def-routes"><div class="def-empty">Loading routes…</div></div></section>
+        <section class="def-card"><div class="def-card-head"><h2>${ico('refresh-cw',{cls:'ico-sm'})} Continuous defense loop</h2><small>observe → detect → respond → learn</small></div><p class="def-fine">Runs a durable organization cycle on the worker. It learns from incident outcomes and raises priorities; it never changes blocking rules without an authorized enforcement policy.</p><div class="def-route-form"><select class="fi" id="def-program-enabled"><option value="false">Paused</option><option value="true">Enabled</option></select><select class="fi" id="def-program-cadence"><option value="1">Every hour</option><option value="6">Every 6 hours</option><option value="12">Every 12 hours</option><option value="24">Every day</option><option value="168">Every week</option></select><select class="fi" id="def-program-mode"><option value="recommend">Recommend</option><option value="bounded-auto">Alert automatically</option></select><button class="btn btn-p" onclick="defProgramSave()">Save loop</button></div><div class="def-actions"><button class="btn btn-g" onclick="defProgramRun()">Run cycle now</button><span id="def-program-status" class="def-fine">Loading cycle status…</span></div><hr style="border:0;border-top:1px solid var(--brd);margin:16px 0"><div class="def-card-head"><h3>Asset inventory</h3><small>live Edge, SDK, or sensor coverage required</small></div><div class="def-route-form"><select class="fi" id="def-asset-type"><option value="web">Website</option><option value="api">API</option><option value="domain">Domain</option><option value="cidr">Network / CIDR</option><option value="cloud">Cloud account</option><option value="repository">Repository</option><option value="identity">Identity provider</option><option value="endpoint">Endpoint group</option></select><input class="fi" id="def-asset-name" placeholder="Customer portal"><input class="fi" id="def-asset-locator" placeholder="https://app.example.com"><button class="btn btn-g" onclick="defAssetAdd()">Add asset</button></div><div id="def-asset-out"></div><div id="def-assets"><div class="def-empty">Loading assets…</div></div><div id="def-last-cycle" style="margin-top:14px"></div></section></main>
         <aside class="def-stack"><section class="def-card"><div class="def-card-head"><h2>Attack surface signal</h2><small>top detection classes</small></div><div id="def-class-bars" class="def-bars"><div class="def-empty">No signal yet.</div></div></section><section class="def-card"><div class="def-card-head"><h2>Live activity</h2><small>local diagnostic stream</small></div><div id="def-live" class="def-live"><em>Start a diagnostic proxy to watch live defenses.</em></div></section></aside></div>
       <div class="def-deploy"><section class="def-card"><div class="def-card-head"><h3>${ico('shield',{cls:'ico-sm'})} Dashboard protection</h3><span class="bx">platform</span></div><div class="def-deploy-body" id="def-self">Checking platform self-defense…</div></section>
         <section class="def-card"><div class="def-card-head"><h3>${ico('file-text',{cls:'ico-sm'})} Application SDK</h3><span class="bx bx-g">recommended</span></div><div class="def-deploy-body" id="def-sdk">Loading SDK deployment…</div></section>
@@ -2674,13 +2675,14 @@ function pgDefender() {
 }
 
 let DEF_OVERVIEW = { events: [], routes: [], systems: [], stats: {}, topClasses: [] };
+let DEF_PROGRAM = { program: {}, assets: [], cycles: [] };
 let DEF_SDK_KEY = '';
 let DEF_SDK_SNIPPET = '';
 
 async function defRefreshAll() {
   const refresh = document.querySelector('.def-head-actions .btn-p');
   if (refresh) refresh.disabled = true;
-  await Promise.allSettled([defOverviewLoad(), defSelfLoad(), defSdkLoad(), defLoad()]);
+  await Promise.allSettled([defOverviewLoad(), defProgramLoad(), defSelfLoad(), defSdkLoad(), defLoad()]);
   if (refresh) refresh.disabled = false;
 }
 
@@ -2698,7 +2700,7 @@ async function defOverviewLoad() {
       ['Open incidents', s.open || 0, `${s.last24h || 0} detected in 24 hours`, 'danger'],
       ['Active critical', s.critical || 0, 'excluding closed incidents', 'warn'],
       ['Threats blocked', s.blocked || 0, `${s.total || 0} total detections`, 'good'],
-      ['Protected assets', assets, `${s.enforcingRoutes || 0} edge routes enforcing`, ''],
+      ['Protected assets', s.protectedAssets || 0, `${assets} monitored deployments`, ''],
     ].map(([label, value, note, cls]) => `<div class="def-kpi ${cls}"><span>${H(label)}</span><strong>${Number(value).toLocaleString()}</strong><small>${H(note)}</small></div>`).join('');
 
     const eventRows = DEF_OVERVIEW.events || [];
@@ -2706,7 +2708,7 @@ async function defOverviewLoad() {
     incidents.innerHTML = eventRows.length ? eventRows.map((event) => {
       const severity = ['critical', 'high', 'medium', 'low'].includes(event.severity) ? event.severity : 'low';
       const status = event.status || (event.enforced ? 'contained' : 'open');
-      const options = ['open', 'investigating', 'contained', 'closed'].map((value) => `<option value="${value}"${value === status ? ' selected' : ''}>${value}</option>`).join('');
+      const options = ['open', 'investigating', 'contained', 'closed', 'false-positive'].map((value) => `<option value="${value}"${value === status ? ' selected' : ''}>${value}</option>`).join('');
       const when = event.at || event.createdAt;
       return `<div class="def-incident"><span class="def-sev def-sev-${severity}">${H(severity)}</span><div class="def-incident-main"><b>${H(event.cls || 'Unclassified detection')}</b><small>${H(event.method || 'REQUEST')} ${H(event.url || 'unknown target')} · ${H(event.source || 'sdk')}${event.srcIp ? ` · ${H(event.srcIp)}` : ''}</small></div><small>${when ? H(fmtDate(when)) : '—'}${event.enforced ? '<br><span style="color:var(--grn)">blocked</span>' : ''}</small><select class="fi" aria-label="Incident status" onchange="defIncidentStatus('${event.id}',this.value)">${options}</select></div>`;
     }).join('') : '<div class="def-empty">No detections have been reported. Deploy the SDK or an edge route to begin collecting runtime evidence.</div>';
@@ -2723,6 +2725,83 @@ async function defOverviewLoad() {
     incidents.innerHTML = `<div class="def-empty"><span class="err">${message}</span></div>`;
     routes.innerHTML = `<div class="def-empty"><span class="err">${message}</span></div>`;
   }
+}
+
+async function defProgramLoad() {
+  const status = $('def-program-status');
+  const assets = $('def-assets');
+  const last = $('def-last-cycle');
+  if (!status || !assets || !last) return;
+  try {
+    DEF_PROGRAM = await api('/defender/program');
+    const program = DEF_PROGRAM.program || {};
+    $('def-program-enabled').value = String(program.enabled === true);
+    $('def-program-cadence').value = String(program.cadenceHours || 24);
+    $('def-program-mode').value = program.responseMode || 'recommend';
+    status.textContent = program.enabled
+      ? `Active · next ${program.nextRunAt ? fmtDate(program.nextRunAt) : 'worker poll'} · ${program.responseMode}`
+      : 'Paused · real-time Defender remains independent';
+    const routes = DEF_OVERVIEW.routes || [];
+    assets.innerHTML = (DEF_PROGRAM.assets || []).length ? DEF_PROGRAM.assets.map((asset) => {
+      let host = '';
+      try { host = new URL(asset.locator.includes('://') ? asset.locator : `https://${asset.locator}`).hostname; } catch {}
+      const route = routes.find((item) => item.host === host);
+      const online = asset.coverage === 'online' && Number(asset.config?.lastSeenAt || 0) >= Date.now() - 15 * 60_000 || !!route;
+      const label = route?.mode === 'enforce' ? 'protected' : online ? 'monitored' : 'inventory only';
+      return `<div class="def-row"><div class="def-row-main"><b>${H(asset.name)}</b><small>${H(asset.type)} · ${H(asset.locator)} · ${H(asset.criticality)} · ID ${H(asset.id)}</small></div><span class="bx ${label === 'protected' ? 'bx-g' : ''}">${label}</span><div class="def-row-actions"><button class="btn" onclick="defCopyText('${asset.id}')">Copy ID</button><button class="btn" onclick="defAssetRemove('${asset.id}')">Remove</button></div></div>`;
+    }).join('') : '<div class="def-empty">No assets inventoried. Add verified websites, APIs, networks, cloud accounts, repositories, identities, or endpoint groups.</div>';
+    const cycle = (DEF_PROGRAM.cycles || [])[0];
+    if (!cycle) last.innerHTML = '<div class="def-empty">No defense cycle has run yet.</div>';
+    else {
+      const snapshot = cycle.snapshot || {};
+      const lesson = cycle.learning?.lessons?.[0];
+      last.innerHTML = `<div class="def-row"><div class="def-row-main"><b>Latest cycle · ${H(cycle.status)}</b><small>${H(fmtDate(cycle.completedAt || cycle.startedAt))} · posture ${Number(snapshot.postureScore || 0)}/100 · ${Number(snapshot.assets?.covered || 0)}/${Number(snapshot.assets?.total || 0)} assets covered · ${Number(snapshot.detections?.blocked || 0)} attacks blocked in window</small>${lesson ? `<small style="color:var(--org)">${H(lesson.recommendation)}</small>` : ''}</div></div>`;
+    }
+  } catch (error) {
+    status.innerHTML = `<span class="err">${H(error.detail || error.message || 'Could not load the defense loop.')}</span>`;
+    assets.innerHTML = '<div class="def-empty">Continuous-defense database migration may still need to be applied.</div>';
+  }
+}
+
+async function defProgramSave() {
+  const enabled = $('def-program-enabled').value === 'true';
+  try {
+    await api('/defender/program', { method: 'PUT', body: JSON.stringify({
+      enabled,
+      cadenceHours: Number($('def-program-cadence').value),
+      responseMode: $('def-program-mode').value,
+    }) });
+    await defProgramLoad();
+  } catch (error) { alert(error.detail || error.message || 'Could not save the defense loop.'); }
+}
+
+async function defProgramRun() {
+  try {
+    await api('/defender/program/run', { method: 'POST', body: '{}' });
+    $('def-program-status').textContent = 'Cycle queued on the durable worker…';
+    setTimeout(defProgramLoad, 2500);
+  } catch (error) { alert(error.detail || error.message || 'Could not queue the defense cycle.'); }
+}
+
+async function defAssetAdd() {
+  const out = $('def-asset-out');
+  const payload = { type: $('def-asset-type').value, name: $('def-asset-name').value.trim(), locator: $('def-asset-locator').value.trim(), criticality: 'high' };
+  if (!payload.locator) return alert('Enter a domain, URL, CIDR, account, repository, identity provider, or endpoint-group locator.');
+  try {
+    const result = await api('/defender/assets', { method: 'POST', body: JSON.stringify(payload) });
+    out.innerHTML = `<p class="def-fine" style="color:var(--grn)">${H(result.nextStep)}</p>`;
+    $('def-asset-name').value = '';
+    $('def-asset-locator').value = '';
+    await defProgramLoad();
+  } catch (error) { out.innerHTML = `<p class="err">${H(error.detail || error.message || 'Could not add asset.')}</p>`; }
+}
+
+async function defAssetRemove(id) {
+  if (!confirm('Remove this asset from the continuous-defense inventory?')) return;
+  try {
+    await api(`/defender/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await defProgramLoad();
+  } catch (error) { alert(error.detail || error.message || 'Could not remove asset.'); }
 }
 
 async function defIncidentStatus(id, status) {
@@ -2812,6 +2891,7 @@ async function defSdkLoad() {
       + 'app.use(shannonDefender({\n'
       + `  apiKey: '${s.apiKey}',\n`
       + `  endpoint: '${location.origin}',\n`
+      + "  assetId: 'ASSET_ID_FROM_INVENTORY',\n"
       + "  mode: 'monitor',   // switch to 'enforce' once you're happy\n"
       + '}));';
     el.innerHTML = `<p style="margin-top:0">Deploy inside Express services for in-process inspection with fail-open reporting to the organization incident queue.</p><pre class="def-code">${H(DEF_SDK_SNIPPET)}</pre><p class="def-fine">Treat the API key as a secret. Key rotation invalidates the previous credential immediately; update every service after rotating.</p><div class="def-actions"><button class="btn btn-p" onclick="defCopyText(DEF_SDK_SNIPPET)">Copy integration</button><button class="btn btn-g" onclick="defCopyText(DEF_SDK_KEY)">Copy key</button><button class="btn" onclick="defRotateSdkKey()">Rotate key</button></div><p class="def-fine">${Number((s.reports || []).length).toLocaleString()} recent detections available to this deployment.</p>`;

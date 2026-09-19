@@ -818,6 +818,23 @@ test('sdk: skip patterns are honoured and nothing is reported without an api key
   assert.equal(d.stats().reported, 0);
   d.stop();
 });
+test('sdk: an inventoried asset reports a fail-open coverage heartbeat', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), body: JSON.parse(options.body) });
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const d = shannonDefender({ apiKey: 'sk_test', endpoint: 'https://dashboard.example', assetId: 'asset-1' });
+    await d.heartbeat();
+    assert.ok(requests.some((item) => item.url.endsWith('/api/defender/sensors/heartbeat') && item.body.assetId === 'asset-1'));
+    assert.ok(d.stats().heartbeats >= 1);
+    d.stop();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 test('sdk: FAILS OPEN if inspection throws', () => {
   const d = shannonDefender({ mode: 'enforce' });
   const bad = {

@@ -8,6 +8,13 @@ Securovix Shannon is an authorized defensive-security platform for companies, se
 eventually individual users. It discovers and verifies security weaknesses, helps defenders
 investigate them, recommends fixes, and can monitor or block selected web attacks.
 
+The primary product direction is organization-wide continuous defense: inventory the customer's
+websites, APIs, networks, cloud accounts, repositories, identities, and endpoint groups; collect
+telemetry from installed Edge/SDK/sensor integrations; detect and contain approved high-confidence
+threats; learn from analyst dispositions and recurrence; and repeat on a durable schedule. An asset
+listed in inventory is not described as protected until a live sensor or matching Edge route proves
+coverage.
+
 Shannon is not an autonomous offensive-attack service. Active testing must remain limited to systems
 the user owns or has written permission to test. AI may help reason, prioritize, explain, and prepare
 safe checks, but technical controls—not trust in the model—must prevent it from attacking unrelated
@@ -23,7 +30,7 @@ people or infrastructure.
 - Hetzner: intended host for the isolated Sandbox Runner; deployment and independent live testing
   must be completed before it is offered to customers.
 - GitHub repository: `far-sae/Securovix-Shannon`.
-- Latest production-readiness commit at the time of this document: `ad7652e`.
+- Production-readiness baseline commit before the continuous-defense work: `ad7652e`.
 
 Important environment relationships:
 
@@ -72,6 +79,10 @@ Important environment relationships:
 - A shared multi-tenant Defender Edge that fetches all routes with a platform credential and derives
   organization identity from the stored hostname mapping—not from an organization ID supplied by the
   Edge request.
+- A tenant-scoped continuous-defense foundation: organization asset inventory, verified domain/CIDR
+  gates, sensor heartbeats, durable scheduled/manual defense cycles, coverage scoring, incident and
+  finding backlog analysis, recurring-attack prioritization, integration escalation, and explicit
+  false-positive feedback. Learning cannot silently change enforcement rules.
 - A dedicated Sandbox Runner design that executes bounded Python or Node code inside disposable,
   network-disabled, read-only, non-root Docker containers with CPU, memory, process, timeout, output,
   request-size, and concurrency limits.
@@ -91,7 +102,7 @@ Important environment relationships:
 
 ### Verification status
 
-- 232 automated tests passed after adding the first Personal Security Shield slice.
+- 239 automated tests passed after adding the continuous-defense loop and SDK heartbeat coverage.
 - Typecheck, build, JavaScript syntax, and diff checks passed.
 - Production dependency audits reported no known vulnerabilities at the recorded test time.
 - Repository-wide lint has a large pre-existing baseline and is not yet a clean release gate.
@@ -105,7 +116,8 @@ See `docs/SECURITY-VERIFICATION.md`, `docs/PRODUCTION-OPERATIONS.md`, and
 
 The following must never be presented as completed until real evidence is recorded:
 
-1. Apply `supabase/migrations/20260918180000_production_readiness.sql` to production.
+1. Apply every pending migration through
+   `supabase/migrations/20260919120000_continuous_defense.sql` to production.
 2. Confirm Railway deployed the intended commit and all required secrets are set on the correct
    services.
 3. Deploy the Sandbox Runner on the dedicated Hetzner VM, configure TLS/firewalling, and perform the
@@ -119,7 +131,30 @@ The following must never be presented as completed until real evidence is record
 9. Have qualified legal/privacy counsel review the public policies for the actual company, customers,
    subprocessors, jurisdictions, and commercial terms.
 
-## Next product direction: Personal Security Shield
+## Primary product direction: Organization-wide continuous defense
+
+The control loop is:
+
+1. **Inventory:** register assets in the correct organization. Domain and CIDR assets require
+   ownership verification.
+2. **Observe:** receive Edge, SDK, and customer-operated sensor telemetry. A heartbeat proves current
+   sensor coverage; inventory alone does not.
+3. **Detect and protect:** deterministic Edge/SDK policy may block only when an authorized operator
+   explicitly enables enforcement. Other signals create incidents and integrations.
+4. **Investigate:** analysts record open, investigating, contained, closed, or false-positive
+   outcomes and remediate related findings.
+5. **Learn:** each durable cycle measures recurrence, unresolved threats, false positives, coverage
+   gaps, failed automation, and finding backlog. This changes priority and recommendations, not
+   firewall rules or target scope.
+6. **Repeat:** the Worker atomically schedules the next organization cycle (daily by default), so
+   multiple replicas cannot run the same scheduled slot twice.
+
+The present implementation directly protects HTTP applications through Edge/SDK. Private networks,
+cloud control planes, identity systems, repositories, and endpoint fleets require an installed or
+connected collector that sends heartbeats and detections. Building and hardening those individual
+collectors remains product work; merely adding those assets to inventory does not protect them.
+
+## Secondary product direction: Personal Security Shield
 
 The next major direction is to protect a person's accounts, messages, browser activity, devices, and
 private data from conventional hackers and AI-enabled attacks. The read-only suspicious-message/link

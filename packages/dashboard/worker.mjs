@@ -8,17 +8,24 @@ import { fileURLToPath } from 'node:url';
 import { stringify as stringifyYaml } from 'yaml';
 import {
   appendOperationalEvent,
+  claimDueDefensePrograms,
   claimJobs,
+  enqueueJob,
   enterpriseHealth,
+  getDefenseTelemetry,
   getJob,
+  listDefenseAssets,
+  listDefenseCycles,
   purgeExpiredEnterpriseData,
   requeueStaleJobs,
   saveArtifact,
+  saveDefenseCycle,
   updateJob,
   upsertScanFindings,
 } from './enterprise-db.mjs';
 import { deliverIntegrationJob, queueIntegrationEvent, sendEmail } from './enterprise-integrations.mjs';
 import { decryptSecret } from './enterprise-security.mjs';
+import { buildDefenseCycle } from './continuous-defense.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const WORKSPACES = join(ROOT, 'workspaces');
@@ -209,10 +216,61 @@ async function executeScan(job) {
   return result;
 }
 
+export async function executeDefenseCycle(job) {
+  const startedAt = Date.now();
+  const cycleId = String(job.payload?.cycleId || `dcy_${randomUUID()}`);
+  await saveDefenseCycle({ id: cycleId, orgId: job.orgId, jobId: job.id, status: 'running', startedAt, createdAt: startedAt });
+  try {
+    const [assets, previous, telemetry] = await Promise.all([
+      listDefenseAssets(job.orgId),
+      listDefenseCycles(job.orgId, 2),
+      getDefenseTelemetry(job.orgId),
+    ]);
+    const priorCompleted = previous.find((item) => item.id !== cycleId && item.status === 'completed') || null;
+    const result = buildDefenseCycle({ assets, previousCycle: priorCompleted, ...telemetry, now: Date.now() });
+    const completed = await saveDefenseCycle({
+      id: cycleId, orgId: job.orgId, jobId: job.id, status: 'completed', startedAt,
+      completedAt: Date.now(), createdAt: startedAt, ...result,
+    });
+    const escalate = job.payload?.responseMode === 'bounded-auto' && result.actions.escalations.length > 0;
+    await queueIntegrationEvent(job.orgId, {
+      id: `defense-cycle:${cycleId}`,
+      type: escalate ? 'defender.cycle.escalated' : 'defender.cycle.completed',
+      at: new Date().toISOString(),
+      data: { cycleId, ...result.snapshot, escalations: result.actions.escalations },
+    }, job.userId || null);
+    return completed;
+  } catch (error) {
+    await saveDefenseCycle({
+      id: cycleId, orgId: job.orgId, jobId: job.id, status: 'failed', startedAt,
+      completedAt: Date.now(), createdAt: startedAt, error: String(error?.message || error).slice(0, 2000),
+    }).catch(() => {});
+    throw error;
+  }
+}
+
+export async function scheduleDueDefenseCycles(now = Date.now()) {
+  const programs = await claimDueDefensePrograms(50, now);
+  const jobs = [];
+  for (const program of programs) {
+    const slot = new Date(now).toISOString().slice(0, 13);
+    jobs.push(await enqueueJob({
+      orgId: program.orgId,
+      userId: program.createdBy,
+      type: 'defense-cycle',
+      payload: { cycleId: `dcy_${randomUUID()}`, trigger: 'schedule', responseMode: program.responseMode },
+      idempotencyKey: `defense-cycle:${slot}`,
+      maxAttempts: 3,
+    }));
+  }
+  return jobs;
+}
+
 async function execute(job) {
   if (job.type === 'integration-delivery') return deliverIntegrationJob(job);
   if (job.type === 'email') return sendEmail(job.payload);
   if (job.type === 'scan') return executeScan(job);
+  if (job.type === 'defense-cycle') return executeDefenseCycle(job);
   if (job.type === 'retention')
     return { ok: true, note: 'retention is enforced by Supabase lifecycle and scheduled SQL policies' };
   throw new Error(`unsupported job type: ${job.type}`);
@@ -255,6 +313,7 @@ async function handle(job) {
 export async function runWorker() {
   workerStatus.database = await enterpriseHealth();
   await requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000));
+  await scheduleDueDefenseCycles().catch((error) => console.error('[worker] defense scheduling failed:', error.message));
   const retention = {
     authTokenDays: Number(process.env.SHANNON_AUTH_TOKEN_RETENTION_DAYS || 7),
     deliveryDays: Number(process.env.SHANNON_DELIVERY_RETENTION_DAYS || 90),
@@ -291,6 +350,7 @@ export async function runWorker() {
     }
     if (Date.now() - lastMaintenance > 60_000) {
       await requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000)).catch(() => {});
+      await scheduleDueDefenseCycles().catch((error) => console.error('[worker] defense scheduling failed:', error.message));
       lastMaintenance = Date.now();
     }
     if (Date.now() - lastRetention > 24 * 60 * 60_000) {

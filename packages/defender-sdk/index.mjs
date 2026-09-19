@@ -14,8 +14,9 @@ import { inspect } from './signatures.mjs';
 
 const DEFAULTS = {
   mode: 'monitor',
-  endpoint: 'https://securovix.com',
+  endpoint: 'https://origin.securovix.com',
   flushMs: 10_000,
+  heartbeatMs: 5 * 60_000,
   maxQueue: 200,
   maxBody: 1024 * 1024, // inspect the first 1MB; past that, forward unexamined
   skip: [],
@@ -30,6 +31,7 @@ const DEFAULTS = {
  *                                           a confirmed attack. Defaults to monitor — a new install
  *                                           must never start dropping a customer's traffic.
  * @param {string} [opts.endpoint] Base URL to report to.
+ * @param {string} [opts.assetId]  Asset ID from Defender inventory. Enables live-coverage heartbeats.
  * @param {RegExp[]} [opts.skip]   Paths to leave uninspected (internal tooling that carries payloads).
  * @param {(d:object)=>void} [opts.onDetection] Local hook, called for every detection.
  */
@@ -37,7 +39,7 @@ export function shannonDefender(opts = {}) {
   const cfg = { ...DEFAULTS, ...opts };
   let mode = cfg.mode === 'enforce' ? 'enforce' : 'monitor';
   const queue = [];
-  const stats = { requests: 0, detections: 0, blocked: 0, reported: 0, dropped: 0 };
+  const stats = { requests: 0, detections: 0, blocked: 0, reported: 0, dropped: 0, heartbeats: 0, heartbeatFailures: 0 };
 
   const flush = async () => {
     if (!queue.length || !cfg.apiKey) return;
@@ -56,8 +58,30 @@ export function shannonDefender(opts = {}) {
     }
   };
 
+  const heartbeat = async () => {
+    if (!cfg.apiKey || !cfg.assetId) return false;
+    try {
+      const r = await fetch(`${cfg.endpoint.replace(/\/$/, '')}/api/defender/sensors/heartbeat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
+        body: JSON.stringify({ assetId: cfg.assetId, sensorType: 'express-sdk', sensorVersion: '0.1.0' }),
+      });
+      if (!r.ok) throw new Error(`heartbeat returned ${r.status}`);
+      stats.heartbeats++;
+      return true;
+    } catch {
+      stats.heartbeatFailures++;
+      return false;
+    }
+  };
+
   const timer = setInterval(flush, cfg.flushMs);
   if (typeof timer.unref === 'function') timer.unref(); // never hold the host process open
+  const heartbeatTimer = cfg.assetId
+    ? setInterval(heartbeat, Math.max(30_000, Number(cfg.heartbeatMs || DEFAULTS.heartbeatMs)))
+    : null;
+  if (typeof heartbeatTimer?.unref === 'function') heartbeatTimer.unref();
+  if (cfg.assetId) heartbeat();
 
   function middleware(req, res, next) {
     try {
@@ -120,7 +144,11 @@ export function shannonDefender(opts = {}) {
   };
   middleware.getMode = () => mode;
   middleware.flush = flush;
-  middleware.stop = () => clearInterval(timer);
+  middleware.heartbeat = heartbeat;
+  middleware.stop = () => {
+    clearInterval(timer);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+  };
   return middleware;
 }
 

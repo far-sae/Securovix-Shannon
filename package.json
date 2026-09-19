@@ -15,6 +15,8 @@
     "web": "node web/server.mjs",
     "dashboard": "node packages/dashboard/server.mjs",
     "dashboard:worker": "node packages/dashboard/worker.mjs",
+    "test:continuous-defense": "node --test ./continuous-defense.test.mjs",
+    "pretest": "npm run test:continuous-defense",
     "test": "node --test ./engine.test.mjs ./templates.test.mjs ./crawler.test.mjs ./cvss.test.mjs ./cert-report.test.mjs ./advanced.test.mjs ./probers.test.mjs ./flows.test.mjs ./tls.test.mjs ./agent-understand.test.mjs ./agent-loop.test.mjs ./leads.test.mjs ./code-locate.test.mjs ./patch.test.mjs ./github-pr.test.mjs ./templates-files.test.mjs ./agent-report.test.mjs ./agent-history.test.mjs ./monitor-schedule.test.mjs ./custom-check.test.mjs ./sandbox.test.mjs ./personal-shield.test.mjs ./llm.test.mjs ./agent-team.test.mjs ./defender.test.mjs ./team-access.test.mjs ./defender-edge.test.mjs ./dashboard-team.test.mjs ./enterprise-platform.test.mjs"
   },
   "devDependencies": {

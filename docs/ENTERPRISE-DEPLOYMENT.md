@@ -46,6 +46,12 @@ The worker exposes `/healthz` and `/readyz` on Railway's injected `PORT`; `railw
 the readiness endpoint during deployment. It also writes a heartbeat to Supabase every minute, which
 appears in the dashboard's **Settings → Production readiness** panel.
 
+The same Worker schedules continuous-defense cycles. After applying
+`20260919120000_continuous_defense.sql`, owners/admins/engineers can enable the loop from **Defender
+Operations**, choose a cadence (24 hours by default), and run an immediate cycle. The PostgreSQL
+claim function uses `FOR UPDATE SKIP LOCKED`, so horizontally scaled workers do not schedule the
+same due organization concurrently.
+
 `SHANNON_WORKER_CONCURRENCY` controls child scans per worker. Start with `1` or `2`; increase only after watching Railway memory and CPU. Artifact uploads are private and downloads use short-lived signed URLs after organization RBAC checks.
 
 The web service refreshes its authorization cache from Supabase using `SHANNON_CACHE_REFRESH_MS` (default five seconds), allowing multiple web replicas to converge on account, role, project, finding, and scan-owner changes. Keep this low for rapid revocation and monitor Supabase load when scaling web replicas.
@@ -82,6 +88,22 @@ Defender SDK detections and incident status changes use the same durable integra
 the Defender Operations page to triage incidents, rotate the organization-scoped SDK credential,
 export evidence, and control durable edge routes. Keep edge routes in monitor mode until their
 telemetry has been reviewed, then promote individual routes to enforce.
+
+### Continuous-defense asset coverage
+
+- Add verified web/domain/API assets and connect them to an Edge route or Defender SDK.
+- Add a verified CIDR only after the IP-range ownership challenge succeeds.
+- Cloud, repository, identity, network, and endpoint entries begin as **inventory only**. They become
+  covered only while an authorized customer collector sends an organization-scoped heartbeat to
+  `POST /api/defender/sensors/heartbeat` with `{ "assetId": "..." }` and a current Defender SDK key.
+- Send collector detections through `POST /api/defender/report`. Do not give a collector the
+  Supabase service-role key, Edge platform token, session secret, or encryption key.
+- Sensor coverage expires from the defense model after 15 minutes without a heartbeat. A cycle
+  learns priorities from outcomes and false-positive dispositions, but cannot change enforcement.
+
+The loop is orchestration, not a universal agent by itself. Private network traffic, cloud audit
+logs, identity events, repository events, and endpoint telemetry need appropriate customer-side
+collectors. Do not market an inventory-only asset as monitored or protected.
 
 Monitoring endpoints:
 

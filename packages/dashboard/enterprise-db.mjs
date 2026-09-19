@@ -30,6 +30,9 @@ let local = {
   scanAuthGrants: [],
   entitlements: {},
   usageDaily: [],
+  defensePrograms: [],
+  defenseAssets: [],
+  defenseCycles: [],
 };
 
 try {
@@ -140,6 +143,32 @@ function jobFromRow(row) {
       updatedAt: Number(row.updated_at),
     }
   );
+}
+
+function defenseProgramFromRow(row) {
+  return row && {
+    orgId: row.org_id, enabled: row.enabled === true, cadenceHours: Number(row.cadence_hours || 24),
+    responseMode: row.response_mode || 'recommend', nextRunAt: row.next_run_at ? Number(row.next_run_at) : null,
+    lastRunAt: row.last_run_at ? Number(row.last_run_at) : null, lastCycleId: row.last_cycle_id || null,
+    createdBy: row.created_by || null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+  };
+}
+
+function defenseAssetFromRow(row) {
+  return row && {
+    id: row.id, orgId: row.org_id, projectId: row.project_id || null, type: row.type, name: row.name,
+    locator: row.locator, criticality: row.criticality, status: row.status, coverage: row.coverage,
+    config: row.config || {}, createdBy: row.created_by || null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+  };
+}
+
+function defenseCycleFromRow(row) {
+  return row && {
+    id: row.id, orgId: row.org_id, jobId: row.job_id || null, status: row.status,
+    window: row.window || {}, snapshot: row.snapshot || {}, learning: row.learning || {}, actions: row.actions || {},
+    error: row.error || null, startedAt: Number(row.started_at), completedAt: row.completed_at ? Number(row.completed_at) : null,
+    createdAt: Number(row.created_at),
+  };
 }
 
 export function enterpriseUsesSupabase() {
@@ -804,6 +833,187 @@ export async function upsertScanFindings({ orgId, userId, projectId = null, scan
   // The normal dashboard cache owns local finding persistence. Durable workers
   // are a Supabase production feature, so local mode only reports the count.
   return rows.length;
+}
+
+export async function getDefenseProgram(orgId) {
+  if (!USE_SUPABASE) return local.defensePrograms.find((item) => item.orgId === orgId) || null;
+  const rows = await rest(`/shannon_defense_programs?org_id=eq.${encodeURIComponent(orgId)}&limit=1`);
+  return defenseProgramFromRow(rows?.[0]);
+}
+
+export async function saveDefenseProgram(record) {
+  const now = Date.now();
+  const existing = await getDefenseProgram(record.orgId);
+  const normalized = {
+    orgId: record.orgId,
+    enabled: record.enabled === true,
+    cadenceHours: Math.max(1, Math.min(168, Number(record.cadenceHours || 24))),
+    responseMode: record.responseMode === 'bounded-auto' ? 'bounded-auto' : 'recommend',
+    nextRunAt: record.enabled === true ? Number(record.nextRunAt || existing?.nextRunAt || now) : null,
+    lastRunAt: record.lastRunAt ?? existing?.lastRunAt ?? null,
+    lastCycleId: record.lastCycleId ?? existing?.lastCycleId ?? null,
+    createdBy: record.createdBy || existing?.createdBy || null,
+    createdAt: existing?.createdAt || record.createdAt || now,
+    updatedAt: now,
+  };
+  if (!USE_SUPABASE) {
+    local.defensePrograms = local.defensePrograms.filter((item) => item.orgId !== record.orgId);
+    local.defensePrograms.push(normalized);
+    persist();
+    return normalized;
+  }
+  const rows = await rest('/shannon_defense_programs', {
+    method: 'POST',
+    headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([{
+      org_id: normalized.orgId, enabled: normalized.enabled, cadence_hours: normalized.cadenceHours,
+      response_mode: normalized.responseMode, next_run_at: normalized.nextRunAt, last_run_at: normalized.lastRunAt,
+      last_cycle_id: normalized.lastCycleId, created_by: normalized.createdBy, created_at: normalized.createdAt,
+      updated_at: normalized.updatedAt,
+    }]),
+  });
+  return defenseProgramFromRow(rows?.[0]);
+}
+
+export async function claimDueDefensePrograms(limit = 20, now = Date.now()) {
+  if (!USE_SUPABASE) {
+    const due = local.defensePrograms
+      .filter((item) => item.enabled && Number(item.nextRunAt || 0) <= now)
+      .sort((a, b) => Number(a.nextRunAt || 0) - Number(b.nextRunAt || 0))
+      .slice(0, Math.max(1, Math.min(100, limit)));
+    for (const item of due) {
+      item.lastRunAt = now;
+      item.nextRunAt = now + item.cadenceHours * 3_600_000;
+      item.updatedAt = now;
+    }
+    if (due.length) persist();
+    return due;
+  }
+  const rows = await rest('/rpc/shannon_claim_due_defense_programs', {
+    method: 'POST', body: JSON.stringify({ p_limit: limit, p_now: now }),
+  });
+  return (rows || []).map(defenseProgramFromRow);
+}
+
+export async function listDefenseAssets(orgId) {
+  if (!USE_SUPABASE) return local.defenseAssets.filter((item) => item.orgId === orgId).sort((a, b) => b.createdAt - a.createdAt);
+  const rows = await rest(`/shannon_defense_assets?org_id=eq.${encodeURIComponent(orgId)}&order=created_at.desc`);
+  return (rows || []).map(defenseAssetFromRow);
+}
+
+export async function saveDefenseAsset(record) {
+  const now = Date.now();
+  const existing = (await listDefenseAssets(record.orgId)).find((item) => item.type === record.type && item.locator === record.locator);
+  const normalized = {
+    id: existing?.id || record.id || randomUUID(), orgId: record.orgId, projectId: record.projectId || null,
+    type: record.type, name: record.name, locator: record.locator, criticality: record.criticality || 'medium',
+    status: record.status === 'paused' ? 'paused' : 'active', coverage: record.coverage === 'online' ? 'online' : 'inventory',
+    config: record.config || {}, createdBy: record.createdBy || existing?.createdBy || null, createdAt: existing?.createdAt || record.createdAt || now, updatedAt: now,
+  };
+  if (!USE_SUPABASE) {
+    const duplicate = local.defenseAssets.find((item) => item.orgId === normalized.orgId && item.type === normalized.type && item.locator === normalized.locator);
+    if (duplicate) Object.assign(duplicate, normalized, { id: duplicate.id, createdAt: duplicate.createdAt });
+    else local.defenseAssets.unshift(normalized);
+    persist();
+    return duplicate || normalized;
+  }
+  const rows = await rest('/shannon_defense_assets?on_conflict=org_id,type,locator', {
+    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([{
+      id: normalized.id, org_id: normalized.orgId, project_id: normalized.projectId, type: normalized.type,
+      name: normalized.name, locator: normalized.locator, criticality: normalized.criticality, status: normalized.status,
+      coverage: normalized.coverage, config: normalized.config, created_by: normalized.createdBy,
+      created_at: normalized.createdAt, updated_at: normalized.updatedAt,
+    }]),
+  });
+  return defenseAssetFromRow(rows?.[0]);
+}
+
+export async function updateDefenseAsset(orgId, id, patch) {
+  const now = Date.now();
+  if (!USE_SUPABASE) {
+    const asset = local.defenseAssets.find((item) => item.orgId === orgId && item.id === id);
+    if (!asset) return null;
+    if (patch.status !== undefined) asset.status = patch.status;
+    if (patch.coverage !== undefined) asset.coverage = patch.coverage;
+    if (patch.config !== undefined) asset.config = patch.config;
+    asset.updatedAt = now;
+    persist();
+    return asset;
+  }
+  const body = { updated_at: now };
+  if (patch.status !== undefined) body.status = patch.status;
+  if (patch.coverage !== undefined) body.coverage = patch.coverage;
+  if (patch.config !== undefined) body.config = patch.config;
+  const rows = await rest(`/shannon_defense_assets?id=eq.${encodeURIComponent(id)}&org_id=eq.${encodeURIComponent(orgId)}`, {
+    method: 'PATCH', body: JSON.stringify(body),
+  });
+  return defenseAssetFromRow(rows?.[0]);
+}
+
+export async function deleteDefenseAsset(orgId, id) {
+  if (!USE_SUPABASE) {
+    const before = local.defenseAssets.length;
+    local.defenseAssets = local.defenseAssets.filter((item) => !(item.orgId === orgId && item.id === id));
+    if (local.defenseAssets.length !== before) persist();
+    return local.defenseAssets.length !== before;
+  }
+  const rows = await rest(`/shannon_defense_assets?id=eq.${encodeURIComponent(id)}&org_id=eq.${encodeURIComponent(orgId)}`, { method: 'DELETE' });
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+export async function listDefenseCycles(orgId, limit = 30) {
+  if (!USE_SUPABASE) return local.defenseCycles.filter((item) => item.orgId === orgId).sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  const rows = await rest(`/shannon_defense_cycles?org_id=eq.${encodeURIComponent(orgId)}&order=created_at.desc&limit=${Math.min(100, limit)}`);
+  return (rows || []).map(defenseCycleFromRow);
+}
+
+export async function saveDefenseCycle(record) {
+  const normalized = {
+    id: record.id || randomUUID(), orgId: record.orgId, jobId: record.jobId || null, status: record.status,
+    window: record.window || {}, snapshot: record.snapshot || {}, learning: record.learning || {}, actions: record.actions || {},
+    error: record.error || null, startedAt: record.startedAt || Date.now(), completedAt: record.completedAt || null,
+    createdAt: record.createdAt || Date.now(),
+  };
+  if (!USE_SUPABASE) {
+    local.defenseCycles = local.defenseCycles.filter((item) => item.id !== normalized.id);
+    local.defenseCycles.unshift(normalized);
+    if (local.defenseCycles.length > 500) local.defenseCycles.length = 500;
+    const program = local.defensePrograms.find((item) => item.orgId === normalized.orgId);
+    if (program && normalized.status === 'completed') program.lastCycleId = normalized.id;
+    persist();
+    return normalized;
+  }
+  const rows = await rest('/shannon_defense_cycles', {
+    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([{
+      id: normalized.id, org_id: normalized.orgId, job_id: normalized.jobId, status: normalized.status,
+      window: normalized.window, snapshot: normalized.snapshot, learning: normalized.learning, actions: normalized.actions,
+      error: normalized.error, started_at: normalized.startedAt, completed_at: normalized.completedAt, created_at: normalized.createdAt,
+    }]),
+  });
+  if (normalized.status === 'completed') {
+    await rest(`/shannon_defense_programs?org_id=eq.${encodeURIComponent(normalized.orgId)}`, {
+      method: 'PATCH', body: JSON.stringify({ last_cycle_id: normalized.id, updated_at: Date.now() }),
+    });
+  }
+  return defenseCycleFromRow(rows?.[0]);
+}
+
+export async function getDefenseTelemetry(orgId, since = Date.now() - 86_400_000) {
+  if (!USE_SUPABASE) return { routes: [], events: [], findings: [], jobs: await listJobs(orgId, 200) };
+  const [routeRows, eventRows, findingRows, jobs] = await Promise.all([
+    rest(`/shannon_edge_routes?org_id=eq.${encodeURIComponent(orgId)}`),
+    rest(`/shannon_defense_events?org_id=eq.${encodeURIComponent(orgId)}&created_at=gte.${since}&order=created_at.desc&limit=1000`),
+    rest(`/shannon_findings?org_id=eq.${encodeURIComponent(orgId)}&order=updated_at.desc&limit=1000`),
+    listJobs(orgId, 200),
+  ]);
+  return {
+    routes: (routeRows || []).map((row) => ({ host: row.host, origin: row.origin, mode: row.mode, createdAt: Number(row.created_at) })),
+    events: (eventRows || []).map((row) => ({ id: row.id, cls: row.cls, severity: row.severity, status: row.status, enforced: row.enforced === true, at: row.at, createdAt: Number(row.created_at) })),
+    findings: (findingRows || []).map((row) => ({ id: row.id, severity: row.severity, status: row.status, updatedAt: Number(row.updated_at) })),
+    jobs,
+  };
 }
 
 export async function purgeExpiredEnterpriseData({

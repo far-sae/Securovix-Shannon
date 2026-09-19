@@ -104,6 +104,38 @@ test('dashboard APIs require authentication and enforce organization roles', asy
   assert.equal(forbidden.response.status, 403);
 });
 
+test('organization continuous defense can inventory assets and queue a bounded learning cycle', async () => {
+  const owner = await signup('defense-owner@example.test', 'Defense Owner');
+  const initial = await request('/api/defender/program', { cookie: owner.cookie });
+  assert.equal(initial.response.status, 200);
+  assert.equal(initial.json.program.enabled, false);
+
+  const asset = await request('/api/defender/assets', {
+    method: 'POST', cookie: owner.cookie,
+    body: { type: 'cloud', name: 'Production cloud', locator: 'aws:123456789012', criticality: 'critical' },
+  });
+  assert.equal(asset.response.status, 201);
+  assert.equal(asset.json.protected, false);
+  assert.match(asset.json.nextStep, /sensor/i);
+  const sdk = await request('/api/defender/sdk', { cookie: owner.cookie });
+  const heartbeat = await request('/api/defender/sensors/heartbeat', {
+    method: 'POST', headers: { authorization: `Bearer ${sdk.json.apiKey}` },
+    body: { assetId: asset.json.asset.id, sensorType: 'cloud-collector', sensorVersion: '1.0.0' },
+  });
+  assert.equal(heartbeat.response.status, 200);
+  assert.equal(heartbeat.json.coverage, 'online');
+
+  const saved = await request('/api/defender/program', {
+    method: 'PUT', cookie: owner.cookie,
+    body: { enabled: true, cadenceHours: 24, responseMode: 'bounded-auto' },
+  });
+  assert.equal(saved.response.status, 200);
+  assert.equal(saved.json.program.enabled, true);
+  const queued = await request('/api/defender/program/run', { method: 'POST', cookie: owner.cookie, body: {} });
+  assert.equal(queued.response.status, 202);
+  assert.match(queued.json.cycleId, /^dcy_/);
+});
+
 test('organization AI keys and SCIM credentials are encrypted and tenant scoped', async () => {
   const owner = await signup('secrets-owner@example.test', 'Secrets Owner');
   const orgId = owner.json.organizations[0].id;

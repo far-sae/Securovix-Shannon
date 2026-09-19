@@ -187,6 +187,12 @@ For durable multi-server operation on Railway with Supabase, scalable workers, p
 SSO/SCIM/MFA, integrations, retention, and monitoring, follow
 [`docs/ENTERPRISE-DEPLOYMENT.md`](docs/ENTERPRISE-DEPLOYMENT.md).
 
+Defender Operations also includes a tenant-scoped continuous-defense loop. It inventories authorized
+assets, distinguishes live coverage from inventory-only entries, schedules durable daily posture
+cycles, prioritizes recurring/unresolved attacks, and learns from analyst false-positive outcomes.
+Real blocking still requires an explicitly enforced Defender Edge route or SDK policy; private
+networks, cloud, identity, repository, and endpoint assets require a connected customer collector.
+
 ---
 
 ## Output

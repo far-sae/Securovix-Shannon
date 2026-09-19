@@ -86,6 +86,30 @@ test('organization usage limits are durable and enforced atomically', async () =
   assert.equal((await database.listUsage('org-quota', '2026-09-18'))[0].quantity, 3);
 });
 
+test('continuous defense programs, assets and cycles are tenant scoped and durable', async () => {
+  const now = Date.now();
+  const program = await database.saveDefenseProgram({ orgId: 'org-defense', enabled: true, cadenceHours: 24, responseMode: 'bounded-auto', createdBy: 'user-1', nextRunAt: now });
+  assert.equal(program.enabled, true);
+  assert.equal(program.responseMode, 'bounded-auto');
+  const due = await database.claimDueDefensePrograms(5, now);
+  assert.equal(due.length, 1);
+  assert.ok(due[0].nextRunAt > now);
+  assert.equal((await database.claimDueDefensePrograms(5, now)).length, 0);
+
+  const asset = await database.saveDefenseAsset({ orgId: 'org-defense', type: 'cloud', name: 'Production AWS', locator: 'aws:123456789012', criticality: 'critical', status: 'active', coverage: 'inventory', createdBy: 'user-1' });
+  assert.equal((await database.listDefenseAssets('org-defense'))[0].id, asset.id);
+  assert.equal((await database.listDefenseAssets('another-org')).length, 0);
+
+  const cycle = await database.saveDefenseCycle({ id: 'cycle-1', orgId: 'org-defense', status: 'completed', snapshot: { postureScore: 42 }, learning: { model: 'bounded-outcome-learning-v1' }, actions: {}, startedAt: now, completedAt: now + 1, createdAt: now });
+  assert.equal(cycle.snapshot.postureScore, 42);
+  assert.equal((await database.getDefenseProgram('org-defense')).lastCycleId, 'cycle-1');
+  assert.equal(await database.deleteDefenseAsset('another-org', asset.id), false);
+  assert.equal(await database.deleteDefenseAsset('org-defense', asset.id), true);
+  const executed = await worker.executeDefenseCycle({ id: 'job-defense-cycle', orgId: 'org-defense', userId: 'user-1', payload: { cycleId: 'cycle-2' } });
+  assert.equal(executed.status, 'completed');
+  assert.equal(executed.learning.changesEnforcementAutomatically, false);
+});
+
 test('durable jobs are idempotent, claimed once and recovered after a stale lease', async () => {
   const first = await database.enqueueJob({
     orgId: 'org-1',
