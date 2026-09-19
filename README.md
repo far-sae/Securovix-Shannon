@@ -36,7 +36,7 @@ and proves it is now **blocked (403)** — attack *and* defense in one pass.
 | **DNS / attack surface** | Subdomain enumeration (crt.sh) + **subdomain-takeover** (dangling CNAME + service fingerprint) |
 | **Cloud** | Publicly-listable, site-referenced storage buckets (S3 / GCS / Azure) |
 | **Network** (opt-in) | Unauthenticated Redis / Memcached / Elasticsearch / anonymous FTP |
-| **LLM attack surface** | **Prompt injection — direct & indirect (2nd-order), proof-based & zero-FP.** Discovers where an LLM sits behind the HTTP surface, then confirms injection only when the model emits a *computed* marker (arithmetic / reversed-nonce oracle) absent from a control — no LLM-judge. Chains a benign, read-only **system-prompt-leak** impact proof. Mapped to the **OWASP LLM Top 10 (2025)**. See [`docs/research/llm-attack-surface.md`](docs/research/llm-attack-surface.md). |
+| **LLM attack surface** | **Prompt injection — direct & indirect (2nd-order), with reproducible evidence.** Discovers where an LLM sits behind the HTTP surface, then confirms injection only when the model emits a *computed* marker (arithmetic / reversed-nonce oracle) absent from a control — no LLM-judge. Chains a benign, read-only **system-prompt-leak** impact proof. Mapped to the **OWASP LLM Top 10 (2025)**. See [`docs/research/llm-attack-surface.md`](docs/research/llm-attack-surface.md). |
 
 ### Platform intelligence (layered on top of raw findings)
 
@@ -49,15 +49,19 @@ and proves it is now **blocked (403)** — attack *and* defense in one pass.
   generic-webhook alerts fired **only** on *newly appeared* exposures.
 - **AI reasoning** (key-gated) — the LLM *proposes* privileged field names / attack ideas; the
   engine *deterministically verifies* each before it can become a finding.
+- **Personal Security Shield** — read-only, deterministic analysis of suspicious messages and links
+  for phishing, credential theft, payment pressure, dangerous attachments, suspicious destinations,
+  and prompt-injection language. It does not open links, execute content, invoke an AI model, or store
+  the submitted message.
 - **Multi-agent security team** — a blackboard-coordinated team of role-specialized agents (recon ·
   exploit pool · remediation · report) that runs a full engagement hands-off with autonomous handoffs,
   rendered as a live "graph of agents." Agents orchestrate; the deterministic engine still confirms
-  every finding, so zero-FP holds across the whole team. See
+  every confirmed finding and separates unverified leads from reproducible evidence. See
   [`docs/research/multi-agent-security-team.md`](docs/research/multi-agent-security-team.md).
 - **Live Defender (blue team)** — connect a system you own on the **Defender** page and Shannon sits
   inline in front of it as a filtering reverse proxy, matching the **URL and body** of every request
   (not headers or cookies) against the engine's deterministic attack signatures. Unlike the offensive
-  engine — where a finding is zero-FP because it was *proven by execution* — a live request is judged
+  engine — where a finding includes execution evidence — a live request is judged
   by signature alone, so **inline blocking is restricted to a conservative allowlist of classes**
   (`path-traversal`, `nosql`, `llm-prompt-injection`) whose patterns are specific enough for
   production traffic; **every other class is detected and alerted on, then forwarded**, because those

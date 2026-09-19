@@ -781,6 +781,7 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
     <button onclick="go('team')" id="n-team" aria-label="Security Team Workspace"><span aria-hidden="true">&#9672;</span> Team Workspace</button>
     <button onclick="go('agent')" id="n-agent" aria-label="AI Agent"><span aria-hidden="true">&#9673;</span> AI Agent</button>
     <button onclick="go('code')" id="n-code" aria-label="Code Scan"><span aria-hidden="true">&#9876;</span> Code Scan</button>
+    <button onclick="go('shield')" id="n-shield" aria-label="Personal Security Shield"><span aria-hidden="true">&#9670;</span> Personal Shield</button>
     <button onclick="go('cfg')" id="n-cfg" aria-label="Settings"><span aria-hidden="true">&#9881;</span> Settings</button>
     <button onclick="go('defender')" id="n-defender" aria-label="Defender"><span aria-hidden="true">&#9730;</span> Defender</button>
   </nav>
@@ -1733,7 +1734,7 @@ function go(p,d){
   if(POLL){clearInterval(POLL);POLL=null}
   if(EVT){EVT.close();EVT=null}
   closeDrawer();
-  const result=({dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,agent:pgAgent,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
+  const result=({dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,agent:pgAgent,shield:pgShield,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
   const resetScroll=()=>requestAnimationFrame(()=>{M.scrollTop=0;window.scrollTo(0,0)});
   if(result&&typeof result.finally==='function')result.finally(resetScroll);else resetScroll();
 }
@@ -1835,6 +1836,42 @@ async function teamTestIntegration(orgId,id){try{await api(`/team/${orgId}/integ
 async function teamDeleteIntegration(orgId,id){if(!confirm('Delete this integration?'))return;try{await api(`/team/${orgId}/integrations/${id}`,{method:'DELETE'});pgTeam()}catch(e){alert(e.detail||e.message)}}
 async function teamCreateProject(orgId){const name=$('tp-name').value.trim(),criticality=$('tp-criticality').value;try{await api(`/team/${orgId}/projects`,{method:'POST',body:JSON.stringify({name,criticality,environment:'production'})});pgTeam()}catch(e){alert(e.detail||e.message)}}
 async function teamFindingStatus(orgId,id,status){let body={status};if(['risk-accepted','false-positive'].includes(status)){body.reason=prompt('Reason (required)')||'';if(status==='risk-accepted')body.expiresAt=new Date(Date.now()+90*86400000).toISOString()}try{await api(`/team/${orgId}/findings/${id}`,{method:'PATCH',body:JSON.stringify(body)});pgTeam()}catch(e){alert(e.detail||e.message);pgTeam()}}
+
+function pgShield(){
+  M.innerHTML=`<div class="pg sec-page">
+    <header class="sec-head"><div><div class="crd-l">Personal Security Shield · first defensive slice</div><h1>${ico('shield',{cls:'ico-lg'})} Check a suspicious message or link</h1><p>Detect phishing, credential theft, payment pressure, dangerous attachments, look-alike links, and instructions that try to manipulate an AI. Shannon analyzes the text locally on the server and never opens the submitted link.</p></div><span class="bx bx-g">read-only</span></header>
+    <div class="sec-grid">
+      <section class="sec-card">
+        <div class="sec-card-head"><h2>${ico('inbox',{cls:'ico-sm'})} Content to inspect</h2><small>do not paste passwords, MFA codes, private keys, or full financial details</small></div>
+        <div class="fg"><label for="ps-message">Suspicious email, text, chat, or AI output</label><textarea class="fi" id="ps-message" maxlength="20000" style="min-height:230px;resize:vertical" placeholder="Paste the suspicious message here…"></textarea></div>
+        <div class="fg"><label for="ps-link">Suspicious link (optional)</label><input class="fi" id="ps-link" maxlength="2048" inputmode="url" autocomplete="off" placeholder="https://example.com/…"></div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn btn-p" id="ps-analyze" onclick="personalShieldAnalyze()">${ico('shield-check',{cls:'ico-sm'})} Analyze safely</button><span class="sec-fine">No navigation · no attachment execution · no AI model · submitted content is not stored</span></div>
+      </section>
+      <aside class="sec-stack">
+        <section class="sec-card"><div class="sec-card-head"><h3>${ico('lock',{cls:'ico-sm'})} Safety boundary</h3></div><p class="sec-fine">Everything you paste is treated as untrusted data. It cannot change Shannon's rules, receive credentials, call tools, browse to a destination, or execute code.</p></section>
+        <section class="sec-card"><div class="sec-card-head"><h3>${ico('info',{cls:'ico-sm'})} If money or access is requested</h3></div><p class="sec-fine">Stop and verify the person through a phone number or account portal you already know. AI-generated writing, voice, and video can imitate trusted people.</p></section>
+      </aside>
+    </div>
+    <section id="ps-result" style="margin-top:16px"></section>
+  </div>`;
+}
+
+async function personalShieldAnalyze(){
+  const button=$('ps-analyze'),resultBox=$('ps-result');
+  const message=$('ps-message')?.value||'',link=$('ps-link')?.value||'';
+  if(!message.trim()&&!link.trim()){resultBox.innerHTML='<div class="sec-card" style="color:var(--ylw)">Paste a suspicious message or link first.</div>';return}
+  button.disabled=true;button.innerHTML='<span class="sp"></span> Analyzing safely…';
+  try{
+    const response=await api('/personal-shield/analyze',{method:'POST',body:JSON.stringify({message,link})});
+    const r=response.result||{},tone=r.risk==='critical'||r.risk==='high'?'danger':r.risk==='medium'?'warn':'good';
+    const findings=(r.findings||[]).map(f=>`<article class="risk-card ${f.severity==='critical'?'crit':f.severity==='high'?'high':f.severity==='medium'?'med':'low'}"><div class="risk-card-h"><span class="risk-card-cat">${H(f.id)}</span>${sevBadge(f.severity)}</div><div class="risk-card-name">${H(f.title)}</div><p style="font-size:12px;color:var(--t2);line-height:1.55;margin-bottom:8px">${H(f.explanation)}</p>${f.evidence?`<div class="sec-fine"><b>Evidence:</b> ${H(f.evidence)}</div>`:''}</article>`).join('');
+    resultBox.innerHTML=`<div class="sec-kpis" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="sec-kpi ${tone}"><span>Risk level</span><strong>${H(r.risk||'unknown')}</strong><small>deterministic triage, not a guarantee</small></div><div class="sec-kpi"><span>Risk score</span><strong>${Number(r.score||0)}/100</strong><small>explainable warning weights</small></div><div class="sec-kpi"><span>Links opened</span><strong>0</strong><small>${Number(r.analyzedLinks||0)} link${Number(r.analyzedLinks||0)===1?'':'s'} inspected as text only</small></div></div>
+      ${findings?`<div class="risk-grid">${findings}</div>`:`<div class="sec-card"><div class="sec-card-head"><h2>${ico('shield-check',{cls:'ico-sm'})} No strong deterministic warning found</h2></div><p class="sec-fine">This does not prove the content is safe. Verify unexpected requests independently before sharing information or taking irreversible action.</p></div>`}
+      <section class="sec-card" style="margin-top:16px"><div class="sec-card-head"><h2>${ico('list',{cls:'ico-sm'})} Recommended next actions</h2></div><ol style="padding-left:20px;color:var(--t1);line-height:1.7">${(r.actions||[]).map(action=>`<li>${H(action)}</li>`).join('')}</ol></section>`;
+  }catch(error){resultBox.innerHTML=`<div class="sec-card" style="color:var(--red)">${H(error.detail||error.message||'Analysis failed.')}</div>`}
+  finally{button.disabled=false;button.innerHTML=`${ico('shield-check',{cls:'ico-sm'})} Analyze safely`}
+}
+
 let LOAD_STATE='idle',LOAD_ERR=null;
 async function load(){
   LOAD_STATE='loading';LOAD_ERR=null;
@@ -1941,7 +1978,7 @@ async function pgAgent(){
       <details class="ag-card">
         <summary><span>Security team<span class="hint">Autonomous multi-agent engagement</span></span></summary>
         <div class="ag-body">
-          <p class="ag-desc">Role-specialized agents coordinate over a shared blackboard and hand off autonomously: <strong style="color:var(--tx)">recon</strong> maps the surface, an <strong style="color:var(--tx)">exploit pool</strong> claims and proves findings (zero-FP), <strong style="color:var(--tx)">remediation</strong> proposes fixes, <strong style="color:var(--tx)">report</strong> consolidates. Uses the target above.</p>
+          <p class="ag-desc">Role-specialized agents coordinate over a shared blackboard and hand off autonomously: <strong style="color:var(--tx)">recon</strong> maps the surface, an <strong style="color:var(--tx)">exploit pool</strong> produces reproducible evidence, <strong style="color:var(--tx)">remediation</strong> proposes fixes, <strong style="color:var(--tx)">report</strong> consolidates. Uses the target above.</p>
           <div class="ag-actions">
             <button class="btn btn-p" id="ag-team-go" onclick="teamRun()">&#9673; Deploy the security team</button>
             <span class="ag-fine">Same ownership gate.</span>

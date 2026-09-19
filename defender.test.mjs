@@ -756,6 +756,7 @@ test('self-defense: mode can be flipped live', () => {
 test('self-defense: SELF_SKIP covers the payload-carrying tool APIs', () => {
   assert.ok(SELF_SKIP.some((r) => r.test('/api/agent/patch')));
   assert.ok(SELF_SKIP.some((r) => r.test('/api/code-scan/multi/start')));
+  assert.ok(SELF_SKIP.some((r) => r.test('/api/personal-shield/analyze')));
   assert.ok(!SELF_SKIP.some((r) => r.test('/api/auth/login')), 'auth is public surface — inspect it');
 });
 

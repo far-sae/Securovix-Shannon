@@ -34,6 +34,7 @@ import { toJson, toMarkdown, toSarif } from './agent-report.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
 import { locateFinding } from './code-locate.mjs';
 import { evaluateMatcher, sanitizeCheck } from './custom-check.mjs';
+import { analyzePersonalThreat } from './personal-shield.mjs';
 import {
   appendDefenseEvent,
   appendAudit,
@@ -1487,6 +1488,27 @@ app.get('/api/team/:orgId/usage', async (req, res) => {
   const current = await organizationPlan(ctx.org.id);
   const usage = await listUsage(ctx.org.id);
   res.json({ ok: true, plan: current.plan, limits: current.limits, usage, billingEnabled: billingEnabled() });
+});
+
+// Personal Security Shield — deterministic, read-only triage for suspicious messages and links.
+// Submitted content is processed in memory, is not persisted, is never fetched, and never becomes
+// an instruction to an AI model or external tool.
+app.post('/api/personal-shield/analyze', (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.read');
+  if (!ctx) return;
+  if (limited(req, res, `personal-shield:${ctx.user.id}`, 60, 60 * 60 * 1000)) return;
+  const message = String(req.body?.message || '');
+  const link = String(req.body?.link || '');
+  if (!message.trim() && !link.trim()) return res.status(400).json({ error: 'Paste a suspicious message or link.' });
+  if (message.length > 20_000 || link.length > 2_048) return res.status(413).json({ error: 'Submitted content is too large.' });
+  const result = analyzePersonalThreat({ message, link });
+  audit(ctx, 'personal_shield.analyzed', 'personal-threat', null, {
+    risk: result.risk,
+    score: result.score,
+    findingTypes: result.findings.map((finding) => finding.id),
+    analyzedLinks: result.analyzedLinks,
+  });
+  res.json({ ok: true, result });
 });
 
 // ============================================================

@@ -10,7 +10,7 @@
 </head>
 <body><main class="wrap">
   <div class="brand"><img src="/favicon.png" alt=""><div><b>Securovix</b><small>Security information</small></div></div>
-  <h1>Security</h1><div class="updated">Last updated: 18 September 2026</div>
+  <h1>Security</h1><div class="updated">Last updated: 19 September 2026</div>
   <div class="notice"><strong>Responsible disclosure:</strong> report suspected vulnerabilities privately to <a href="mailto:security@securovix.com">security@securovix.com</a>. Include reproduction steps and impact. Do not access another customer's data, disrupt service, or publish an unremediated issue.</div>
   <h2>Security controls</h2>
   <ul>
@@ -20,6 +20,7 @@
     <li>Authenticated scan credentials use encrypted, exact-origin-bound, five-minute, single-use grants; passwords and cookies are not placed in streaming URLs.</li>
     <li>Active scans and Defender routes require target ownership verification. Sandbox jobs run on a separate runner in disposable, non-root, read-only, network-disabled containers.</li>
     <li>Production services expose health/readiness checks, protected metrics, audit events, retention jobs, and revocable service credentials.</li>
+    <li>Personal Shield treats submitted messages and links as untrusted data: it does not navigate to links, execute content, call an AI model, or persist the submission.</li>
   </ul>
   <h2>Data and subprocessors</h2>
   <p>Production data is stored in Supabase. Railway hosts the application services. Stripe is used only when paid billing is enabled. Customer-selected AI providers receive the scan inputs needed for inference. See the <a href="/privacy">Privacy Policy</a> for retention and processing details.</p>

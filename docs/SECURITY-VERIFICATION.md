@@ -1,13 +1,13 @@
 # Security verification record
 
-Date: 2026-09-18
+Date: 2026-09-19
 
 This record describes engineering verification, not an independent penetration test or compliance
 attestation.
 
 ## Completed in this change
 
-- `npm test`: 228 tests passed, 0 failed.
+- `npm test`: 232 tests passed, 0 failed.
 - `npm run typecheck`: 4 tasks passed.
 - `npm run build`: 3 tasks passed.
 - `pnpm audit --prod`: no known vulnerabilities reported.
@@ -17,6 +17,8 @@ attestation.
 - Integration coverage verifies encrypted/single-use authenticated-scan grants, encrypted organization
   AI and SCIM secrets, SCIM tenant isolation, MFA, revocable Defender credentials, shared Edge event
   attribution, durable quotas, and Stripe webhook signature/timestamp checks.
+- Personal Security Shield tests verify benign guidance is not treated as phishing, suspicious links
+  are never opened, and prompt-injection content remains inert data with no AI model or tool execution.
 
 ## Known verification limitations
 

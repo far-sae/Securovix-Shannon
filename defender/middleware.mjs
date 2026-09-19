@@ -16,7 +16,13 @@ import { makeRateLimiter } from './respond.mjs';
 // traversal strings, injection payloads and exploit bodies by design — the Repeater replays crafted
 // requests, AI check and Sandbox carry generated probes, scans carry target payloads. Inspecting
 // these would flag the dashboard's own features and, in enforce mode, break them outright.
-export const SELF_SKIP = [/^\/api\/agent\//, /^\/api\/scans/, /^\/api\/defender\//, /^\/api\/code-scan\//];
+export const SELF_SKIP = [
+  /^\/api\/agent\//,
+  /^\/api\/scans/,
+  /^\/api\/defender\//,
+  /^\/api\/code-scan\//,
+  /^\/api\/personal-shield\//,
+];
 
 const MAX_RECENT = 50;
 

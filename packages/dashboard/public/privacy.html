@@ -63,6 +63,7 @@
       <tr><td>Scan target URLs + run history</td><td>So you can revisit past scans</td><td>Our server</td></tr>
       <tr><td>LLM API keys</td><td>Routing inference requests</td><td>Encrypted organization secret store (Supabase in production)</td></tr>
       <tr><td>Source code submitted to Code Scan</td><td>Security analysis and sending to the selected LLM provider</td><td>Process memory during the run and for up to 30 minutes afterward; not written to the database by Code Scan</td></tr>
+      <tr><td>Messages or links submitted to Personal Shield</td><td>Read-only phishing, scam, suspicious-link, and prompt-injection triage</td><td>Request memory only; submitted content is not stored and is not sent to an AI provider. The audit trail stores only risk level and finding categories.</td></tr>
       <tr><td>Findings, reports, audit and operational events</td><td>Delivering the security service, support, and incident investigation</td><td>Supabase database and private object storage</td></tr>
       <tr><td>Usage and billing records</td><td>Enforcing plan limits and administering subscriptions</td><td>Our database and Stripe when billing is enabled</td></tr>
       <tr><td>Session cookie</td><td>Keep you signed in</td><td>HttpOnly, SameSite=Lax cookie</td></tr>
@@ -100,6 +101,7 @@
     <li><strong>Verification/reset tokens</strong> — expired records are removed after 7 days by default.</li>
     <li><strong>Session cookies</strong> — 30 days.</li>
     <li><strong>Code Scan source</strong> — removed from process memory within approximately 30 minutes after the run ends; not written to the database by Code Scan.</li>
+    <li><strong>Personal Shield submissions</strong> — processed only for the current request and not persisted; audit records contain risk metadata but not the submitted message or link.</li>
   </ul>
 
   <h2>6. Your rights (UK GDPR / EU GDPR)</h2>
