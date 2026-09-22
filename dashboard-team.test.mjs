@@ -55,6 +55,9 @@ test('production dashboard UI parses and never persists remediation tokens in br
   assert.match(html, /LEGACY_GITHUB_STORAGE_KEYS/);
   assert.match(html, /repository-provider/);
   assert.match(html, /Production control plane/);
+  assert.match(html, /Exploited vulnerability intelligence/);
+  assert.match(html, /\/defender\/intelligence/);
+  assert.doesNotMatch(html, /Developer tools · local diagnostic proxy/);
   const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map((match) => match[1]).filter(Boolean);
   assert.ok(scripts.length > 0);
   for (const source of scripts) new Function(source);

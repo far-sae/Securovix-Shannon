@@ -2674,10 +2674,10 @@ function pgDefender() {
       .def-bars{display:grid;gap:10px}.def-bar-label{display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px}.def-bar-track{height:6px;border-radius:999px;background:var(--bg);overflow:hidden}.def-bar-fill{height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--acc-deep),var(--acc))}
       .def-deploy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:16px}.def-deploy .def-card{display:flex;flex-direction:column}.def-deploy-body{flex:1;color:var(--t2);font-size:12px;line-height:1.6}.def-fine{font-size:10.5px;line-height:1.55;color:var(--t3)}.def-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}.def-actions .btn{padding:7px 10px;font-size:11px}
       .def-route-form{display:grid;grid-template-columns:1fr 1.25fr 110px auto;gap:8px;align-items:stretch;margin-bottom:12px}.def-route-form .fi,.def-route-form .btn{width:100%;min-width:0;box-sizing:border-box}.def-row{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 0;border-bottom:1px solid var(--brd)}.def-row:last-child{border-bottom:0}.def-row-main{flex:1;min-width:0}.def-row-main b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.def-row-main small{display:block;color:var(--t3);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.def-row-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.def-row-actions .btn{padding:6px 9px;font-size:10.5px}.def-empty{padding:24px 12px;border:1px dashed var(--brd);border-radius:10px;text-align:center;color:var(--t3);font-size:12px}
-      .def-code{background:var(--bg);border:1px solid var(--brd);border-radius:9px;padding:11px;overflow:auto;font-size:10.5px;line-height:1.55;max-height:190px}.def-live{font-size:11px;line-height:1.6;max-height:250px;overflow:auto}.def-local{margin-top:16px}.def-local summary{cursor:pointer;font-size:12px;font-weight:700;color:var(--t2)}.def-local-body{margin-top:14px}.def-local-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.def-local-form .fi{width:100%;box-sizing:border-box}
+      .def-code{background:var(--bg);border:1px solid var(--brd);border-radius:9px;padding:11px;overflow:auto;font-size:10.5px;line-height:1.55;max-height:190px}.def-intel-search{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;margin-bottom:10px}.def-intel-search .fi{width:100%;box-sizing:border-box}.def-intel-list{display:grid;gap:8px;max-height:360px;overflow:auto}.def-intel-item{padding:10px;border:1px solid var(--brd);border-radius:9px;background:var(--bg2)}.def-intel-item b{display:block;font-size:11.5px;color:var(--t0)}.def-intel-item small{display:block;font-size:10px;color:var(--t3);line-height:1.45;margin-top:3px}
       @media(max-width:1100px){.def-grid{grid-template-columns:1fr}.def-command{grid-template-columns:1fr 1fr 1fr}.def-command-state{grid-column:1/-1}.def-deploy{grid-template-columns:1fr 1fr}.def-deploy .def-card:last-child{grid-column:1/-1}}
       @media(max-width:760px){.def-head{align-items:stretch;flex-direction:column}.def-head-actions{justify-content:flex-start}.def-kpis{grid-template-columns:1fr 1fr}.def-deploy{grid-template-columns:1fr}.def-deploy .def-card:last-child{grid-column:auto}.def-route-form{grid-template-columns:1fr 1fr}.def-route-form .btn{grid-column:1/-1}.def-incident{grid-template-columns:75px minmax(0,1fr)}.def-incident>:nth-child(3),.def-incident>:nth-child(4){grid-column:auto}.def-row{align-items:flex-start;flex-wrap:wrap}.def-row-actions{width:100%;justify-content:flex-start}}
-      @media(max-width:480px){.defpg{padding-left:14px;padding-right:14px}.def-command{grid-template-columns:1fr 1fr}.def-command-state{grid-column:1/-1}.def-kpis{gap:8px}.def-kpi{min-height:98px;padding:14px}.def-card{padding:16px}.def-route-form,.def-local-form{grid-template-columns:1fr}.def-route-form .btn{grid-column:auto}.def-incident{grid-template-columns:1fr}.def-head-actions .btn{flex:1}}
+      @media(max-width:480px){.defpg{padding-left:14px;padding-right:14px}.def-command{grid-template-columns:1fr 1fr}.def-command-state{grid-column:1/-1}.def-kpis{gap:8px}.def-kpi{min-height:98px;padding:14px}.def-card{padding:16px}.def-route-form,.def-intel-search{grid-template-columns:1fr}.def-route-form .btn{grid-column:auto}.def-incident{grid-template-columns:1fr}.def-head-actions .btn{flex:1}}
     </style>
     <div class="pg defpg">
       <header class="def-head"><div><div class="ey">Detection &amp; response</div><h1>Defender Operations</h1><p>Operate organization-wide runtime protection from signal intake through triage, bounded enforcement, evidence delivery, and daily learning.</p></div><div class="def-head-actions"><button class="btn btn-g" onclick="defExportEvents()">Export evidence</button><button class="btn btn-g" onclick="defJump('def-routes-card')">Deploy protection</button><button class="btn btn-p" onclick="defRefreshAll()">Refresh posture</button></div></header>
@@ -2686,11 +2686,10 @@ function pgDefender() {
       <div class="def-grid"><main class="def-stack"><section class="def-card" id="def-incidents-card"><div class="def-card-head"><h2>${ico('alert-octagon',{cls:'ico-sm'})} Incident queue</h2><small id="def-incident-count">Loading telemetry…</small></div><div id="def-incidents" class="def-scroll"><div class="def-empty">Loading incidents…</div></div></section>
         <section class="def-card" id="def-routes-card"><div class="def-card-head"><h2>${ico('radar',{cls:'ico-sm'})} Edge routes</h2><small>public multi-tenant enforcement</small></div><p class="def-fine">Map the customer-facing hostname to its verified origin. Begin in monitor mode, review real telemetry, then explicitly promote that route to enforce.</p><div class="def-route-form"><input class="fi" id="def-route-host" placeholder="Public host · app.customer.com"><input class="fi" id="def-route-origin" placeholder="Verified origin · https://origin.customer.com"><select class="fi" id="def-route-mode"><option value="monitor">monitor</option><option value="enforce">enforce</option></select><button class="btn btn-p" onclick="defEdgeSave()">Save route</button></div><div id="def-route-out"></div><div id="def-routes"><div class="def-empty">Loading routes…</div></div></section>
         <section class="def-card" id="def-loop-card"><div class="def-card-head"><h2>${ico('refresh-cw',{cls:'ico-sm'})} Continuous defense loop</h2><small>observe → detect → respond → learn</small></div><p class="def-fine">Runs a durable organization cycle on the worker. It learns from incident outcomes and raises priorities; it never changes blocking rules without an authorized enforcement policy.</p><div class="def-route-form"><select class="fi" id="def-program-enabled"><option value="false">Paused</option><option value="true">Enabled</option></select><select class="fi" id="def-program-cadence"><option value="1">Every hour</option><option value="6">Every 6 hours</option><option value="12">Every 12 hours</option><option value="24">Every day</option><option value="168">Every week</option></select><select class="fi" id="def-program-mode"><option value="recommend">Recommend</option><option value="bounded-auto">Alert automatically</option></select><button class="btn btn-p" onclick="defProgramSave()">Save loop</button></div><div class="def-actions"><button class="btn btn-g" onclick="defProgramRun()">Run cycle now</button><span id="def-program-status" class="def-fine">Loading cycle status…</span></div><hr style="border:0;border-top:1px solid var(--brd);margin:16px 0"><div class="def-card-head"><h3>Asset inventory</h3><small>live Edge, SDK, or sensor coverage required</small></div><div class="def-route-form"><select class="fi" id="def-asset-type"><option value="web">Website</option><option value="api">API</option><option value="domain">Domain</option><option value="cidr">Network / CIDR</option><option value="cloud">Cloud account</option><option value="repository">Repository</option><option value="identity">Identity provider</option><option value="endpoint">Endpoint group</option></select><input class="fi" id="def-asset-name" placeholder="Customer portal"><input class="fi" id="def-asset-locator" placeholder="https://app.example.com"><button class="btn btn-g" onclick="defAssetAdd()">Add asset</button></div><div id="def-asset-out"></div><div id="def-assets"><div class="def-empty">Loading assets…</div></div><div id="def-last-cycle" style="margin-top:14px"></div></section></main>
-        <aside class="def-stack"><section class="def-card"><div class="def-card-head"><h2>Attack surface signal</h2><small>top detection classes</small></div><div id="def-class-bars" class="def-bars"><div class="def-empty">No signal yet.</div></div></section><section class="def-card"><div class="def-card-head"><h2>Live activity</h2><small>local diagnostic stream</small></div><div id="def-live" class="def-live"><em>Start a diagnostic proxy to watch live defenses.</em></div></section></aside></div>
+        <aside class="def-stack"><section class="def-card"><div class="def-card-head"><h2>Attack surface signal</h2><small>top detection classes</small></div><div id="def-class-bars" class="def-bars"><div class="def-empty">No signal yet.</div></div></section><section class="def-card"><div class="def-card-head"><h2>Exploited vulnerability intelligence</h2><small>live CISA KEV catalog</small></div><p class="def-fine">Search vulnerabilities confirmed as exploited in the wild. Match results to your software inventory before taking action.</p><div class="def-intel-search"><input class="fi" id="def-intel-query" placeholder="CVE, vendor, or product" onkeydown="if(event.key==='Enter')defIntelLoad(this.value)"><button class="btn btn-g" onclick="defIntelLoad($('def-intel-query').value)">Search</button></div><div id="def-intel-summary" class="def-fine">Loading authoritative intelligence…</div><div id="def-intel-results" class="def-intel-list"></div></section></aside></div>
       <div class="def-deploy"><section class="def-card"><div class="def-card-head"><h3>${ico('shield',{cls:'ico-sm'})} Dashboard protection</h3><span class="bx">platform</span></div><div class="def-deploy-body" id="def-self">Checking platform self-defense…</div></section>
         <section class="def-card"><div class="def-card-head"><h3>${ico('file-text',{cls:'ico-sm'})} Application SDK</h3><span class="bx bx-g">recommended</span></div><div class="def-deploy-body" id="def-sdk">Loading SDK deployment…</div></section>
         <section class="def-card"><div class="def-card-head"><h3>${ico('gauge',{cls:'ico-sm'})} Response automation</h3><span class="bx">SOC</span></div><div class="def-deploy-body"><p>Defender detections enter the durable incident queue and fan out to enabled Slack, Teams, Jira, Linear, webhook, and SIEM destinations.</p><p class="def-fine">Use Team Workspace to configure delivery targets and inspect retries or dead-letter jobs.</p><div class="def-actions"><button class="btn btn-g" onclick="go('team')">Open Team Workspace</button></div></div></section></div>
-      <details class="def-card def-local"><summary>Developer tools · local diagnostic proxy</summary><div class="def-local-body"><p class="def-fine">Ephemeral loopback-only troubleshooting inside this dashboard process. It is not production coverage; use the organization SDK or durable Edge routes above for customer traffic.</p><div class="def-local-form"><input class="fi" id="def-origin" placeholder="https://app.example.com" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')defConnect()"><button class="btn btn-g" onclick="defConnect()">Start diagnostic proxy</button></div><div id="def-connect-out"></div><div id="def-list" style="margin-top:10px">Loading…</div></div></details>
     </div>`;
   defRefreshAll();
 }
@@ -2709,7 +2708,7 @@ let DEF_SDK_SNIPPET = '';
 async function defRefreshAll() {
   const refresh = document.querySelector('.def-head-actions .btn-p');
   if (refresh) refresh.disabled = true;
-  await Promise.allSettled([defOverviewLoad(), defProgramLoad(), defSelfLoad(), defSdkLoad(), defLoad()]);
+  await Promise.allSettled([defOverviewLoad(), defProgramLoad(), defSelfLoad(), defSdkLoad(), defIntelLoad()]);
   if (refresh) refresh.disabled = false;
 }
 
@@ -2754,6 +2753,22 @@ async function defOverviewLoad() {
     kpis.innerHTML = `<div class="def-empty" style="grid-column:1/-1"><span class="err">${message}</span></div>`;
     incidents.innerHTML = `<div class="def-empty"><span class="err">${message}</span></div>`;
     routes.innerHTML = `<div class="def-empty"><span class="err">${message}</span></div>`;
+  }
+}
+
+async function defIntelLoad(query='') {
+  const summary=$('def-intel-summary'),results=$('def-intel-results');
+  if(!summary||!results)return;
+  summary.innerHTML='<span class="sp"></span> Loading CISA intelligence…';
+  try{
+    const data=await api(`/defender/intelligence${query?`?q=${encodeURIComponent(query)}`:''}`);
+    const released=data.dateReleased?fmtDate(data.dateReleased):'unknown release date';
+    summary.innerHTML=`${Number(data.total||0).toLocaleString()} known exploited vulnerabilities · catalog ${H(data.catalogVersion||'current')} · released ${H(released)}${data.stale?' · <span class="err">cached copy</span>':''}`;
+    const rows=data.vulnerabilities||[];
+    results.innerHTML=rows.length?rows.map(item=>`<article class="def-intel-item"><b>${H(item.cveId)} · ${H(item.vendor)} ${H(item.product)}</b><small>${H(item.name)}</small><small>Added ${H(item.dateAdded||'unknown')} · remediation due ${H(item.dueDate||'not specified')}${String(item.ransomwareUse).toLowerCase()==='known'?' · known ransomware use':''}</small><small>${H(item.action)}</small></article>`).join(''):`<div class="def-empty">No CISA KEV entries match “${H(query)}”. This does not prove the product is vulnerability-free.</div>`;
+  }catch(error){
+    summary.innerHTML=`<span class="err">${H(error.detail||error.message||'Threat intelligence is unavailable.')}</span>`;
+    results.innerHTML='';
   }
 }
 
@@ -2967,100 +2982,6 @@ async function defSelfMode(mode) {
   } catch (e) {
     alert(e.detail || e.message || 'could not change mode');
   }
-}
-
-async function defLoad() {
-  try {
-    const { systems } = await api('/defender/list');
-    $('def-list').innerHTML = systems.length
-      ? systems.map((s) => `<div class="def-row"><div class="def-row-main"><b>${H(s.origin)}</b><small>${H(s.proxyUrl || 'starting…')} · ${H(s.mode)} · ${Number(s.stats.events || 0)} requests · ${Number(s.stats.defenses || 0)} defenses</small><div class="def-row-err" id="def-err-${s.id}"></div></div><div class="def-row-actions"><button class="btn" onclick="defToggleMode('${s.id}','${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">${s.mode === 'enforce' ? 'Monitor' : 'Enforce'}</button><button class="btn btn-g" onclick="defStream('${s.id}')">Watch</button><button class="btn" onclick="defDisconnect('${s.id}')">Disconnect</button></div></div>`).join('')
-      : '<div class="def-empty">No local diagnostic proxies are running.</div>';
-  } catch (e) {
-    $('def-list').innerHTML = `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
-  }
-}
-
-async function defConnect() {
-  const origin = $('def-origin').value.trim();
-  const out = $('def-connect-out');
-  // Guard here rather than round-tripping: an empty box looks filled because of the placeholder,
-  // and a scheme-less host is rejected on purpose (guessing http vs https for a blocking proxy
-  // would point it at an endpoint the user never chose).
-  if (!origin) {
-    out.innerHTML = '<span class="err">Enter your app\'s URL, e.g. https://app.example.com</span>';
-    $('def-origin').focus();
-    return;
-  }
-  if (!/^https?:\/\//i.test(origin)) {
-    out.innerHTML = `<span class="err">Include the scheme — try <b>https://${H(origin)}</b></span>`;
-    $('def-origin').focus();
-    return;
-  }
-  out.innerHTML = '<span class="sp"></span> Connecting…';
-  try {
-    const r = await api('/defender/connect', { method: 'POST', body: JSON.stringify({ origin }) });
-    out.innerHTML = `<p>Connected in <b>monitor-only</b> mode. Route traffic through
-      <code>${H(r.proxyUrl)}</code>, then switch to Enforce when you're ready to block.</p>`;
-    defLoad();
-    defStream(r.id);
-  } catch (e) {
-    out.innerHTML = e.status === 403
-      ? '<span class="err">You must verify ownership of that domain first (Domains page).</span>'
-      : `<span class="err">${H(e.detail || e.message || 'connect failed')}</span>`;
-  }
-}
-
-async function defToggleMode(id, mode) {
-  if (mode === 'enforce' && !confirm(
-    'Enforce mode will return 403 to any request matching Shannon\'s path-traversal, NoSQL-injection or '
-    + 'LLM-prompt-injection signatures — including, if a signature is imprecise for your app, legitimate '
-    + 'traffic. Review your monitor-mode activity first to see what would have been blocked. Continue?'
-  )) return;
-  try {
-    await api(`/defender/${id}/mode`, { method: 'POST', body: JSON.stringify({ mode }) });
-  } catch (e) {
-    const box = $(`def-err-${id}`);
-    const msg = e.detail || e.message || 'could not change mode';
-    if (box) box.innerHTML = `<span class="err">${H(msg)}</span>`;
-    else alert(msg);
-    return;
-  }
-  defLoad();
-}
-
-async function defDisconnect(id) {
-  if (!confirm('Disconnect this defender? Traffic routed through its proxy URL will stop being served.')) return;
-  try {
-    await api(`/defender/${id}/disconnect`, { method: 'POST' });
-  } catch (e) {
-    const box = $(`def-err-${id}`);
-    const msg = e.detail || e.message || 'could not disconnect';
-    if (box) box.innerHTML = `<span class="err">${H(msg)}</span>`;
-    else alert(msg);
-    return;
-  }
-  if (EVT) { EVT.close(); EVT = null; }
-  const live = $('def-live');
-  if (live) live.innerHTML = '<em>Connect a system to see live defenses.</em>';
-  defLoad();
-}
-
-function defStream(id) {
-  if (EVT) { EVT.close(); EVT = null; }
-  const live = $('def-live');
-  live.innerHTML = '<em>Listening…</em>';
-  EVT = new EventSource(`/api/defender/${id}/events`);
-  EVT.onmessage = (m) => {
-    const d = JSON.parse(m.data);
-    if (d.type === 'hello') return;
-    if (d.type === 'mode') { defLoad(); return; }
-    if (live.querySelector('em')) live.innerHTML = '';
-    const row = document.createElement('div');
-    row.innerHTML = `<code>${H(d.event.method)} ${H(d.event.url)}</code> —
-      <b>${H(d.verdict.cls || 'benign')}</b> — ${H(d.result.action)}${d.result.enforced ? ' <b>(blocked)</b>' : ''}`;
-    live.prepend(row);
-    while (live.childElementCount > 200) live.lastElementChild.remove();
-  };
 }
 
 // ===== DASHBOARD =====

@@ -4870,6 +4870,53 @@ function verifyDefenderKey(key) {
 // Limit each SDK batch; accepted events are persisted per organization.
 const SDK_REPORT_MAX = 200;
 
+const CISA_KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
+const CISA_KEV_TTL_MS = 6 * 60 * 60_000;
+let cisaKevCache = null;
+let cisaKevRequest = null;
+
+async function loadCisaKev() {
+  if (cisaKevCache && Date.now() - cisaKevCache.fetchedAt < CISA_KEV_TTL_MS) return cisaKevCache;
+  if (cisaKevRequest) return cisaKevRequest;
+  cisaKevRequest = (async () => {
+    try {
+      const response = await fetch(CISA_KEV_URL, {
+        headers: { accept: 'application/json', 'user-agent': 'Securovix-Shannon/1.0 threat-intelligence' },
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!response.ok) throw new Error(`CISA KEV returned HTTP ${response.status}`);
+      const raw = await response.text();
+      if (raw.length > 12_000_000) throw new Error('CISA KEV response exceeded the safety limit');
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed.vulnerabilities)) throw new Error('CISA KEV response is invalid');
+      const vulnerabilities = parsed.vulnerabilities.map((item) => ({
+        cveId: String(item.cveID || '').slice(0, 32),
+        vendor: String(item.vendorProject || '').slice(0, 120),
+        product: String(item.product || '').slice(0, 160),
+        name: String(item.vulnerabilityName || '').slice(0, 240),
+        dateAdded: String(item.dateAdded || '').slice(0, 20),
+        dueDate: String(item.dueDate || '').slice(0, 20),
+        ransomwareUse: String(item.knownRansomwareCampaignUse || 'Unknown').slice(0, 24),
+        action: String(item.requiredAction || '').slice(0, 600),
+        notes: String(item.notes || '').slice(0, 500),
+      })).filter((item) => /^CVE-\d{4}-\d+$/i.test(item.cveId));
+      cisaKevCache = {
+        fetchedAt: Date.now(),
+        catalogVersion: String(parsed.catalogVersion || '').slice(0, 40),
+        dateReleased: String(parsed.dateReleased || '').slice(0, 60),
+        vulnerabilities,
+      };
+      return cisaKevCache;
+    } catch (error) {
+      if (cisaKevCache) return { ...cisaKevCache, stale: true, warning: String(error?.message || error).slice(0, 200) };
+      throw error;
+    } finally {
+      cisaKevRequest = null;
+    }
+  })();
+  return cisaKevRequest;
+}
+
 function defenderSeverity(cls) {
   const value = String(cls || '').toLowerCase();
   if (/(rce|command|sqli|auth-bypass|metadata)/.test(value)) return 'critical';
@@ -4944,6 +4991,35 @@ app.get('/api/defender/events', (req, res) => {
   if (severity) events = events.filter((event) => event.severity === severity);
   if (status) events = events.filter((event) => event.status === status);
   res.json({ ok: true, events });
+});
+
+app.get('/api/defender/intelligence', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  if (limited(req, res, `defender-intelligence:${ctx.org.id}`, 60, 5 * 60_000)) return;
+  const query = String(req.query.q || '').trim().toLowerCase().slice(0, 120);
+  try {
+    const catalog = await loadCisaKev();
+    let matches = catalog.vulnerabilities;
+    if (query) {
+      matches = matches.filter((item) => [item.cveId, item.vendor, item.product, item.name]
+        .some((value) => value.toLowerCase().includes(query)));
+    }
+    res.json({
+      ok: true,
+      source: 'CISA Known Exploited Vulnerabilities',
+      sourceUrl: 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog',
+      catalogVersion: catalog.catalogVersion,
+      dateReleased: catalog.dateReleased,
+      fetchedAt: new Date(catalog.fetchedAt).toISOString(),
+      stale: catalog.stale === true,
+      total: catalog.vulnerabilities.length,
+      matchCount: matches.length,
+      vulnerabilities: matches.slice(0, 20),
+    });
+  } catch (error) {
+    res.status(503).json({ error: 'Threat intelligence is temporarily unavailable.', detail: String(error?.message || error).slice(0, 200) });
+  }
 });
 
 app.get('/api/defender/program', async (req, res) => {
@@ -5230,6 +5306,12 @@ const defenders = new Map(); // id -> { system, runtime, sseClients, events }
 const MAX_DEFENDERS_PER_USER = 5;
 const DEF_REPLAY = 50; // events replayed to a new SSE client so the feed is not blank on connect
 
+function localDefenderUnavailable(req, res) {
+  if (process.env.NODE_ENV !== 'production') return false;
+  res.status(404).json({ error: 'Local diagnostic Defender is disabled in production. Use Edge routes or the organization SDK.' });
+  return true;
+}
+
 function defBroadcast(entry, payload) {
   const line = `data: ${JSON.stringify(payload)}\n\n`;
   for (const c of entry.sseClients) {
@@ -5240,6 +5322,7 @@ function defBroadcast(entry, payload) {
 }
 
 app.post('/api/defender/connect', async (req, res) => {
+  if (localDefenderUnavailable(req, res)) return;
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const user = ctx.user;
@@ -5323,6 +5406,7 @@ app.post('/api/defender/connect', async (req, res) => {
 });
 
 app.get('/api/defender/list', (req, res) => {
+  if (localDefenderUnavailable(req, res)) return;
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const rows = [...defenders.values()]
@@ -5371,6 +5455,7 @@ app.get('/api/defender/overview', (req, res) => {
 });
 
 app.post('/api/defender/:id/mode', (req, res) => {
+  if (localDefenderUnavailable(req, res)) return;
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const user = ctx.user;
@@ -5385,6 +5470,7 @@ app.post('/api/defender/:id/mode', (req, res) => {
 });
 
 app.post('/api/defender/:id/disconnect', async (req, res) => {
+  if (localDefenderUnavailable(req, res)) return;
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const user = ctx.user;
@@ -5405,6 +5491,7 @@ app.post('/api/defender/:id/disconnect', async (req, res) => {
 });
 
 app.get('/api/defender/:id/events', (req, res) => {
+  if (localDefenderUnavailable(req, res)) return;
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const entry = defenders.get(req.params.id);
