@@ -2487,6 +2487,60 @@ app.delete('/api/team/:orgId/ai-providers/:provider', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Repository automation credentials are organization-scoped and encrypted with the same
+// envelope used for AI, OIDC, SCIM, and connector secrets. The token is never returned.
+app.get('/api/team/:orgId/repository-provider', async (req, res) => {
+  const ctx = orgContext(req, res, 'settings.manage');
+  if (!ctx) return;
+  const row = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
+  res.json({
+    ok: true,
+    provider: 'github',
+    configured: !!row?.secretEnc,
+    repo: String(row?.config?.repo || ''),
+    updatedAt: row?.updatedAt || null,
+  });
+});
+
+app.put('/api/team/:orgId/repository-provider', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  const token = String(req.body?.token || '').trim();
+  const repo = String(req.body?.repo || '').trim();
+  if (repo && (!/^[^\s/]+\/[^\s/]+$/.test(repo) || repo.length > 240)) {
+    return res.status(400).json({ error: 'Default repository must use owner/repository format.' });
+  }
+  const previous = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
+  let previousSecret = {};
+  try { previousSecret = previous ? decryptSecret(previous.secretEnc) || {} : {}; } catch {}
+  const selectedToken = token || String(previousSecret.token || '');
+  if (selectedToken.length < 20 || selectedToken.length > 8_192) {
+    return res.status(400).json({ error: 'A valid GitHub token is required.' });
+  }
+  const now = Date.now();
+  await saveOrgSecret({
+    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`,
+    orgId: ctx.org.id,
+    kind: 'repository-provider',
+    name: 'github',
+    config: { repo },
+    secretEnc: encryptSecret({ token: selectedToken }),
+    createdBy: previous?.createdBy || ctx.user.id,
+    createdAt: previous?.createdAt || now,
+    updatedAt: now,
+  });
+  audit(ctx, previous ? 'repository_provider.rotated' : 'repository_provider.created', 'repository-provider', 'github', { repo });
+  res.json({ ok: true, provider: 'github', configured: true, repo, updatedAt: now });
+});
+
+app.delete('/api/team/:orgId/repository-provider', async (req, res) => {
+  const ctx = orgContext(req, res, 'integrations.manage');
+  if (!ctx) return;
+  await deleteOrgSecret(ctx.org.id, 'repository-provider', 'github');
+  audit(ctx, 'repository_provider.deleted', 'repository-provider', 'github');
+  res.json({ ok: true });
+});
+
 // ---- API: Team workspaces --------------------------------------------------
 app.get('/api/team/context', (req, res) => {
   const user = getUser(req);
@@ -4140,24 +4194,27 @@ app.post('/api/agent/patch', async (req, res) => {
   res.json({ ok: true, patch });
 });
 
-// OPEN A PULL REQUEST with a fix. The GitHub token is supplied per-request (stored only in the caller's
-// browser, never persisted here) and acts on repos that token already authorizes — the final auto-patch
-// step. This is the only piece that needs a credential.
+// OPEN A PULL REQUEST with a fix. Production credentials come from the encrypted organization
+// secret store. A per-request token remains accepted only for backward-compatible API clients.
 app.post('/api/agent/pr', async (req, res) => {
   const ctx = requirePermission(req, res, 'findings.remediate');
   if (!ctx) return;
   const { repo, path: filePath, content, token, finding } = req.body || {};
-  const tok = (token || process.env.GITHUB_TOKEN || '').trim();
+  const provider = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
+  let providerSecret = {};
+  try { providerSecret = provider ? decryptSecret(provider.secretEnc) || {} : {}; } catch {}
+  const tok = String(token || providerSecret.token || process.env.GITHUB_TOKEN || '').trim();
+  const selectedRepo = String(repo || provider?.config?.repo || '').trim();
   if (!tok)
-    return res.status(400).json({ error: 'Add a GitHub token (repo scope) to open PRs — it stays in your browser.' });
-  if (!repo || !filePath || !content)
+    return res.status(400).json({ error: 'Configure the organization GitHub credential in Settings before opening PRs.' });
+  if (!selectedRepo || !filePath || !content)
     return res.status(400).json({ error: 'Provide the repo, file path, and the fixed content.' });
   const cls = String(finding?.cls || finding?.tool || 'vulnerability').replace(/^impact[-:]/, '');
   const title = `fix(security): ${cls} in ${filePath}`;
   const body = `Automated fix suggested by **Securovix Shannon** for a proven \`${cls}\` finding.\n\n> ⚠️ Suggested patch — review before merging; not verified against the full codebase.`;
   try {
-    const out = await openPullRequest({ token: tok, repo, path: filePath, content, title, body });
-    audit(ctx, 'remediation.pull_request_opened', 'repository', repo, { path: filePath, cls, url: out.url });
+    const out = await openPullRequest({ token: tok, repo: selectedRepo, path: filePath, content, title, body });
+    audit(ctx, 'remediation.pull_request_opened', 'repository', selectedRepo, { path: filePath, cls, url: out.url });
     res.json({ ok: true, url: out.url, branch: out.branch });
   } catch (e) {
     res.status(502).json({ error: `Could not open PR: ${e.message}` });
@@ -4702,6 +4759,33 @@ app.get('/api/system/readiness', async (req, res) => {
     { key: 'incident-contact', label: 'Security incident contact', status: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(process.env.SHANNON_SECURITY_CONTACT || '') ? 'ready' : 'configure', detail: process.env.SHANNON_SECURITY_CONTACT || 'Set the monitored security contact address' },
     { key: 'billing', label: 'Stripe billing', status: billingEnabled() ? 'ready' : 'optional', detail: billingEnabled() ? 'Checkout and signed webhooks configured' : 'Optional; paid checkout remains disabled' },
   ];
+  const operatorActions = {
+    backups: {
+      owner: 'Platform operations',
+      cadence: 'Quarterly',
+      environmentVariable: 'SHANNON_BACKUPS_VERIFIED_AT',
+      steps: [
+        'Confirm Supabase production backups or PITR are enabled and record the real retention period.',
+        'Restore the newest backup into a separate non-production Supabase project; never overwrite production for a test.',
+        'Start a staging Dashboard against the restore and verify users, organizations, findings, Defender events, encrypted-secret access, and a private artifact download.',
+        'Save the evidence and UTC completion date, then set SHANNON_BACKUPS_VERIFIED_AT=YYYY-MM-DD on the Railway Dashboard service and redeploy.',
+      ],
+    },
+    alerts: {
+      owner: 'On-call operations',
+      cadence: 'Monthly',
+      environmentVariable: 'SHANNON_ALERTS_VERIFIED_AT',
+      steps: [
+        'Configure Railway deployment/crash alerts for Dashboard, Worker, and Defender Edge, plus an external HTTPS check for the Sandbox Runner.',
+        'Trigger a controlled staging failure and confirm the alert reaches the monitored on-call destination.',
+        'Record delivery time, acknowledgement, owner, and evidence without copying secrets into the ticket.',
+        'Set SHANNON_ALERTS_VERIFIED_AT=YYYY-MM-DD on the Railway Dashboard service and redeploy.',
+      ],
+    },
+  };
+  for (const check of checks) {
+    if (operatorActions[check.key]) check.action = operatorActions[check.key];
+  }
   const requiredKeys = new Set(['database', 'secrets', 'public-url', 'email', 'worker', 'browser', 'metrics', 'backups', 'alerts', 'incident-contact']);
   const required = checks.filter((item) => requiredKeys.has(item.key));
   res.json({

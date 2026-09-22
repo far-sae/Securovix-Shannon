@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import http from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -47,6 +47,18 @@ async function signup(email, name) {
   assert.equal(out.response.status, 200);
   return { ...out, cookie: out.setCookie.split(';')[0] };
 }
+
+test('production dashboard UI parses and never persists remediation tokens in browser storage', () => {
+  const html = readFileSync(join(process.cwd(), 'packages', 'dashboard', 'public', 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /localStorage\.setItem\([^)]*shannon_gh_(?:token|repo)/);
+  assert.doesNotMatch(html, /localStorage\.getItem\([^)]*shannon_gh_(?:token|repo)/);
+  assert.match(html, /LEGACY_GITHUB_STORAGE_KEYS/);
+  assert.match(html, /repository-provider/);
+  assert.match(html, /Production control plane/);
+  const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map((match) => match[1]).filter(Boolean);
+  assert.ok(scripts.length > 0);
+  for (const source of scripts) new Function(source);
+});
 
 test('dashboard APIs require authentication and enforce organization roles', async () => {
   const anonymous = await request('/api/scans');
@@ -147,6 +159,18 @@ test('organization AI keys and SCIM credentials are encrypted and tenant scoped'
   assert.ok(!JSON.stringify(statuses.json).includes(apiKey));
   const stored = await enterpriseDatabase.getOrgSecret(orgId, 'ai-provider', 'claude');
   assert.equal(decryptSecret(stored.secretEnc).apiKey, apiKey);
+
+  const githubToken = 'github_pat_customer-private-value';
+  const github = await request(`/api/team/${orgId}/repository-provider`, {
+    method: 'PUT', cookie: owner.cookie, body: { token: githubToken, repo: 'customer/private-app' },
+  });
+  assert.equal(github.response.status, 200);
+  const githubStatus = await request(`/api/team/${orgId}/repository-provider`, { cookie: owner.cookie });
+  assert.equal(githubStatus.json.configured, true);
+  assert.equal(githubStatus.json.repo, 'customer/private-app');
+  assert.ok(!JSON.stringify(githubStatus.json).includes(githubToken));
+  const storedGithub = await enterpriseDatabase.getOrgSecret(orgId, 'repository-provider', 'github');
+  assert.equal(decryptSecret(storedGithub.secretEnc).token, githubToken);
 
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => String(url) === 'https://1.1.1.1/.well-known/openid-configuration'
@@ -311,6 +335,8 @@ test('production readiness reports real dependencies and billing never grants fa
   assert.ok(readiness.json.checks.some((item) => item.key === 'worker'));
   assert.ok(readiness.json.checks.some((item) => item.key === 'browser'));
   assert.ok(readiness.json.checks.some((item) => item.key === 'sandbox'));
+  assert.equal(readiness.json.checks.find((item) => item.key === 'backups').action.environmentVariable, 'SHANNON_BACKUPS_VERIFIED_AT');
+  assert.equal(readiness.json.checks.find((item) => item.key === 'alerts').action.environmentVariable, 'SHANNON_ALERTS_VERIFIED_AT');
 
   const plans = await request('/api/auth/plans');
   assert.equal(plans.response.status, 200);
