@@ -54,9 +54,12 @@ test('production dashboard UI parses and never persists remediation tokens in br
   assert.doesNotMatch(html, /localStorage\.getItem\([^)]*shannon_gh_(?:token|repo)/);
   assert.match(html, /LEGACY_GITHUB_STORAGE_KEYS/);
   assert.match(html, /repository-provider/);
-  assert.match(html, /Production control plane/);
+  assert.doesNotMatch(html, /Production control plane/);
   assert.match(html, /Exploited vulnerability intelligence/);
   assert.match(html, /\/defender\/intelligence/);
+  assert.match(html, /Connect an alert destination/);
+  assert.match(html, /Create finding \+ notify/);
+  assert.doesNotMatch(html, /prompt\('Integration type/);
   assert.doesNotMatch(html, /Developer tools · local diagnostic proxy/);
   const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map((match) => match[1]).filter(Boolean);
   assert.ok(scripts.length > 0);
@@ -215,6 +218,34 @@ test('organization AI keys and SCIM credentials are encrypted and tenant scoped'
   assert.equal(removedFirst.response.status, 204);
   const stillInSecond = await request(`/scim/v2/orgs/${secondOrgId}/Users/${provisioned.json.id}`, { headers: { authorization: `Bearer ${secondScim.json.token}` } });
   assert.equal(stillInSecond.response.status, 200);
+});
+
+test('customer alert integrations encrypt credentials and receive vulnerability findings', async () => {
+  const owner = await signup('integration-owner@example.test', 'Integration Owner');
+  const orgId = owner.json.organizations[0].id;
+  const webhookUrl = 'https://hooks.slack.com/services/customer/private/value';
+  const saved = await request(`/api/team/${orgId}/integrations`, {
+    method: 'POST', cookie: owner.cookie,
+    body: { type: 'slack', name: 'SOC Slack', config: {}, secret: { webhookUrl } },
+  });
+  assert.equal(saved.response.status, 201);
+  assert.ok(!JSON.stringify(saved.json).includes(webhookUrl));
+  const integration = await enterpriseDatabase.getIntegration(orgId, saved.json.integration.id);
+  assert.equal(decryptSecret(integration.secretEnc).webhookUrl, webhookUrl);
+
+  const invalid = await request(`/api/team/${orgId}/integrations`, {
+    method: 'POST', cookie: owner.cookie,
+    body: { type: 'siem-http', name: 'Unsafe collector', config: { url: 'http://collector.example.test' }, secret: {} },
+  });
+  assert.equal(invalid.response.status, 400);
+
+  const finding = await request(`/api/team/${orgId}/findings`, {
+    method: 'POST', cookie: owner.cookie,
+    body: { title: 'CVE-2026-99999 · Example Product', severity: 'high', source: 'cisa-kev', details: { cveId: 'CVE-2026-99999' } },
+  });
+  assert.equal(finding.response.status, 201);
+  const jobs = await request(`/api/team/${orgId}/jobs`, { cookie: owner.cookie });
+  assert.ok(jobs.json.jobs.some((job) => job.type === 'integration-delivery'));
 });
 
 test('authenticated scan sessions use exact-origin, encrypted, single-use grants', async () => {

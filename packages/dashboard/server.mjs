@@ -2804,7 +2804,13 @@ function integrationInput(type, rawConfig, rawSecret, existingHasSecret = false)
     if (rawSecret?.[key] === undefined) continue;
     if (key === 'headers') {
       if (!rawSecret.headers || typeof rawSecret.headers !== 'object' || Array.isArray(rawSecret.headers)) throw new Error('headers must be an object.');
-      secret.headers = Object.fromEntries(Object.entries(rawSecret.headers).slice(0, 20).map(([name, value]) => [String(name).slice(0, 100), String(value).slice(0, 2000)]));
+      secret.headers = Object.fromEntries(Object.entries(rawSecret.headers).slice(0, 20).map(([name, value]) => {
+        const headerName = String(name).slice(0, 100);
+        const headerValue = String(value).slice(0, 2000);
+        if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(headerName) || /[\r\n]/.test(headerValue)) throw new Error('headers contain an invalid name or value.');
+        if (['host', 'content-length', 'transfer-encoding', 'connection'].includes(headerName.toLowerCase())) throw new Error(`${headerName} cannot be overridden.`);
+        return [headerName, headerValue];
+      }));
     } else secret[key] = String(rawSecret[key]).trim().slice(0, 4096);
   }
   const required = {
@@ -2816,6 +2822,12 @@ function integrationInput(type, rawConfig, rawSecret, existingHasSecret = false)
     const [group, key] = path.split('.');
     if (group === 'secret' && existingHasSecret && rawSecret === undefined) continue;
     if (!(group === 'config' ? config : secret)[key]) throw new Error(`${path} is required.`);
+  }
+  for (const [label, value] of [['config.url', config.url], ['config.baseUrl', config.baseUrl], ['secret.webhookUrl', secret.webhookUrl]]) {
+    if (!value) continue;
+    let parsed;
+    try { parsed = new URL(value); } catch { throw new Error(`${label} must be a valid HTTPS URL.`); }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error(`${label} must be an HTTPS URL without embedded credentials.`);
   }
   return { config, secret };
 }

@@ -1766,11 +1766,12 @@ async function pgTeam(){
     const active=tc.active;
     if(!active){M.innerHTML='<div class="pg"><div class="empty"><h2>No organization available</h2></div></div>';return}
     const orgId=active.organization.id,role=active.role;
-    const [mm,pp,ff,aa,ii,jj]=await Promise.all([
+    const [mm,pp,ff,aa,ii,jj,dd]=await Promise.all([
       api(`/team/${orgId}/members`),api(`/team/${orgId}/projects`),api(`/team/${orgId}/findings`),
       api(`/team/${orgId}/audit?limit=40`).catch(()=>({events:[]})),
       api(`/team/${orgId}/integrations`).catch(()=>({integrations:[]})),
       api(`/team/${orgId}/jobs?limit=20`).catch(()=>({jobs:[]})),
+      api(`/team/${orgId}/deliveries?limit=40`).catch(()=>({deliveries:[]})),
     ]);
     const canManage=['owner','admin'].includes(role),canProject=['owner','admin','engineer'].includes(role);
     const canTriage=['owner','admin','engineer','analyst'].includes(role);
@@ -1778,6 +1779,7 @@ async function pgTeam(){
     const critical=open.filter(f=>f.severity==='critical').length;
     const activeWork=open.filter(f=>['assigned','in-progress','ready-for-retest'].includes(f.status)).length;
     const failedJobs=jj.jobs.filter(j=>['failed','dead-letter'].includes(j.status)).length;
+    const latestDelivery=new Map();for(const d of (dd.deliveries||[]))if(!latestDelivery.has(d.integrationId))latestDelivery.set(d.integrationId,d);
     const kpi=(label,value,tone,detail)=>`<article class="team-kpi ${tone||''}"><span>${H(label)}</span><strong>${value}</strong><small>${H(detail)}</small></article>`;
     const statuses=['new','triaged','assigned','in-progress','ready-for-retest','resolved','risk-accepted','false-positive'];
     M.innerHTML=`<style>
@@ -1800,6 +1802,8 @@ async function pgTeam(){
       .team-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.team-actions .btn{padding:6px 9px;font-size:10.5px}
       .team-ops{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}.team-scroll{max-height:390px;overflow:auto;padding-right:3px}
       .team-empty{padding:25px 12px;text-align:center;color:var(--t3);font-size:12px;border:1px dashed var(--brd);border-radius:10px}.team-footer{display:flex;justify-content:flex-end;margin-top:16px}
+      .team-integration{padding:13px;border:1px solid var(--brd);border-radius:11px;background:rgba(0,0,0,.12);margin-bottom:8px}.team-integration:last-child{margin-bottom:0}.team-integration-top{display:flex;align-items:flex-start;gap:10px}.team-integration-logo{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;border:1px solid var(--brd2);background:var(--bg);font-size:10px;font-weight:900;color:var(--acc2);text-transform:uppercase}.team-integration-copy{flex:1;min-width:0}.team-integration-copy b{display:block;font-size:12.5px}.team-integration-copy small{display:block;font-size:10.5px;color:var(--t3);margin-top:3px}.team-integration-status{margin-top:9px;padding-top:9px;border-top:1px solid var(--brd);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.team-integration-status small{font-size:10px;color:var(--t3)}
+      .int-overlay{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);display:grid;place-items:center;padding:18px}.int-modal{width:min(680px,100%);max-height:92vh;overflow:auto;background:var(--s1);border:1px solid var(--brd2);border-radius:16px;box-shadow:0 28px 90px rgba(0,0,0,.65)}.int-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 22px;border-bottom:1px solid var(--brd)}.int-head h2{margin:0;font-size:19px}.int-head p{margin:5px 0 0;color:var(--t3);font-size:11px}.int-body{padding:22px}.int-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.int-field{display:grid;gap:6px}.int-field.full{grid-column:1/-1}.int-field label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--t3);font-weight:700}.int-field textarea{min-height:82px;resize:vertical}.int-note{font-size:10.5px;color:var(--t3);line-height:1.5;margin:12px 0}.int-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:18px}.int-actions .int-msg{margin-right:auto;font-size:11px}.int-secret{border-left:2px solid rgba(212,247,69,.38);padding-left:10px}
       @media(max-width:1080px){.team-layout{grid-template-columns:1fr}.team-side{grid-template-columns:repeat(2,minmax(0,1fr))}.team-ops{grid-template-columns:1fr 1fr}}
       @media(max-width:760px){.team-head{align-items:stretch;flex-direction:column}.team-org{justify-content:flex-start}.team-org .fi{width:100%;min-width:0}.team-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.team-side,.team-ops{grid-template-columns:1fr}.team-finding{grid-template-columns:72px minmax(0,1fr)}.team-finding>:last-child{grid-column:1/-1}.team-form{grid-template-columns:minmax(0,1fr) 110px}.team-form .btn{grid-column:1/-1}.team-actions{justify-content:flex-start}}
       @media(max-width:480px){.team-pg{padding-left:14px;padding-right:14px}.team-kpis{grid-template-columns:1fr 1fr;gap:8px}.team-kpi{min-height:98px;padding:14px}.team-card{padding:16px}.team-org{align-items:stretch;flex-direction:column}.team-finding{grid-template-columns:1fr}.team-finding>:last-child{grid-column:auto}.team-form{grid-template-columns:1fr}.team-form .btn{grid-column:auto}}
@@ -1810,7 +1814,7 @@ async function pgTeam(){
       <div class="team-layout">
         <main class="team-stack"><section class="team-card"><div class="team-card-head"><h2>${ico('shield',{cls:'ico-sm'})} Finding queue</h2><small>${open.length} open · ${ff.findings.length} total</small></div>
           <div class="team-findings team-scroll">${ff.findings.length?ff.findings.map(f=>`<div class="team-finding"><span class="bx ${f.severity==='critical'?'bx-r':f.severity==='high'?'bx-o':f.severity==='low'?'bx-g':'bx-b'}">${H(f.severity)}</span><div class="team-finding-main"><b>${H(f.title)}</b><div class="team-meta">${H(f.source)} · ${H(f.assigneeUserId||'unassigned')} · ${fmtDate(f.updatedAt||f.createdAt)}</div></div>${canTriage?`<select class="fi" aria-label="Finding status" onchange="teamFindingStatus('${H(orgId)}','${H(f.id)}',this.value)">${statuses.map(s=>`<option ${s===f.status?'selected':''}>${s}</option>`).join('')}</select>`:`<span class="bx">${H(f.status)}</span>`}</div>`).join(''):'<div class="team-empty">No shared findings yet. Confirmed scan findings appear here automatically.</div>'}</div></section>
-          <div class="team-ops"><section class="team-card"><div class="team-card-head"><h2>${ico('zap',{cls:'ico-sm'})} Integrations</h2>${canManage?`<button class="btn btn-g" onclick="teamAddIntegration('${H(orgId)}')">+ Add</button>`:''}</div><div class="team-list">${ii.integrations.map(i=>`<div class="team-row"><div class="team-row-main"><b>${H(i.name)}</b><small>${H(i.type)} · ${i.enabled?'enabled':'disabled'} · secret ${i.hasSecret?'stored':'missing'}</small></div><span class="bx ${i.enabled?'bx-g':''}">${i.enabled?'active':'off'}</span>${canManage?`<div class="team-actions"><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Test</button><button class="btn btn-g" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Delete</button></div>`:''}</div>`).join('')||'<div class="team-empty">No delivery integrations configured.</div>'}</div></section>
+          <div class="team-ops"><section class="team-card"><div class="team-card-head"><div><h2>${ico('zap',{cls:'ico-sm'})} Alert integrations</h2><small>encrypted organization delivery channels</small></div>${canManage?`<button class="btn btn-p" onclick="teamIntegrationOpen('${H(orgId)}')">Connect service</button>`:''}</div><div>${ii.integrations.map(i=>{const d=latestDelivery.get(i.id);return `<article class="team-integration"><div class="team-integration-top"><span class="team-integration-logo">${H(i.type==='siem-http'?'SIEM':i.type.slice(0,3))}</span><div class="team-integration-copy"><b>${H(i.name)}</b><small>${H(i.type)} · credentials ${i.hasSecret?'encrypted':'missing'}</small></div><span class="bx ${i.enabled?'bx-g':''}">${i.enabled?'active':'paused'}</span></div><div class="team-integration-status"><small id="team-int-msg-${H(i.id)}">${d?`Last delivery ${H(d.status)} · ${fmtDate(d.completedAt||d.createdAt)}`:'No delivery attempted yet'}</small>${canManage?`<div class="team-actions"><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Send test</button><button class="btn" onclick="teamIntegrationToggle('${H(orgId)}','${H(i.id)}',${i.enabled?'false':'true'})">${i.enabled?'Pause':'Enable'}</button><button class="btn" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Remove</button></div>`:''}</div></article>`}).join('')||'<div class="team-empty">Connect Slack, Microsoft Teams, Jira, Linear, a webhook, or your SIEM. Defender incidents and findings will be delivered automatically.</div>'}</div></section>
             <section class="team-card"><div class="team-card-head"><h2>${ico('list',{cls:'ico-sm'})} Durable jobs</h2><small>latest ${Math.min(jj.jobs.length,20)}</small></div><div class="team-list team-scroll">${jj.jobs.slice(0,20).map(j=>`<div class="team-row"><div class="team-row-main"><b>${H(j.type)}</b><small>${H(j.id)} · attempt ${j.attempts}/${j.maxAttempts}</small></div><span class="bx ${j.status==='succeeded'?'bx-g':j.status==='dead-letter'?'bx-r':j.status==='running'?'bx-o':''}">${H(j.status)}</span></div>`).join('')||'<div class="team-empty">No durable jobs yet.</div>'}</div></section></div>
           <section class="team-card"><div class="team-card-head"><h2>${ico('file-text',{cls:'ico-sm'})} Audit trail</h2><small>organization activity</small></div><div class="team-list team-scroll">${aa.events.slice(0,40).map(e=>`<div class="team-row"><div class="team-row-main"><b>${H(e.action)}</b><small>${H(e.resourceType)} ${H(e.resourceId||'')} · actor ${H(e.actorUserId||'system')}</small></div><small>${fmtDate(e.createdAt)}</small></div>`).join('')||'<div class="team-empty">No audit events yet.</div>'}</div></section>
         </main>
@@ -1824,16 +1828,35 @@ async function pgTeam(){
 async function teamSwitch(orgId){await api('/team/active',{method:'POST',body:JSON.stringify({orgId})});pgTeam()}
 async function teamCreateOrg(){const name=prompt('Organization name');if(!name)return;const x=await api('/team/organizations',{method:'POST',body:JSON.stringify({name})});await teamSwitch(x.organization.id)}
 async function teamInviteMember(orgId){const email=$('tm-email').value.trim(),role=$('tm-role').value;try{await api(`/team/${orgId}/invitations`,{method:'POST',body:JSON.stringify({email,role})});alert('Invitation sent to '+email);pgTeam()}catch(e){alert(e.detail||e.message)}}
-async function teamAddIntegration(orgId){
-  const type=(prompt('Integration type: webhook, siem-http, slack, teams, jira, or linear','slack')||'').trim();if(!type)return;
-  const name=(prompt('Display name',type)||'').trim();if(!name)return;const config={},secret={};
-  if(['webhook','siem-http'].includes(type)){config.url=prompt('HTTPS destination URL')||'';secret.token=prompt('Bearer token (optional)')||''}
-  if(['slack','teams'].includes(type))secret.webhookUrl=prompt('Webhook URL')||'';
-  if(type==='jira'){config.baseUrl=prompt('Jira base URL, e.g. https://company.atlassian.net')||'';config.projectKey=prompt('Project key')||'';config.issueType=prompt('Issue type','Task')||'Task';secret.email=prompt('Jira account email')||'';secret.apiToken=prompt('Jira API token')||''}
-  if(type==='linear'){config.teamId=prompt('Linear team ID')||'';secret.apiKey=prompt('Linear API key')||''}
-  try{await api(`/team/${orgId}/integrations`,{method:'POST',body:JSON.stringify({type,name,config,secret})});pgTeam()}catch(e){alert(e.detail||e.message)}
+const TEAM_INTEGRATION_LABELS={slack:'Slack',teams:'Microsoft Teams',jira:'Jira Cloud',linear:'Linear',webhook:'Generic webhook','siem-http':'SIEM HTTP collector'};
+function teamIntegrationClose(){const el=$('team-integration-modal');if(el)el.remove()}
+function teamIntegrationOpen(orgId){
+  teamIntegrationClose();
+  document.body.insertAdjacentHTML('beforeend',`<div class="int-overlay" id="team-integration-modal" role="dialog" aria-modal="true" aria-labelledby="int-title" onclick="if(event.target===this)teamIntegrationClose()"><section class="int-modal"><header class="int-head"><div><h2 id="int-title">Connect an alert destination</h2><p>Credentials are encrypted for this organization and are never returned by the API.</p></div><button class="btn" onclick="teamIntegrationClose()" aria-label="Close">Close</button></header><div class="int-body"><div class="int-grid"><div class="int-field"><label for="int-type">Service</label><select class="fi" id="int-type" onchange="teamIntegrationFields()">${Object.entries(TEAM_INTEGRATION_LABELS).map(([value,label])=>`<option value="${value}">${H(label)}</option>`).join('')}</select></div><div class="int-field"><label for="int-name">Display name</label><input class="fi" id="int-name" maxlength="100" value="Security alerts" autocomplete="off"></div><div class="int-field full" id="int-fields"></div></div><p class="int-note">After saving, use <b>Send test</b>. Delivery runs through the durable worker with retries and appears in the integration status.</p><div class="int-actions"><span class="int-msg" id="int-msg" aria-live="polite"></span><button class="btn" onclick="teamIntegrationClose()">Cancel</button><button class="btn btn-p" id="int-save" onclick="teamIntegrationSave('${H(orgId)}')">Save encrypted integration</button></div></div></section></div>`);
+  teamIntegrationFields();
 }
-async function teamTestIntegration(orgId,id){try{await api(`/team/${orgId}/integrations/${id}/test`,{method:'POST'});alert('Test delivery queued.')}catch(e){alert(e.detail||e.message)}}
+function teamIntegrationFields(){
+  const type=$('int-type')?.value,box=$('int-fields');if(!box)return;
+  const field=(id,label,placeholder,secret=false,type='text')=>`<div class="int-field full ${secret?'int-secret':''}"><label for="${id}">${H(label)}${secret?' · encrypted':''}</label><input class="fi" id="${id}" type="${type}" placeholder="${H(placeholder)}" autocomplete="${secret?'new-password':'off'}" spellcheck="false"></div>`;
+  if(type==='slack')box.innerHTML=field('int-webhook','Slack incoming webhook URL','https://hooks.slack.com/services/…',true,'password');
+  else if(type==='teams')box.innerHTML=field('int-webhook','Teams workflow webhook URL','https://…logic.azure.com/…',true,'password');
+  else if(type==='jira')box.innerHTML=field('int-url','Jira base URL','https://company.atlassian.net')+`<div class="int-grid">${field('int-project','Project key','SEC')} ${field('int-issue','Issue type','Task')}</div>`+field('int-email','Jira account email','security@company.com',true,'email')+field('int-token','Jira API token','API token',true,'password');
+  else if(type==='linear')box.innerHTML=field('int-team','Linear team ID','team UUID')+field('int-token','Linear API key','lin_api_…',true,'password');
+  else box.innerHTML=field('int-url',type==='siem-http'?'SIEM HTTPS ingest URL':'HTTPS destination URL','https://collector.example.com/securovix')+field('int-token','Bearer token (optional)','Token',true,'password')+`<div class="int-field full int-secret"><label for="int-headers">Additional headers · encrypted JSON (optional)</label><textarea class="fi" id="int-headers" placeholder='{"X-API-Key":"…"}' spellcheck="false"></textarea></div>`;
+}
+async function teamIntegrationSave(orgId){
+  const type=$('int-type').value,name=$('int-name').value.trim(),config={},secret={},msg=$('int-msg'),button=$('int-save');
+  if(!name){msg.innerHTML='<span class="err">Enter a display name.</span>';return}
+  if(['slack','teams'].includes(type))secret.webhookUrl=$('int-webhook').value.trim();
+  else if(type==='jira'){config.baseUrl=$('int-url').value.trim();config.projectKey=$('int-project').value.trim();config.issueType=$('int-issue').value.trim()||'Task';secret.email=$('int-email').value.trim();secret.apiToken=$('int-token').value.trim()}
+  else if(type==='linear'){config.teamId=$('int-team').value.trim();secret.apiKey=$('int-token').value.trim()}
+  else{config.url=$('int-url').value.trim();secret.token=$('int-token').value.trim();const raw=$('int-headers').value.trim();if(raw){try{secret.headers=JSON.parse(raw);if(!secret.headers||Array.isArray(secret.headers)||typeof secret.headers!=='object')throw new Error()}catch{msg.innerHTML='<span class="err">Additional headers must be a JSON object.</span>';return}}}
+  const endpoint=secret.webhookUrl||config.url||config.baseUrl;if(endpoint){try{if(new URL(endpoint).protocol!=='https:')throw new Error()}catch{msg.innerHTML='<span class="err">Integration URLs must be valid HTTPS URLs.</span>';return}}
+  button.disabled=true;msg.innerHTML='<span class="sp"></span> Encrypting and saving…';
+  try{await api(`/team/${orgId}/integrations`,{method:'POST',body:JSON.stringify({type,name,config,secret})});teamIntegrationClose();pgTeam()}catch(e){button.disabled=false;msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}
+}
+async function teamIntegrationToggle(orgId,id,enabled){try{await api(`/team/${orgId}/integrations/${id}`,{method:'PATCH',body:JSON.stringify({enabled})});pgTeam()}catch(e){alert(e.detail||e.message)}}
+async function teamTestIntegration(orgId,id){const msg=$(`team-int-msg-${id}`);if(msg)msg.innerHTML='<span class="sp"></span> Test queued…';try{await api(`/team/${orgId}/integrations/${id}/test`,{method:'POST'});if(msg)msg.textContent='Test queued on the durable worker. Refresh shortly to see delivery result.'}catch(e){if(msg)msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
 async function teamDeleteIntegration(orgId,id){if(!confirm('Delete this integration?'))return;try{await api(`/team/${orgId}/integrations/${id}`,{method:'DELETE'});pgTeam()}catch(e){alert(e.detail||e.message)}}
 async function teamCreateProject(orgId){const name=$('tp-name').value.trim(),criticality=$('tp-criticality').value;try{await api(`/team/${orgId}/projects`,{method:'POST',body:JSON.stringify({name,criticality,environment:'production'})});pgTeam()}catch(e){alert(e.detail||e.message)}}
 async function teamFindingStatus(orgId,id,status){let body={status};if(['risk-accepted','false-positive'].includes(status)){body.reason=prompt('Reason (required)')||'';if(status==='risk-accepted')body.expiresAt=new Date(Date.now()+90*86400000).toISOString()}try{await api(`/team/${orgId}/findings/${id}`,{method:'PATCH',body:JSON.stringify(body)});pgTeam()}catch(e){alert(e.detail||e.message);pgTeam()}}
@@ -2704,6 +2727,7 @@ let DEF_OVERVIEW = { events: [], routes: [], systems: [], stats: {}, topClasses:
 let DEF_PROGRAM = { program: {}, assets: [], cycles: [] };
 let DEF_SDK_KEY = '';
 let DEF_SDK_SNIPPET = '';
+let DEF_INTEL_ITEMS = {};
 
 async function defRefreshAll() {
   const refresh = document.querySelector('.def-head-actions .btn-p');
@@ -2764,12 +2788,27 @@ async function defIntelLoad(query='') {
     const data=await api(`/defender/intelligence${query?`?q=${encodeURIComponent(query)}`:''}`);
     const released=data.dateReleased?fmtDate(data.dateReleased):'unknown release date';
     summary.innerHTML=`${Number(data.total||0).toLocaleString()} known exploited vulnerabilities · catalog ${H(data.catalogVersion||'current')} · released ${H(released)}${data.stale?' · <span class="err">cached copy</span>':''}`;
-    const rows=data.vulnerabilities||[];
-    results.innerHTML=rows.length?rows.map(item=>`<article class="def-intel-item"><b>${H(item.cveId)} · ${H(item.vendor)} ${H(item.product)}</b><small>${H(item.name)}</small><small>Added ${H(item.dateAdded||'unknown')} · remediation due ${H(item.dueDate||'not specified')}${String(item.ransomwareUse).toLowerCase()==='known'?' · known ransomware use':''}</small><small>${H(item.action)}</small></article>`).join(''):`<div class="def-empty">No CISA KEV entries match “${H(query)}”. This does not prove the product is vulnerability-free.</div>`;
+    const rows=data.vulnerabilities||[];DEF_INTEL_ITEMS=Object.fromEntries(rows.map(item=>[item.cveId,item]));
+    results.innerHTML=rows.length?rows.map(item=>`<article class="def-intel-item"><b>${H(item.cveId)} · ${H(item.vendor)} ${H(item.product)}</b><small>${H(item.name)}</small><small>Added ${H(item.dateAdded||'unknown')} · remediation due ${H(item.dueDate||'not specified')}${String(item.ransomwareUse).toLowerCase()==='known'?' · known ransomware use':''}</small><small>${H(item.action)}</small><div class="def-actions"><button class="btn btn-g" id="def-intel-add-${H(item.cveId)}" onclick="defIntelCreateFinding('${H(item.cveId)}')">Create finding + notify</button></div></article>`).join(''):`<div class="def-empty">No CISA KEV entries match “${H(query)}”. This does not prove the product is vulnerability-free.</div>`;
   }catch(error){
     summary.innerHTML=`<span class="err">${H(error.detail||error.message||'Threat intelligence is unavailable.')}</span>`;
     results.innerHTML='';
   }
+}
+
+async function defIntelCreateFinding(cveId){
+  const item=DEF_INTEL_ITEMS[cveId],button=$(`def-intel-add-${cveId}`);if(!item||!button)return;
+  button.disabled=true;button.textContent='Creating…';
+  try{
+    const context=await api('/team/context'),orgId=context.active?.organization?.id;if(!orgId)throw new Error('No active organization.');
+    await api(`/team/${encodeURIComponent(orgId)}/findings`,{method:'POST',body:JSON.stringify({
+      title:`${item.cveId} · ${item.vendor} ${item.product}`,
+      severity:String(item.ransomwareUse).toLowerCase()==='known'?'critical':'high',
+      source:'cisa-kev',target:`${item.vendor} ${item.product}`,
+      details:{cveId:item.cveId,vendor:item.vendor,product:item.product,name:item.name,dateAdded:item.dateAdded,dueDate:item.dueDate,knownRansomwareCampaignUse:item.ransomwareUse,requiredAction:item.action,sourceUrl:'https://www.cisa.gov/known-exploited-vulnerabilities-catalog'}
+    })});
+    button.textContent='Finding created · alerts queued';button.classList.add('btn-p');
+  }catch(error){button.disabled=false;button.textContent='Create finding + notify';alert(error.detail||error.message||'Could not create the vulnerability finding.')}
 }
 
 async function defProgramLoad() {
@@ -4752,24 +4791,13 @@ const PROVIDER_ROWS=[
   {field:'gemini',name:'Google — Gemini 2.5 Pro',     provider:'gemini',placeholder:'AIza…',            note:'aistudio.google.com → API keys',                            strength:'Huge context window — great for recon and chain analysis.',         getUrl:'https://aistudio.google.com/apikey',           getLabel:'aistudio.google.com',  short:'g',gradient:'background:radial-gradient(circle at 30% 30%,#7ab8ff,var(--bt) 60%,#1e3a8a)'},
   {field:'glm',   name:'Zhipu — GLM-4-Plus',          provider:'glm',   placeholder:'bigmodel api key', note:'open.bigmodel.cn → API keys',                               strength:'Cost-efficient — handy for high-volume blue-team passes.',           getUrl:'https://open.bigmodel.cn/usercenter/apikeys',  getLabel:'open.bigmodel.cn',     short:'Z',gradient:'background:radial-gradient(circle at 30% 30%,#aacfc4,#88b3a8 60%,#557b73)'},
 ];
-let SETTINGS_READINESS=null;
-function settingsCloseOpsGuide(){const el=$('ops-guide');if(el)el.remove()}
-function settingsReadinessGuide(key){
-  const check=(SETTINGS_READINESS?.checks||[]).find(item=>item.key===key),action=check?.action;
-  if(!check||!action)return;
-  settingsCloseOpsGuide();
-  const env=action.environmentVariable?`${action.environmentVariable}=YYYY-MM-DD`:'';
-  document.body.insertAdjacentHTML('beforeend',`<div class="ops-guide" id="ops-guide" role="dialog" aria-modal="true" aria-labelledby="ops-guide-title" onclick="if(event.target===this)settingsCloseOpsGuide()"><section class="ops-guide-card"><header class="ops-guide-head"><div><h2 id="ops-guide-title">${H(check.label)}</h2><p>${H(action.owner||'Platform operations')} · ${H(action.cadence||'Operational verification')}</p></div><button class="btn" onclick="settingsCloseOpsGuide()" aria-label="Close">Close</button></header><div class="ops-guide-body"><ol>${(action.steps||[]).map(step=>`<li>${H(step)}</li>`).join('')}</ol>${env?`<div class="ops-env">${H(env)}</div>`:''}<div class="ops-warning">This control becomes Ready only after the real test succeeds and evidence is retained. Do not set the date just to remove the yellow status.</div></div></section></div>`);
-}
-
 async function pgCfg(){
   await csRefreshKeys();
   await csRefreshRepositoryProvider();
   const stored=csLoadKeys();
   const ghTok=!!ORG_REPO_PROVIDER.configured;
   const ghRepo=ORG_REPO_PROVIDER.repo||'';
-  const [st,models,lb,readiness,identity,usage,plans]=await Promise.all([api('/settings'),api('/models'),api('/code-scan/leaderboard').catch(()=>({leaderboard:[]})),api('/system/readiness').catch(()=>null),api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity`).catch(()=>null),api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/usage`).catch(()=>null),api('/auth/plans').catch(()=>({plans:[],billingEnabled:false}))]);
-  SETTINGS_READINESS=readiness;
+  const [st,models,lb,identity,usage,plans]=await Promise.all([api('/settings'),api('/models'),api('/code-scan/leaderboard').catch(()=>({leaderboard:[]})),api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity`).catch(()=>null),api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/usage`).catch(()=>null),api('/auth/plans').catch(()=>({plans:[],billingEnabled:false}))]);
   const totalRuns=lb.leaderboard.reduce((a,r)=>a+(r.runs||0),0);
 
   const connectedCount=PROVIDER_ROWS.filter(p=>!!stored[p.field]).length;
@@ -4793,8 +4821,6 @@ async function pgCfg(){
 
     <div class="sec-kpis"><div class="sec-kpi ${claudeOk?'good':'warn'}"><span>Provider readiness</span><strong>${connectedCount}/4</strong><small>${claudeOk?'required fallback connected':'Anthropic key required'}</small></div><div class="sec-kpi ${CURRENT_USER?.mfaEnabled?'good':'warn'}"><span>Account MFA</span><strong>${CURRENT_USER?.mfaEnabled?'on':'off'}</strong><small>${CURRENT_USER?.mfaEnabled?'TOTP protects this account':'enable MFA for administrators'}</small></div><div class="sec-kpi ${ghTok?'good':''}"><span>Remediation PRs</span><strong>${ghTok?'ready':'not set'}</strong><small>${ghRepo?H(ghRepo):'optional GitHub integration'}</small></div><div class="sec-kpi"><span>Learning signal</span><strong>${totalRuns}</strong><small>scored war-room turns</small></div></div>
     <section class="sec-card settings-security"><div class="sec-card-head"><h2>${ico('shield-check',{cls:'ico-sm'})} Account security baseline</h2><small>account and organization controls</small></div><div class="settings-security-grid"><div class="sec-check"><span class="sec-check-mark ${CURRENT_USER?.mfaEnabled?'':'warn'}">${CURRENT_USER?.mfaEnabled?'✓':'!'}</span><div><b>Multi-factor authentication</b><small>${CURRENT_USER?.mfaEnabled?'Enabled for this account.':'Recommended for every owner and administrator.'}</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Provider credential isolation</b><small>Keys are encrypted per organization and never returned by the API.</small></div></div><div class="sec-check"><span class="sec-check-mark">✓</span><div><b>Organization authorization</b><small>Server-side role checks protect scans, findings, Defender, and settings.</small></div></div><div class="settings-security-actions"><button class="btn btn-p" onclick="authMfaManage()">${CURRENT_USER?.mfaEnabled?'Manage MFA':'Enable MFA'}</button><button class="btn btn-g" onclick="settingsClearProviderKeys()">Remove organization keys</button></div></div></section>
-
-    ${readiness?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><div><h2>${ico('gauge',{cls:'ico-sm'})} Production control plane</h2><small>live dependencies, operational evidence, and launch gates</small></div><button class="btn btn-g" style="padding:6px 10px;font-size:10px" onclick="pgCfg()">Refresh checks</button></div><div class="readiness-summary"><strong>${readiness.ready}/${readiness.required}</strong><span class="bx ${readiness.ok?'bx-g':'bx-y'}">${readiness.ok?'required controls verified':'action required before public launch'}</span><span style="color:var(--t3);font-size:10.5px">Checked ${fmtDate(readiness.generatedAt)}</span></div><div class="readiness-grid">${(readiness.checks||[]).map(c=>`<div class="readiness-row ${H(c.status)}"><span class="readiness-dot"></span><div class="readiness-main"><b>${H(c.label)} <span style="color:var(--t3);font-size:9px;text-transform:uppercase">· ${H(c.status)}</span></b><small>${H(c.detail||'')}</small></div>${c.action&&c.status!=='ready'?`<button class="readiness-action" onclick="settingsReadinessGuide('${H(c.key)}')">Setup steps</button>`:''}</div>`).join('')}</div></section>`:''}
 
     ${identity?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>${ico('lock',{cls:'ico-sm'})} Organization identity</h2><small>customer-specific SSO and provisioning</small></div><div class="readiness-grid"><div class="readiness-row ${identity.oidc?.configured?'ready':'optional'}"><span class="readiness-dot"></span><div><b>OIDC SSO</b><small>${identity.oidc?.configured?H(identity.oidc.issuer):'Not configured'}</small></div><button class="btn btn-g" onclick="settingsConfigureOidc()">${identity.oidc?.configured?'Rotate':'Configure'}</button>${identity.oidc?.configured?'<button class="btn" onclick="settingsDeleteIdentity(\'oidc\')">Remove</button>':''}</div><div class="readiness-row ${identity.scim?.configured?'ready':'optional'}"><span class="readiness-dot"></span><div><b>SCIM 2.0</b><small>${identity.scim?.configured?H(identity.scim.baseUrl):'Not configured'}</small></div><button class="btn btn-g" onclick="settingsRotateScim()">${identity.scim?.configured?'Rotate token':'Create token'}</button>${identity.scim?.configured?'<button class="btn" onclick="settingsDeleteIdentity(\'scim\')">Remove</button>':''}</div></div></section>`:''}
 
