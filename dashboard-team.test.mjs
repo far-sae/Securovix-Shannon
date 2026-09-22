@@ -74,6 +74,8 @@ test('dashboard APIs require authentication and enforce organization roles', asy
 
   const owner = await signup('owner@example.test', 'Owner');
   const orgId = owner.json.organizations[0].id;
+  const localDiagnostic = await request('/api/defender/list', { cookie: owner.cookie });
+  assert.equal(localDiagnostic.response.status, 404);
   const shield = await request('/api/personal-shield/analyze', {
     method: 'POST',
     cookie: owner.cookie,

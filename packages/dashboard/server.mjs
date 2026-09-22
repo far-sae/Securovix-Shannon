@@ -5307,7 +5307,7 @@ const MAX_DEFENDERS_PER_USER = 5;
 const DEF_REPLAY = 50; // events replayed to a new SSE client so the feed is not blank on connect
 
 function localDefenderUnavailable(req, res) {
-  if (process.env.NODE_ENV !== 'production') return false;
+  if (process.env.NODE_ENV !== 'production' && process.env.SHANNON_ENABLE_LOCAL_DEFENDER === '1') return false;
   res.status(404).json({ error: 'Local diagnostic Defender is disabled in production. Use Edge routes or the organization SDK.' });
   return true;
 }
