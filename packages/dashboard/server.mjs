@@ -110,6 +110,8 @@ import {
   listDefenseCycles,
   listIntegrations,
   listJobs,
+  listSoftwareComponents,
+  listVulnerabilityMatches,
   listUsage,
   listOperationalEvents,
   listOrgSecrets,
@@ -121,8 +123,10 @@ import {
   saveOrgSecret,
   saveSsoIdentity,
   signedArtifactUrl,
+  upsertSoftwareComponents,
   updateDefenseAsset,
   updateJob,
+  updateVulnerabilityMatch,
 } from './enterprise-db.mjs';
 import { queueIntegrationEvent, sendEmail } from './enterprise-integrations.mjs';
 import {
@@ -148,6 +152,7 @@ import {
   slugifyOrg,
   validateFindingTransition,
 } from './team-access.mjs';
+import { fetchGithubSbom, manualSoftwareComponent, parseSbom } from './vulnerability-management.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -2490,7 +2495,7 @@ app.delete('/api/team/:orgId/ai-providers/:provider', async (req, res) => {
 // Repository automation credentials are organization-scoped and encrypted with the same
 // envelope used for AI, OIDC, SCIM, and connector secrets. The token is never returned.
 app.get('/api/team/:orgId/repository-provider', async (req, res) => {
-  const ctx = orgContext(req, res, 'settings.manage');
+  const ctx = orgContext(req, res, 'scans.read');
   if (!ctx) return;
   const row = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
   res.json({
@@ -2539,6 +2544,127 @@ app.delete('/api/team/:orgId/repository-provider', async (req, res) => {
   await deleteOrgSecret(ctx.org.id, 'repository-provider', 'github');
   audit(ctx, 'repository_provider.deleted', 'repository-provider', 'github');
   res.json({ ok: true });
+});
+
+// ---- API: Vulnerability management ---------------------------------------
+app.get('/api/team/:orgId/vulnerabilities', async (req, res) => {
+  const ctx = orgContext(req, res, 'findings.read');
+  if (!ctx) return;
+  try {
+    const [components, matches, provider] = await Promise.all([
+      listSoftwareComponents(ctx.org.id), listVulnerabilityMatches(ctx.org.id),
+      getOrgSecret(ctx.org.id, 'repository-provider', 'github'),
+    ]);
+    const componentById = new Map(components.map((item) => [item.id, item]));
+    const enriched = matches.map((item) => ({ ...item, component: componentById.get(item.componentId) || null }));
+    const open = enriched.filter((item) => !['resolved', 'accepted'].includes(item.status));
+    res.json({
+      ok: true, components, matches: enriched,
+      github: { configured: !!provider?.secretEnc, repo: String(provider?.config?.repo || '') },
+      stats: {
+        components: components.length, open: open.length,
+        critical: open.filter((item) => item.severity === 'critical').length,
+        kev: open.filter((item) => item.details?.kev).length,
+        overdue: open.filter((item) => item.dueAt && item.dueAt < Date.now()).length,
+      },
+    });
+  } catch (error) {
+    const migration = /shannon_(software_components|vulnerability_matches)/i.test(error.message || '');
+    res.status(migration ? 503 : 500).json({ error: migration ? 'Vulnerability database migration is not applied yet.' : error.message });
+  }
+});
+
+app.post('/api/team/:orgId/vulnerabilities/sbom', async (req, res) => {
+  const ctx = orgContext(req, res, 'defender.manage');
+  if (!ctx) return;
+  try {
+    const projectId = req.body?.projectId || null, assetId = req.body?.assetId || null;
+    if (projectId && !listProjects(ctx.org.id).some((item) => item.id === projectId)) return res.status(400).json({ error: 'Project is not part of this organization.' });
+    if (assetId && !(await listDefenseAssets(ctx.org.id)).some((item) => item.id === assetId)) return res.status(400).json({ error: 'Asset is not part of this organization.' });
+    const sourceRef = sanitizeLabel(req.body?.sourceRef || `upload-${new Date().toISOString().slice(0, 10)}`, 500);
+    const parsed = parseSbom(req.body?.document, { source: 'sbom', sourceRef });
+    const components = await upsertSoftwareComponents({
+      orgId: ctx.org.id, projectId, assetId, components: parsed.components,
+    });
+    const job = await enqueueJob({
+      orgId: ctx.org.id, userId: ctx.user.id, type: 'vulnerability-refresh', payload: { trigger: 'sbom-upload', sourceRef },
+      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:sbom:${Date.now()}`, maxAttempts: 4,
+    });
+    audit(ctx, 'sbom.imported', 'software-inventory', sourceRef, { format: parsed.format, count: components.length });
+    res.status(202).json({ ok: true, format: parsed.format, imported: components.length, job: { id: job.id, status: job.status } });
+  } catch (error) {
+    res.status(/Unsupported|No software|exceeds|must be/.test(error.message) ? 400 : 500).json({ error: error.message });
+  }
+});
+
+app.post('/api/team/:orgId/vulnerabilities/github', async (req, res) => {
+  const ctx = orgContext(req, res, 'defender.manage');
+  if (!ctx) return;
+  try {
+    const provider = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
+    if (!provider?.secretEnc) return res.status(409).json({ error: 'Configure a GitHub repository token in Settings first.' });
+    const projectId = req.body?.projectId || null;
+    if (projectId && !listProjects(ctx.org.id).some((item) => item.id === projectId)) return res.status(400).json({ error: 'Project is not part of this organization.' });
+    const secret = decryptSecret(provider.secretEnc) || {};
+    const repository = String(req.body?.repo || provider.config?.repo || '').trim();
+    const sbom = await fetchGithubSbom(repository, secret.token);
+    const parsed = parseSbom(sbom, { source: 'github', sourceRef: repository });
+    const components = await upsertSoftwareComponents({ orgId: ctx.org.id, projectId, components: parsed.components });
+    const job = await enqueueJob({
+      orgId: ctx.org.id, userId: ctx.user.id, type: 'vulnerability-refresh', payload: { trigger: 'github', sourceRef: repository },
+      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:github:${Date.now()}`, maxAttempts: 4,
+    });
+    audit(ctx, 'github.dependencies.discovered', 'repository', repository, { count: components.length });
+    res.status(202).json({ ok: true, repository, imported: components.length, job: { id: job.id, status: job.status } });
+  } catch (error) {
+    res.status(/must use|not configured|Configure/.test(error.message) ? 400 : 502).json({ error: error.message });
+  }
+});
+
+app.post('/api/team/:orgId/vulnerabilities/components', async (req, res) => {
+  const ctx = orgContext(req, res, 'defender.manage');
+  if (!ctx) return;
+  try {
+    const component = manualSoftwareComponent(req.body, sanitizeLabel(req.body?.sourceRef || 'manual inventory', 500));
+    const saved = await upsertSoftwareComponents({ orgId: ctx.org.id, components: [component] });
+    const job = await enqueueJob({
+      orgId: ctx.org.id, userId: ctx.user.id, type: 'vulnerability-refresh', payload: { trigger: 'manual-inventory' },
+      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:manual-inventory:${Date.now()}`, maxAttempts: 4,
+    });
+    audit(ctx, 'software.component.created', 'software-component', saved[0].id, { name: saved[0].name, version: saved[0].version });
+    res.status(202).json({ ok: true, component: saved[0], job: { id: job.id, status: job.status } });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/team/:orgId/vulnerabilities/refresh', async (req, res) => {
+  const ctx = orgContext(req, res, 'defender.manage');
+  if (!ctx) return;
+  const job = await enqueueJob({
+    orgId: ctx.org.id, userId: ctx.user.id, type: 'vulnerability-refresh', payload: { trigger: 'manual' },
+    idempotencyKey: `vulnerability-refresh:${ctx.org.id}:manual:${Date.now()}`, maxAttempts: 4,
+  });
+  audit(ctx, 'vulnerabilities.refresh.queued', 'job', job.id);
+  res.status(202).json({ ok: true, job: { id: job.id, status: job.status } });
+});
+
+app.patch('/api/team/:orgId/vulnerabilities/:id', async (req, res) => {
+  const ctx = orgContext(req, res, 'findings.triage');
+  if (!ctx) return;
+  let dueAt;
+  if (Object.hasOwn(req.body || {}, 'dueAt')) {
+    dueAt = req.body.dueAt ? Date.parse(req.body.dueAt) : null;
+    if (req.body.dueAt && !Number.isFinite(dueAt)) return res.status(400).json({ error: 'Remediation deadline is invalid.' });
+  }
+  try {
+    const match = await updateVulnerabilityMatch(ctx.org.id, req.params.id, { status: req.body?.status, ...(dueAt !== undefined ? { dueAt } : {}) });
+    if (!match) return res.status(404).json({ error: 'Vulnerability match not found.' });
+    audit(ctx, 'vulnerability.updated', 'vulnerability-match', match.id, { status: match.status, dueAt: match.dueAt });
+    res.json({ ok: true, match });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 // ---- API: Team workspaces --------------------------------------------------
@@ -2833,7 +2959,7 @@ function integrationInput(type, rawConfig, rawSecret, existingHasSecret = false)
 }
 
 app.get('/api/team/:orgId/integrations', async (req, res) => {
-  const ctx = orgContext(req, res, 'integrations.manage');
+  const ctx = orgContext(req, res, 'integrations.read');
   if (!ctx) return;
   res.json({ ok: true, integrations: await listIntegrations(ctx.org.id) });
 });
@@ -2913,7 +3039,7 @@ app.post('/api/team/:orgId/integrations/:id/test', async (req, res) => {
 });
 
 app.get('/api/team/:orgId/deliveries', async (req, res) => {
-  const ctx = orgContext(req, res, 'integrations.manage');
+  const ctx = orgContext(req, res, 'integrations.read');
   if (!ctx) return;
   res.json({ ok: true, deliveries: await listDeliveries(ctx.org.id, Number(req.query.limit) || 100) });
 });

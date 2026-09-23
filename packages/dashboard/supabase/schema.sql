@@ -266,6 +266,67 @@ create table if not exists public.shannon_operational_events (
 );
 create index if not exists shannon_operational_events_created_idx on public.shannon_operational_events(created_at desc);
 
+-- ============================================================
+-- 6. Software inventory and vulnerability management
+-- ============================================================
+-- Kept here as a prerequisite for clean installs; versioned production
+-- environments create the same table in 20260919120000_continuous_defense.sql.
+create table if not exists public.shannon_defense_assets (
+  id text primary key,
+  org_id text not null references public.shannon_organizations(id) on delete cascade,
+  project_id text references public.shannon_projects(id) on delete set null,
+  type text not null check (type in ('web','api','domain','cidr','cloud','repository','identity','endpoint')),
+  name text not null,
+  locator text not null,
+  criticality text not null default 'medium' check (criticality in ('low','medium','high','critical')),
+  status text not null default 'active' check (status in ('active','paused')),
+  coverage text not null default 'inventory' check (coverage in ('inventory','online')),
+  config jsonb not null default '{}'::jsonb,
+  created_by text references public.shannon_users(id) on delete set null,
+  created_at bigint not null,
+  updated_at bigint not null,
+  unique (org_id,type,locator)
+);
+create table if not exists public.shannon_software_components (
+  id text primary key,
+  org_id text not null references public.shannon_organizations(id) on delete cascade,
+  asset_id text references public.shannon_defense_assets(id) on delete set null,
+  project_id text references public.shannon_projects(id) on delete set null,
+  fingerprint text not null,
+  source text not null check (source in ('sbom','github','manual')),
+  source_ref text not null,
+  name text not null,
+  version text not null default '',
+  ecosystem text not null default '',
+  purl text not null default '',
+  cpe text not null default '',
+  licenses jsonb not null default '[]'::jsonb,
+  metadata jsonb not null default '{}'::jsonb,
+  first_seen_at bigint not null,
+  last_seen_at bigint not null,
+  unique (org_id, fingerprint)
+);
+create table if not exists public.shannon_vulnerability_matches (
+  id text primary key,
+  org_id text not null references public.shannon_organizations(id) on delete cascade,
+  component_id text not null references public.shannon_software_components(id) on delete cascade,
+  vulnerability_id text not null,
+  aliases jsonb not null default '[]'::jsonb,
+  source text not null,
+  severity text not null check (severity in ('low','medium','high','critical')),
+  summary text not null,
+  details jsonb not null default '{}'::jsonb,
+  status text not null default 'new' check (status in ('new','acknowledged','patching','resolved','accepted')),
+  due_at bigint,
+  discovered_at bigint not null,
+  updated_at bigint not null,
+  resolved_at bigint,
+  unique (org_id, component_id, vulnerability_id)
+);
+create index if not exists shannon_software_components_org_idx on public.shannon_software_components(org_id,source,last_seen_at desc);
+create index if not exists shannon_vulnerability_matches_org_idx on public.shannon_vulnerability_matches(org_id,status,severity,due_at);
+create index if not exists shannon_vulnerability_matches_component_idx on public.shannon_vulnerability_matches(component_id,updated_at desc);
+
 alter table public.shannon_auth_tokens enable row level security;
 alter table public.shannon_sso_identities enable row level security;
 alter table public.shannon_integrations enable row level security;
@@ -273,6 +334,9 @@ alter table public.shannon_jobs enable row level security;
 alter table public.shannon_artifacts enable row level security;
 alter table public.shannon_delivery_events enable row level security;
 alter table public.shannon_operational_events enable row level security;
+alter table public.shannon_defense_assets enable row level security;
+alter table public.shannon_software_components enable row level security;
+alter table public.shannon_vulnerability_matches enable row level security;
 
 alter table public.shannon_users
   add column if not exists defender_key_version integer not null default 0;

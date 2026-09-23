@@ -248,6 +248,37 @@ test('customer alert integrations encrypt credentials and receive vulnerability 
   assert.ok(jobs.json.jobs.some((job) => job.type === 'integration-delivery'));
 });
 
+test('SBOM inventory is tenant scoped and queues vulnerability matching', async () => {
+  const owner = await signup('inventory-owner@example.test', 'Inventory Owner');
+  const orgId = owner.json.organizations[0].id;
+  const imported = await request(`/api/team/${orgId}/vulnerabilities/sbom`, {
+    method: 'POST', cookie: owner.cookie,
+    body: { sourceRef: 'payments.cdx.json', document: { bomFormat: 'CycloneDX', specVersion: '1.6', components: [
+      { type: 'library', name: 'lodash', version: '4.17.20', purl: 'pkg:npm/lodash@4.17.20' },
+    ] } },
+  });
+  assert.equal(imported.response.status, 202);
+  assert.equal(imported.json.imported, 1);
+  const inventory = await request(`/api/team/${orgId}/vulnerabilities`, { cookie: owner.cookie });
+  assert.equal(inventory.response.status, 200);
+  assert.equal(inventory.json.stats.components, 1);
+  assert.equal(inventory.json.components[0].sourceRef, 'payments.cdx.json');
+  const jobs = await request(`/api/team/${orgId}/jobs`, { cookie: owner.cookie });
+  assert.ok(jobs.json.jobs.some((job) => job.type === 'vulnerability-refresh'));
+
+  const component = inventory.json.components[0];
+  const seeded = await enterpriseDatabase.upsertVulnerabilityMatches(orgId, [{
+    componentId: component.id, vulnerabilityId: 'CVE-2026-12345', aliases: ['CVE-2026-12345'], source: 'osv+cisa-kev',
+    severity: 'critical', summary: 'Known exploited dependency', details: { kev: { cveId: 'CVE-2026-12345' } },
+    dueAt: Date.now() + 86400000, discoveredAt: Date.now(), updatedAt: Date.now(),
+  }]);
+  const patched = await request(`/api/team/${orgId}/vulnerabilities/${seeded.matches[0].id}`, {
+    method: 'PATCH', cookie: owner.cookie, body: { status: 'patching' },
+  });
+  assert.equal(patched.response.status, 200);
+  assert.equal(patched.json.match.status, 'patching');
+});
+
 test('authenticated scan sessions use exact-origin, encrypted, single-use grants', async () => {
   const account = await signup('grant-owner@example.test', 'Grant Owner');
   let observedCookie = '';

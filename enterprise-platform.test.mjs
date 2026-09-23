@@ -110,6 +110,25 @@ test('continuous defense programs, assets and cycles are tenant scoped and durab
   assert.equal(executed.learning.changesEnforcementAutomatically, false);
 });
 
+test('software inventory and vulnerability patch states are tenant scoped', async () => {
+  const components = await database.upsertSoftwareComponents({ orgId: 'org-vuln', components: [{
+    fingerprint: 'fingerprint-1', source: 'sbom', sourceRef: 'app.cdx.json', name: 'lodash', version: '4.17.20',
+    ecosystem: 'npm', purl: 'pkg:npm/lodash@4.17.20', cpe: '', licenses: ['MIT'], metadata: {},
+  }] });
+  assert.equal(components.length, 1);
+  assert.equal((await database.listSoftwareComponents('another-org')).length, 0);
+  const saved = await database.upsertVulnerabilityMatches('org-vuln', [{
+    componentId: components[0].id, vulnerabilityId: 'CVE-2021-0001', aliases: ['CVE-2021-0001'], source: 'osv+cisa-kev',
+    severity: 'critical', summary: 'Known exploit', details: { kev: { cveId: 'CVE-2021-0001' } },
+    dueAt: Date.now() + 86400000, discoveredAt: Date.now(), updatedAt: Date.now(),
+  }]);
+  assert.equal(saved.created.length, 1);
+  assert.equal((await database.listVulnerabilityMatches('org-vuln'))[0].status, 'new');
+  const updated = await database.updateVulnerabilityMatch('org-vuln', saved.matches[0].id, { status: 'patching' });
+  assert.equal(updated.status, 'patching');
+  assert.equal(await database.updateVulnerabilityMatch('another-org', saved.matches[0].id, { status: 'resolved' }), null);
+});
+
 test('durable jobs are idempotent, claimed once and recovered after a stale lease', async () => {
   const first = await database.enqueueJob({
     orgId: 'org-1',

@@ -33,6 +33,8 @@ let local = {
   defensePrograms: [],
   defenseAssets: [],
   defenseCycles: [],
+  softwareComponents: [],
+  vulnerabilityMatches: [],
 };
 
 try {
@@ -168,6 +170,24 @@ function defenseCycleFromRow(row) {
     window: row.window || {}, snapshot: row.snapshot || {}, learning: row.learning || {}, actions: row.actions || {},
     error: row.error || null, startedAt: Number(row.started_at), completedAt: row.completed_at ? Number(row.completed_at) : null,
     createdAt: Number(row.created_at),
+  };
+}
+
+function softwareComponentFromRow(row) {
+  return row && {
+    id: row.id, orgId: row.org_id, assetId: row.asset_id || null, projectId: row.project_id || null,
+    fingerprint: row.fingerprint, source: row.source, sourceRef: row.source_ref, name: row.name,
+    version: row.version || '', ecosystem: row.ecosystem || '', purl: row.purl || '', cpe: row.cpe || '',
+    licenses: row.licenses || [], metadata: row.metadata || {}, firstSeenAt: Number(row.first_seen_at), lastSeenAt: Number(row.last_seen_at),
+  };
+}
+
+function vulnerabilityMatchFromRow(row) {
+  return row && {
+    id: row.id, orgId: row.org_id, componentId: row.component_id, vulnerabilityId: row.vulnerability_id,
+    aliases: row.aliases || [], source: row.source, severity: row.severity, summary: row.summary,
+    details: row.details || {}, status: row.status, dueAt: row.due_at ? Number(row.due_at) : null,
+    discoveredAt: Number(row.discovered_at), updatedAt: Number(row.updated_at), resolvedAt: row.resolved_at ? Number(row.resolved_at) : null,
   };
 }
 
@@ -833,6 +853,119 @@ export async function upsertScanFindings({ orgId, userId, projectId = null, scan
   // The normal dashboard cache owns local finding persistence. Durable workers
   // are a Supabase production feature, so local mode only reports the count.
   return rows.length;
+}
+
+export async function upsertSoftwareComponents({ orgId, assetId = null, projectId = null, components }) {
+  const now = Date.now();
+  const input = (components || []).slice(0, 5000);
+  if (!input.length) return [];
+  if (!USE_SUPABASE) {
+    const output = [];
+    for (const component of input) {
+      const existing = local.softwareComponents.find((item) => item.orgId === orgId && item.fingerprint === component.fingerprint);
+      const normalized = {
+        ...(existing || {}), ...component, id: existing?.id || `cmp_${component.fingerprint.slice(0, 20)}`,
+        orgId, assetId, projectId, firstSeenAt: existing?.firstSeenAt || now, lastSeenAt: now,
+      };
+      if (existing) Object.assign(existing, normalized);
+      else local.softwareComponents.push(normalized);
+      output.push(normalized);
+    }
+    persist();
+    return output;
+  }
+  const prior = new Map((await listSoftwareComponents(orgId)).map((item) => [item.fingerprint, item]));
+  const rows = input.map((component) => ({
+    id: `cmp_${component.fingerprint.slice(0, 20)}`, org_id: orgId, asset_id: assetId, project_id: projectId,
+    fingerprint: component.fingerprint, source: component.source, source_ref: component.sourceRef,
+    name: component.name, version: component.version || '', ecosystem: component.ecosystem || '',
+    purl: component.purl || '', cpe: component.cpe || '', licenses: component.licenses || [], metadata: component.metadata || {},
+    first_seen_at: prior.get(component.fingerprint)?.firstSeenAt || now, last_seen_at: now,
+  }));
+  const saved = await rest('/shannon_software_components?on_conflict=org_id,fingerprint', {
+    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify(rows),
+  });
+  return (saved || []).map(softwareComponentFromRow);
+}
+
+export async function listSoftwareComponents(orgId) {
+  if (!USE_SUPABASE) return local.softwareComponents.filter((item) => item.orgId === orgId).sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  const rows = await rest(`/shannon_software_components?org_id=eq.${encodeURIComponent(orgId)}&order=last_seen_at.desc&limit=5000`);
+  return (rows || []).map(softwareComponentFromRow);
+}
+
+export async function listInventoryOrganizations() {
+  if (!USE_SUPABASE) return [...new Set(local.softwareComponents.map((item) => item.orgId))];
+  const rows = await rest('/shannon_software_components?select=org_id&limit=10000');
+  return [...new Set((rows || []).map((row) => row.org_id).filter(Boolean))];
+}
+
+export async function upsertVulnerabilityMatches(orgId, matches) {
+  const input = (matches || []).slice(0, 20_000);
+  if (!input.length) return { matches: [], created: [], newKev: [] };
+  const existing = await listVulnerabilityMatches(orgId);
+  const byKey = new Map(existing.map((item) => [`${item.componentId}|${item.vulnerabilityId}`, item]));
+  const created = [];
+  const newKev = [];
+  const normalized = input.map((match) => {
+    const current = byKey.get(`${match.componentId}|${match.vulnerabilityId}`);
+    const item = {
+      ...match, id: current?.id || `vul_${createHash('sha256').update(`${orgId}|${match.componentId}|${match.vulnerabilityId}`).digest('hex').slice(0, 20)}`,
+      orgId, status: current?.status || 'new', dueAt: current?.dueAt || match.dueAt,
+      discoveredAt: current?.discoveredAt || match.discoveredAt || Date.now(), resolvedAt: current?.resolvedAt || null,
+    };
+    if (!current) created.push(item);
+    else if (!current.details?.kev && item.details?.kev) newKev.push(item);
+    return item;
+  });
+  if (!USE_SUPABASE) {
+    for (const item of normalized) {
+      const current = local.vulnerabilityMatches.find((row) => row.id === item.id);
+      if (current) Object.assign(current, item);
+      else local.vulnerabilityMatches.push(item);
+    }
+    persist();
+    return { matches: normalized, created, newKev };
+  }
+  const rows = normalized.map((item) => ({
+    id: item.id, org_id: orgId, component_id: item.componentId, vulnerability_id: item.vulnerabilityId,
+    aliases: item.aliases || [], source: item.source, severity: item.severity, summary: item.summary,
+    details: item.details || {}, status: item.status, due_at: item.dueAt, discovered_at: item.discoveredAt,
+    updated_at: item.updatedAt || Date.now(), resolved_at: item.resolvedAt,
+  }));
+  const saved = await rest('/shannon_vulnerability_matches?on_conflict=org_id,component_id,vulnerability_id', {
+    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify(rows),
+  });
+  return { matches: (saved || []).map(vulnerabilityMatchFromRow), created, newKev };
+}
+
+export async function listVulnerabilityMatches(orgId) {
+  if (!USE_SUPABASE) return local.vulnerabilityMatches.filter((item) => item.orgId === orgId).sort((a, b) => b.updatedAt - a.updatedAt);
+  const rows = await rest(`/shannon_vulnerability_matches?org_id=eq.${encodeURIComponent(orgId)}&order=updated_at.desc&limit=10000`);
+  return (rows || []).map(vulnerabilityMatchFromRow);
+}
+
+export async function updateVulnerabilityMatch(orgId, id, patch) {
+  const allowed = new Set(['new', 'acknowledged', 'patching', 'resolved', 'accepted']);
+  if (patch.status !== undefined && !allowed.has(patch.status)) throw new Error('Invalid vulnerability status.');
+  const now = Date.now();
+  if (!USE_SUPABASE) {
+    const item = local.vulnerabilityMatches.find((row) => row.orgId === orgId && row.id === id);
+    if (!item) return null;
+    if (patch.status !== undefined) item.status = patch.status;
+    if (patch.dueAt !== undefined) item.dueAt = patch.dueAt;
+    item.resolvedAt = item.status === 'resolved' ? (item.resolvedAt || now) : null;
+    item.updatedAt = now;
+    persist();
+    return item;
+  }
+  const body = { updated_at: now };
+  if (patch.status !== undefined) { body.status = patch.status; body.resolved_at = patch.status === 'resolved' ? now : null; }
+  if (patch.dueAt !== undefined) body.due_at = patch.dueAt;
+  const rows = await rest(`/shannon_vulnerability_matches?org_id=eq.${encodeURIComponent(orgId)}&id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH', body: JSON.stringify(body),
+  });
+  return vulnerabilityMatchFromRow(rows?.[0]);
 }
 
 export async function getDefenseProgram(orgId) {

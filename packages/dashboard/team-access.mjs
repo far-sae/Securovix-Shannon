@@ -14,6 +14,7 @@ export const PERMISSIONS = Object.freeze({
   'findings.remediate': ['owner', 'admin', 'engineer', 'developer'],
   'defender.manage': ['owner', 'admin', 'engineer'],
   'settings.manage': ['owner', 'admin'],
+  'integrations.read': ROLES,
   'integrations.manage': ['owner', 'admin'],
   'jobs.read': ['owner', 'admin', 'engineer', 'analyst'],
   'audit.read': ['owner', 'admin', 'analyst', 'viewer'],
