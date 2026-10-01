@@ -1806,6 +1806,48 @@ function apiQuotaReached(b){
     {actions:b.upgradeAvailable?`<button class="btn" onclick="document.getElementById('sx-notice').remove();go('cfg')">See plan</button>`:''});
 }
 
+// /api/system/readiness is an operator view (backups, metrics tokens, secrets…) and needs
+// settings.manage — an invited viewer gets 403. Cache it for a minute and treat "denied" as
+// unknown (null) rather than as a failure, so pages never block on it.
+let READINESS_CACHE={at:0,data:null};
+async function systemReadiness(){
+  if(Date.now()-READINESS_CACHE.at<60000)return READINESS_CACHE.data;
+  try{const d=await api('/system/readiness');READINESS_CACHE={at:Date.now(),data:d};return d}
+  catch{READINESS_CACHE={at:Date.now(),data:null};return null}
+}
+// true = heartbeat seen, false = not running, null = can't tell (no permission / endpoint down).
+async function workerReady(){
+  const r=await systemReadiness();if(!r)return null;
+  return (r.checks||[]).find(c=>c.key==='worker')?.status==='ready';
+}
+// Several features hand work to the durable worker and used to say "queued" even when no worker
+// is deployed — the job then sits forever and the user waits for a result that cannot arrive.
+function queuedMsg(ready,okText){
+  if(ready===false)return okText+' However, the background worker is not running, so this will not process until it is deployed (railway.worker.json).';
+  return okText+(ready?' The worker will process it shortly.':'');
+}
+
+// First-run checklist on the Dashboard. Only the steps a user can act on themselves — the
+// operator-level checks stay on the readiness endpoint. Fills in asynchronously under the CTA.
+async function dashReadiness(){
+  const el=$('dash-ready');if(!el)return;
+  el.innerHTML='<div class="readiness-summary"><span class="sp"></span><span style="color:var(--t3);font-size:12px">Checking what you need to run a scan…</span></div>';
+  const [k,v,w]=await Promise.allSettled([csRefreshKeys(),api('/verify/list'),workerReady()]);
+  if(!$('dash-ready'))return; // navigated away while we were loading
+  const keys=k.status==='fulfilled'?(k.value||{}):{};
+  const domains=v.status==='fulfilled'?Object.keys(v.value?.domains||{}).length:0;
+  const worker=w.status==='fulfilled'?w.value:null;
+  const rows=[
+    {ok:!!keys.claude,label:'Add your Anthropic key',detail:keys.claude?'Organization key is set.':'Required — scans and the war room run on it.',btn:keys.claude?'':'Add key',go:'cfg'},
+    {ok:domains>0,label:'Verify a domain you own',detail:domains>0?`${domains} verified.`:'One-time DNS, file or meta-tag check. Localhost is exempt.',btn:domains>0?'':'Verify',go:'domains'},
+    {ok:worker===true,unknown:worker===null,label:'Background worker',detail:worker===true?'Running — imports, integration tests and defense cycles will process.':worker===false?'Not running. Those features will queue but not process until it is deployed (railway.worker.json).':'Status is visible to organization owners.',btn:'',go:''},
+    {ok:false,label:'Run your first scan',detail:'Pre-recon, red & blue agents, a war-room debate, and a report you can share.',btn:'Start',go:'new'},
+  ];
+  const ready=rows.filter(r=>r.ok).length;
+  el.innerHTML=`<div class="readiness-summary"><strong>${ready}/${rows.length}</strong><span style="color:var(--t2);font-size:12.5px">steps ready</span></div>
+    <div class="readiness-grid">${rows.map(r=>`<div class="readiness-row ${r.ok?'ready':r.unknown?'optional':'configure'}"><span class="readiness-dot"></span><div class="readiness-main"><b>${H(r.label)}</b><small>${H(r.detail)}</small></div>${r.btn?`<button class="readiness-action" onclick="go('${r.go}')">${H(r.btn)}</button>`:''}</div>`).join('')}</div>`;
+}
+
 async function pgVuln(){
   M.innerHTML='<div class="pg"><div class="empty"><span class="sp"></span><h2>Loading vulnerability inventory</h2></div></div>';
   try{
@@ -1828,10 +1870,10 @@ async function pgVuln(){
     </div>`;
   }catch(e){M.innerHTML=`<div class="pg"><div class="empty"><h2>Vulnerability management unavailable</h2><p>${H(e.detail||e.message)}</p></div></div>`}
 }
-async function vulnUploadSbom(orgId){const file=$('vm-sbom')?.files?.[0],msg=$('vm-sbom-msg');if(!file){msg.textContent='Choose a JSON SBOM first.';return}if(file.size>1900000){msg.textContent='SBOM must be smaller than 1.9 MB for this upload endpoint.';return}try{msg.innerHTML='<span class="sp"></span> Importing and scheduling checks…';const document=JSON.parse(await file.text());const x=await api(`/team/${orgId}/vulnerabilities/sbom`,{method:'POST',body:JSON.stringify({document,sourceRef:file.name})});msg.textContent=`Imported ${x.imported} components. OSV/KEV check queued.`;setTimeout(pgVuln,1800)}catch(e){msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
-async function vulnGithub(orgId){const repo=$('vm-repo').value.trim(),msg=$('vm-github-msg');try{msg.innerHTML='<span class="sp"></span> Requesting GitHub dependency graph…';const x=await api(`/team/${orgId}/vulnerabilities/github`,{method:'POST',body:JSON.stringify({repo})});msg.textContent=`Imported ${x.imported} components. Vulnerability check queued.`;setTimeout(pgVuln,1800)}catch(e){msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
+async function vulnUploadSbom(orgId){const file=$('vm-sbom')?.files?.[0],msg=$('vm-sbom-msg');if(!file){msg.textContent='Choose a JSON SBOM first.';return}if(file.size>1900000){msg.textContent='SBOM must be smaller than 1.9 MB for this upload endpoint.';return}try{msg.innerHTML='<span class="sp"></span> Importing and scheduling checks…';const document=JSON.parse(await file.text());const x=await api(`/team/${orgId}/vulnerabilities/sbom`,{method:'POST',body:JSON.stringify({document,sourceRef:file.name})});msg.textContent=queuedMsg(await workerReady(),`Imported ${x.imported} components. OSV/KEV check queued.`);setTimeout(pgVuln,1800)}catch(e){msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
+async function vulnGithub(orgId){const repo=$('vm-repo').value.trim(),msg=$('vm-github-msg');try{msg.innerHTML='<span class="sp"></span> Requesting GitHub dependency graph…';const x=await api(`/team/${orgId}/vulnerabilities/github`,{method:'POST',body:JSON.stringify({repo})});msg.textContent=queuedMsg(await workerReady(),`Imported ${x.imported} components. Vulnerability check queued.`);setTimeout(pgVuln,1800)}catch(e){msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
 async function vulnManual(orgId){const msg=$('vm-manual-msg'),body={name:$('vm-product').value.trim(),version:$('vm-version').value.trim(),ecosystem:$('vm-ecosystem').value.trim(),purl:$('vm-purl').value.trim()};try{msg.innerHTML='<span class="sp"></span> Adding product and scheduling check…';await api(`/team/${orgId}/vulnerabilities/components`,{method:'POST',body:JSON.stringify(body)});msg.textContent='Product added. Vulnerability check queued.';setTimeout(pgVuln,1600)}catch(e){msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
-async function vulnRefresh(orgId){const b=$('vm-refresh');b.disabled=true;try{await api(`/team/${orgId}/vulnerabilities/refresh`,{method:'POST'});b.textContent='Check queued';setTimeout(pgVuln,2200)}catch(e){b.disabled=false;alert(e.detail||e.message)}}
+async function vulnRefresh(orgId){const b=$('vm-refresh');b.disabled=true;try{await api(`/team/${orgId}/vulnerabilities/refresh`,{method:'POST'});b.textContent=(await workerReady())===false?'Queued — worker not running':'Check queued';setTimeout(pgVuln,2200)}catch(e){b.disabled=false;alert(e.detail||e.message)}}
 async function vulnStatus(orgId,id,status){try{await api(`/team/${orgId}/vulnerabilities/${id}`,{method:'PATCH',body:JSON.stringify({status})});pgVuln()}catch(e){alert(e.detail||e.message);pgVuln()}}
 async function vulnDeadline(orgId,id,dueAt){try{await api(`/team/${orgId}/vulnerabilities/${id}`,{method:'PATCH',body:JSON.stringify({dueAt})})}catch(e){alert(e.detail||e.message);pgVuln()}}
 
@@ -1941,7 +1983,7 @@ async function teamIntegrationSave(orgId){
   try{await api(`/team/${orgId}/integrations`,{method:'POST',body:JSON.stringify({type,name,config,secret})});teamIntegrationClose();go(INTEGRATION_RETURN)}catch(e){button.disabled=false;msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}
 }
 async function teamIntegrationToggle(orgId,id,enabled){try{await api(`/team/${orgId}/integrations/${id}`,{method:'PATCH',body:JSON.stringify({enabled})});go(INTEGRATION_RETURN)}catch(e){alert(e.detail||e.message)}}
-async function teamTestIntegration(orgId,id){const msg=$(`team-int-msg-${id}`);if(msg)msg.innerHTML='<span class="sp"></span> Test queued…';try{await api(`/team/${orgId}/integrations/${id}/test`,{method:'POST'});if(msg)msg.textContent='Test queued on the durable worker. Refresh shortly to see delivery result.'}catch(e){if(msg)msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
+async function teamTestIntegration(orgId,id){const msg=$(`team-int-msg-${id}`);if(msg)msg.innerHTML='<span class="sp"></span> Test queued…';try{await api(`/team/${orgId}/integrations/${id}/test`,{method:'POST'});if(msg)msg.textContent=queuedMsg(await workerReady(),'Test queued on the durable worker; refresh shortly to see the delivery result.')}catch(e){if(msg)msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
 async function teamDeleteIntegration(orgId,id){if(!confirm('Delete this integration?'))return;try{await api(`/team/${orgId}/integrations/${id}`,{method:'DELETE'});go(INTEGRATION_RETURN)}catch(e){alert(e.detail||e.message)}}
 async function teamCreateProject(orgId){const name=$('tp-name').value.trim(),criticality=$('tp-criticality').value;try{await api(`/team/${orgId}/projects`,{method:'POST',body:JSON.stringify({name,criticality,environment:'production'})});pgTeam()}catch(e){alert(e.detail||e.message)}}
 async function teamFindingStatus(orgId,id,status){let body={status};if(['risk-accepted','false-positive'].includes(status)){body.reason=prompt('Reason (required)')||'';if(status==='risk-accepted')body.expiresAt=new Date(Date.now()+90*86400000).toISOString()}try{await api(`/team/${orgId}/findings/${id}`,{method:'PATCH',body:JSON.stringify(body)});pgTeam()}catch(e){alert(e.detail||e.message);pgTeam()}}
@@ -2184,7 +2226,7 @@ async function agentRuntimeStatus(){
       ['Isolated sandbox',status.sandbox==='ready'?'Hetzner runner ready':'Sandbox unavailable',status.sandbox==='ready'?'ready':'warn'],
     ];
     el.innerHTML=rows.map(([label,detail,tone])=>`<div class="ag-runtime-item ${tone}"><span class="ag-runtime-dot"></span><div class="ag-runtime-copy"><b>${H(label)}</b><small>${H(detail)}</small></div></div>`).join('');
-  }catch(e){el.innerHTML='<div class="ag-runtime-item warn"><span class="ag-runtime-dot"></span><div class="ag-runtime-copy"><b>Runtime status unavailable</b><small>Refresh the page or check Settings readiness.</small></div></div>'}
+  }catch(e){el.innerHTML='<div class="ag-runtime-item warn"><span class="ag-runtime-dot"></span><div class="ag-runtime-copy"><b>Runtime status unavailable</b><small>Refresh the page, or see the setup checklist on the Dashboard.</small></div></div>'}
 }
 function agentOpenTool(id){
   const el=$(id);if(!el)return;
@@ -2947,7 +2989,7 @@ async function defProgramSave() {
 async function defProgramRun() {
   try {
     await api('/defender/program/run', { method: 'POST', body: '{}' });
-    $('def-program-status').textContent = 'Cycle queued on the durable worker…';
+    $('def-program-status').textContent = queuedMsg(await workerReady(), 'Cycle queued on the durable worker.');
     setTimeout(defProgramLoad, 2500);
   } catch (error) { alert(error.detail || error.message || 'Could not queue the defense cycle.'); }
 }
@@ -3157,8 +3199,10 @@ function pgDash(){
           <button class="btn btn-p" onclick="go('new')" style="display:inline-flex;align-items:center;gap:8px">${ico('plus',{cls:'ico-sm'})} Start your first scan</button>
           <button class="btn btn-g" onclick="go('cfg')" style="display:inline-flex;align-items:center;gap:8px">${ico('key-round',{cls:'ico-sm'})} Add API keys</button>
         </div>
+        <div id="dash-ready" style="max-width:720px;margin:26px auto 0;text-align:left"></div>
       </div>
     </div>`;
+    dashReadiness();
     return;
   }
 
@@ -3263,7 +3307,13 @@ function renderCharts(){
 // ===== NEW SCAN =====
 // Multi-step New Scan wizard. Step state persists across renders inside this single render.
 let WIZ_STEP=1;
-function pgNew(){
+async function pgNew(){
+  // Refresh provider keys BEFORE the wizard paints: wizRender reads ORG_AI_KEYS to decide whether to
+  // show the "Anthropic key required" banner, and that cache was only ever filled by Settings. The
+  // target input is read back into WIZ only on step change, so re-rendering after a late refresh
+  // would discard anything typed in the meantime — so: loading state, refresh once, render once.
+  M.innerHTML=`<div class="pg" style="display:flex;align-items:center;justify-content:center;padding-top:140px;gap:14px"><span class="sp sp-l"></span><span style="color:var(--t2)">Loading…</span></div>`;
+  try{await csRefreshKeys()}catch{}
   WIZ_STEP=1;wizRender();
 }
 
@@ -5218,9 +5268,11 @@ app.listen(3000);
 async function pgCode(){
   CID=null;sList();
   // Code Scan is FREE for everyone — no paywall, no plan check.
-  let me;
-  try{ me = await fetch('/api/code-scan/me').then(r => r.json()); }
-  catch { me = { subscribed: true, isOwner: true, plan: 'free', label: 'Free', dailyLimit: -1, used: 0 }; }
+  // Refresh provider keys before rendering: renderCodeScanner reads ORG_AI_KEYS, and landing here
+  // straight after login used to show "0/4 providers" and a false "Anthropic key required" banner
+  // until the user happened to visit Settings (the only page that refreshed the cache).
+  const [meRes]=await Promise.allSettled([fetch('/api/code-scan/me').then(r => r.json()),csRefreshKeys()]);
+  const me=meRes.status==='fulfilled'?meRes.value:{ subscribed: true, isOwner: true, plan: 'free', label: 'Free', dailyLimit: -1, used: 0 };
   renderCodeScanner(me);
 }
 
