@@ -414,7 +414,7 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
   .logo{padding:8px 11px;border:0;gap:8px}.logo-mark{width:30px;height:30px}.logo h1{font-size:13px}.logo span{display:none}
   .nav{display:flex;gap:4px;min-width:0;overflow-x:auto;padding:7px 9px;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}
   .nav button{width:auto;min-width:max-content;margin:0;padding:9px 10px;font-size:11px;gap:6px}
-  .slist,#user-pill{display:none!important}
+  .slist{display:none!important}#user-pill{position:static!important;border-top:0!important;padding:8px 10px!important}
   .main{width:100%;overflow:visible}
 }
 @media(max-width:480px){
@@ -594,6 +594,8 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
 .set-save-msg.shown::before{display:inline-block}
 .settings-security{margin-bottom:18px}.settings-security-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:14px;align-items:center}.settings-security-grid .sec-check{border:0;padding:0}.settings-security-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.settings-security-actions .btn{padding:8px 10px;font-size:11px}
 .readiness-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.readiness-row{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid var(--brd);background:var(--bg2);border-radius:10px}.readiness-row.configure{border-color:rgba(250,204,21,.22);background:linear-gradient(135deg,rgba(250,204,21,.045),var(--bg2))}.readiness-main{flex:1;min-width:0}.readiness-dot{width:9px;height:9px;border-radius:50%;margin-top:4px;flex:0 0 auto;background:var(--t4)}.readiness-row.ready .readiness-dot{background:var(--grn);box-shadow:0 0 8px rgba(74,222,128,.6)}.readiness-row.configure .readiness-dot{background:var(--ylw);box-shadow:0 0 8px rgba(250,204,21,.45)}.readiness-row.optional .readiness-dot{background:var(--blu)}.readiness-row b{display:block;color:var(--t0);font-size:11.5px}.readiness-row small{display:block;color:var(--t3);font-size:10.5px;line-height:1.45;margin-top:2px;word-break:break-word}.readiness-action{flex:0 0 auto;border:1px solid var(--brd2);border-radius:7px;background:var(--s2);color:var(--t1);font-size:10px;font-weight:700;padding:6px 8px;cursor:pointer}.readiness-action:hover{border-color:var(--acc2);color:var(--acc2)}.readiness-summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:13px}.readiness-summary strong{font:700 22px 'Inter',system-ui,sans-serif;color:var(--t0)}
+/* Integration modal: appended to <body>, so its CSS must be global rather than inside a page template. */
+.int-overlay{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);display:grid;place-items:center;padding:18px}.int-modal{width:min(680px,100%);max-height:92vh;overflow:auto;background:var(--s1);border:1px solid var(--brd2);border-radius:16px;box-shadow:0 28px 90px rgba(0,0,0,.65)}.int-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 22px;border-bottom:1px solid var(--brd)}.int-head h2{margin:0;font-size:19px}.int-head p{margin:5px 0 0;color:var(--t3);font-size:11px}.int-body{padding:22px}.int-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.int-field{display:grid;gap:6px}.int-field.full{grid-column:1/-1}.int-field label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--t3);font-weight:700}.int-field textarea{min-height:82px;resize:vertical}.int-note{font-size:10.5px;color:var(--t3);line-height:1.5;margin:12px 0}.int-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:18px}.int-actions .int-msg{margin-right:auto;font-size:11px}.int-secret{border-left:2px solid rgba(212,247,69,.38);padding-left:10px}
 .ops-guide{position:fixed;inset:0;z-index:10020;background:rgba(0,0,0,.76);display:grid;place-items:center;padding:18px}.ops-guide-card{width:min(620px,100%);max-height:min(760px,90vh);overflow:auto;background:linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid var(--brd2);border-radius:16px;box-shadow:0 28px 90px rgba(0,0,0,.6)}.ops-guide-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px;border-bottom:1px solid var(--brd)}.ops-guide-head h2{font-size:18px;margin:0 0 4px}.ops-guide-head p{font-size:11px;color:var(--t3);margin:0}.ops-guide-body{padding:22px}.ops-guide-body ol{display:grid;gap:10px;margin:0 0 18px;padding-left:20px}.ops-guide-body li{color:var(--t2);font-size:12.5px;line-height:1.55}.ops-env{padding:12px;border:1px solid var(--brd);border-radius:10px;background:var(--bg);font:12px 'JetBrains Mono',monospace;color:var(--acc2);word-break:break-all}.ops-warning{margin-top:14px;padding:11px 12px;border-radius:9px;background:rgba(250,204,21,.07);border:1px solid rgba(250,204,21,.2);color:var(--t2);font-size:11.5px;line-height:1.5}
 .mfa-overlay{position:fixed;inset:0;z-index:180;background:rgba(3,5,3,.78);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto}.mfa-modal{width:min(680px,100%);max-height:calc(100vh - 48px);overflow:auto;background:linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid var(--brd2);border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.65)}.mfa-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px;border-bottom:1px solid var(--brd)}.mfa-title{display:flex;gap:12px;align-items:center}.mfa-title-mark{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--acc);background:var(--glow);border:1px solid rgba(212,247,69,.22)}.mfa-title h2{font-family:'Inter',system-ui,sans-serif;font-size:18px;color:var(--t0);margin:0}.mfa-title p{font-size:11.5px;color:var(--t3);margin:4px 0 0}.mfa-close{border:0;background:transparent;color:var(--t3);font-size:24px;line-height:1;cursor:pointer;padding:3px}.mfa-body{padding:24px}.mfa-state{display:flex;gap:14px;padding:16px;border:1px solid var(--brd2);background:var(--s2);border-radius:14px;margin-bottom:18px}.mfa-state-mark{width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:var(--grn-bg);color:var(--grn);font-weight:800;flex:0 0 auto}.mfa-state.warn .mfa-state-mark{background:var(--ylw-bg);color:var(--ylw)}.mfa-state b{color:var(--t0);font-size:13px}.mfa-state p{color:var(--t2);font-size:11.5px;line-height:1.55;margin:4px 0 0}.mfa-field{margin-top:14px}.mfa-field label{display:block;color:var(--t1);font-size:11.5px;font-weight:700;margin-bottom:7px}.mfa-input{width:100%;border:1px solid var(--brd2);border-radius:10px;background:var(--bg);color:var(--t0);padding:11px 12px;font:12.5px 'JetBrains Mono',monospace;outline:0}.mfa-input:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--glow)}.mfa-actions{display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap;margin-top:20px}.mfa-error{color:var(--red);font-size:11.5px;min-height:17px;margin-top:9px}.mfa-enroll{display:grid;grid-template-columns:250px minmax(0,1fr);gap:24px;align-items:center}.mfa-qr{background:#fff;padding:10px;border-radius:16px;width:250px;height:250px;display:block}.mfa-steps{display:grid;gap:13px}.mfa-step{display:flex;gap:10px;color:var(--t2);font-size:12px;line-height:1.5}.mfa-step-num{width:22px;height:22px;border-radius:50%;background:var(--glow);border:1px solid rgba(212,247,69,.22);color:var(--acc);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:10px;flex:0 0 auto}.mfa-secret{margin-top:6px;padding:9px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--acc2);font:11px 'JetBrains Mono',monospace;word-break:break-all}.mfa-codes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.mfa-code{background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:9px;text-align:center;color:var(--acc2);font:11.5px 'JetBrains Mono',monospace}.mfa-note{color:var(--t3);font-size:11px;line-height:1.55}.mfa-danger{border-top:1px solid var(--brd);margin-top:22px;padding-top:18px}.mfa-danger h3{font-size:12px;color:var(--red);margin:0 0 5px}.mfa-danger p{font-size:11px;color:var(--t3);margin:0}
 @media(max-width:1000px){.settings-security-grid{grid-template-columns:1fr 1fr}.settings-security-actions{justify-content:flex-start}}
@@ -1731,16 +1733,39 @@ function resetLive(){
   PHASES.forEach(p=>{LIVE.phaseLogs[p.id]=[];LIVE.phaseState[p.id]={status:'waiting',thinking:''}});
 }
 
+const PAGES={dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,vuln:pgVuln,integrations:pgIntegrations,agent:pgAgent,shield:pgShield,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,defender:pgDefender};
+// Report and live-scan pages have no sidebar button; highlight the section they belong to instead of
+// clearing the nav, which is what used to happen.
+const NAV_FOR={scan:'dash',live:'dash'};
+function routeHash(p,d){return '#'+p+(d!==undefined&&d!==null&&d!==''?'/'+encodeURIComponent(String(d)):'')}
+function parseHash(){
+  const m=/^#([a-z]+)(?:\/(.*))?$/.exec(location.hash||'');
+  if(!m||!PAGES[m[1]])return {p:'dash'};
+  let d;try{d=m[2]!==undefined?decodeURIComponent(m[2]):undefined}catch{d=undefined}
+  return {p:m[1],d};
+}
 function go(p,d){
+  if(!PAGES[p])p='dash';
   document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('on'));
-  const n=$('n-'+p);if(n)n.classList.add('on');
+  const n=$('n-'+(NAV_FOR[p]||p));if(n)n.classList.add('on');
   if(POLL){clearInterval(POLL);POLL=null}
   if(EVT){EVT.close();EVT=null}
   closeDrawer();
-  const result=({dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,vuln:pgVuln,integrations:pgIntegrations,agent:pgAgent,shield:pgShield,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,billing:pgBilling,defender:pgDefender})[p]?.(d);
+  // Real URLs: refresh-safe pages, working Back/Forward, and a report link you can send someone
+  // (#scan/<id>). Assigning location.hash pushes a history entry; arriving here FROM a hashchange
+  // the hash already matches, so nothing is pushed and Back/Forward stay correct.
+  const h=routeHash(p,d);if(location.hash!==h)location.hash=h;
+  const result=PAGES[p](d);
   const resetScroll=()=>requestAnimationFrame(()=>{M.scrollTop=0;window.scrollTo(0,0)});
   if(result&&typeof result.finally==='function')result.finally(resetScroll);else resetScroll();
 }
+window.addEventListener('hashchange',()=>{
+  if(!CURRENT_USER)return;                       // the sign-in screen owns the view until login
+  if(!location.hash||location.hash==='#')return;  // a bare href="#" click is not navigation
+  const r=parseHash();
+  if((r.p==='scan'||r.p==='live')&&!r.d)return;   // these pages need an id
+  go(r.p,r.d);
+});
 async function api(u,o){
   // A JSON string body sent without this header goes out as text/plain, which express.json() does
   // not parse — the server then sees an empty req.body and rejects the call as if the field were
@@ -1882,7 +1907,7 @@ async function pgIntegrations(){
   INTEGRATION_RETURN='integrations';M.innerHTML='<div class="pg"><div class="empty"><span class="sp"></span><h2>Loading integrations</h2></div></div>';
   try{const tc=await api('/team/context'),active=tc.active;if(!active)throw new Error('No organization is active.');const orgId=active.organization.id,canManage=['owner','admin'].includes(active.role);const [ii,dd]=await Promise.all([api(`/team/${orgId}/integrations`),api(`/team/${orgId}/deliveries?limit=100`)]);const latest=new Map();for(const d of dd.deliveries||[])if(!latest.has(d.integrationId))latest.set(d.integrationId,d);
     M.innerHTML=`<style>.ipg{max-width:1280px;width:100%}.ipg-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:20px}.ipg-head h1{font-size:32px;margin:4px 0 7px}.ipg-head p{margin:0;color:var(--t2);max-width:720px;line-height:1.5}.ipg-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.ipg-card{border:1px solid var(--brd2);border-radius:14px;background:linear-gradient(145deg,var(--s1),var(--s2));padding:18px}.ipg-top{display:flex;gap:12px;align-items:flex-start}.ipg-logo{width:44px;height:44px;display:grid;place-items:center;border:1px solid var(--brd2);border-radius:11px;background:var(--bg);font-weight:900;color:var(--acc2)}.ipg-copy{flex:1;min-width:0}.ipg-copy h2{font-size:15px;margin:2px 0 5px}.ipg-copy p{font-size:11px;color:var(--t3);margin:0}.ipg-status{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--brd);padding-top:12px;margin-top:14px}.ipg-status small{color:var(--t3)}.ipg-actions{display:flex;gap:6px}.ipg-empty{grid-column:1/-1;border:1px dashed var(--brd2);border-radius:14px;padding:38px;text-align:center;color:var(--t3)}
-    .int-overlay{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);display:grid;place-items:center;padding:18px}.int-modal{width:min(680px,100%);max-height:92vh;overflow:auto;background:var(--s1);border:1px solid var(--brd2);border-radius:16px}.int-head{display:flex;justify-content:space-between;padding:20px 22px;border-bottom:1px solid var(--brd)}.int-head h2{margin:0}.int-head p{margin:5px 0 0;color:var(--t3);font-size:11px}.int-body{padding:22px}.int-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.int-field{display:grid;gap:6px}.int-field.full{grid-column:1/-1}.int-field label{font-size:10px;text-transform:uppercase;color:var(--t3);font-weight:700}.int-field textarea{min-height:82px}.int-note{font-size:10.5px;color:var(--t3);line-height:1.5;margin:12px 0}.int-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.int-actions .int-msg{margin-right:auto}.int-secret{border-left:2px solid rgba(212,247,69,.38);padding-left:10px}@media(max-width:800px){.ipg-grid{grid-template-columns:1fr}.ipg-head{display:block}.ipg-head button{margin-top:14px}}</style><div class="pg ipg"><header class="ipg-head"><div><div class="ey">Encrypted outbound automation</div><h1>Integrations</h1><p>Send findings, Defender incidents, scan results, and new relevant CISA KEVs to the systems your security team already uses.</p></div>${canManage?`<button class="btn btn-p" onclick="teamIntegrationOpen('${H(orgId)}')">Connect destination</button>`:''}</header><div class="ipg-grid">${ii.integrations.map(i=>{const d=latest.get(i.id);return `<article class="ipg-card"><div class="ipg-top"><span class="ipg-logo">${H(i.type==='siem-http'?'SIEM':i.type.slice(0,3).toUpperCase())}</span><div class="ipg-copy"><h2>${H(i.name)}</h2><p>${H(TEAM_INTEGRATION_LABELS[i.type]||i.type)} · secret ${i.hasSecret?'encrypted':'not configured'}</p></div><span class="bx ${i.enabled?'bx-g':''}">${i.enabled?'active':'paused'}</span></div><div class="ipg-status"><small id="team-int-msg-${H(i.id)}">${d?`Last delivery ${H(d.status)} · ${fmtDate(d.completedAt||d.createdAt)}`:'No delivery attempted yet'}</small>${canManage?`<div class="ipg-actions"><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Send test</button><button class="btn" onclick="teamIntegrationToggle('${H(orgId)}','${H(i.id)}',${i.enabled?'false':'true'})">${i.enabled?'Pause':'Enable'}</button><button class="btn" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Remove</button></div>`:''}</div></article>`}).join('')||'<div class="ipg-empty"><h2>No alert destinations connected</h2><p>Connect Slack, Microsoft Teams, Jira, Linear, a generic webhook, or an HTTP SIEM collector.</p></div>'}</div></div>`;
+    @media(max-width:800px){.ipg-grid{grid-template-columns:1fr}.ipg-head{display:block}.ipg-head button{margin-top:14px}}</style><div class="pg ipg"><header class="ipg-head"><div><div class="ey">Encrypted outbound automation</div><h1>Integrations</h1><p>Send findings, Defender incidents, scan results, and new relevant CISA KEVs to the systems your security team already uses.</p></div>${canManage?`<button class="btn btn-p" onclick="teamIntegrationOpen('${H(orgId)}')">Connect destination</button>`:''}</header><div class="ipg-grid">${ii.integrations.map(i=>{const d=latest.get(i.id);return `<article class="ipg-card"><div class="ipg-top"><span class="ipg-logo">${H(i.type==='siem-http'?'SIEM':i.type.slice(0,3).toUpperCase())}</span><div class="ipg-copy"><h2>${H(i.name)}</h2><p>${H(TEAM_INTEGRATION_LABELS[i.type]||i.type)} · secret ${i.hasSecret?'encrypted':'not configured'}</p></div><span class="bx ${i.enabled?'bx-g':''}">${i.enabled?'active':'paused'}</span></div><div class="ipg-status"><small id="team-int-msg-${H(i.id)}">${d?`Last delivery ${H(d.status)} · ${fmtDate(d.completedAt||d.createdAt)}`:'No delivery attempted yet'}</small>${canManage?`<div class="ipg-actions"><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Send test</button><button class="btn" onclick="teamIntegrationToggle('${H(orgId)}','${H(i.id)}',${i.enabled?'false':'true'})">${i.enabled?'Pause':'Enable'}</button><button class="btn" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Remove</button></div>`:''}</div></article>`}).join('')||'<div class="ipg-empty"><h2>No alert destinations connected</h2><p>Connect Slack, Microsoft Teams, Jira, Linear, a generic webhook, or an HTTP SIEM collector.</p></div>'}</div></div>`;
   }catch(e){M.innerHTML=`<div class="pg"><div class="empty"><h2>Integrations unavailable</h2><p>${H(e.detail||e.message)}</p></div></div>`}}
 
 async function pgTeam(){
@@ -1930,7 +1955,7 @@ async function pgTeam(){
       .team-ops{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}.team-scroll{max-height:390px;overflow:auto;padding-right:3px}
       .team-empty{padding:25px 12px;text-align:center;color:var(--t3);font-size:12px;border:1px dashed var(--brd);border-radius:10px}.team-footer{display:flex;justify-content:flex-end;margin-top:16px}
       .team-integration{padding:13px;border:1px solid var(--brd);border-radius:11px;background:rgba(0,0,0,.12);margin-bottom:8px}.team-integration:last-child{margin-bottom:0}.team-integration-top{display:flex;align-items:flex-start;gap:10px}.team-integration-logo{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;border:1px solid var(--brd2);background:var(--bg);font-size:10px;font-weight:900;color:var(--acc2);text-transform:uppercase}.team-integration-copy{flex:1;min-width:0}.team-integration-copy b{display:block;font-size:12.5px}.team-integration-copy small{display:block;font-size:10.5px;color:var(--t3);margin-top:3px}.team-integration-status{margin-top:9px;padding-top:9px;border-top:1px solid var(--brd);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.team-integration-status small{font-size:10px;color:var(--t3)}
-      .int-overlay{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);display:grid;place-items:center;padding:18px}.int-modal{width:min(680px,100%);max-height:92vh;overflow:auto;background:var(--s1);border:1px solid var(--brd2);border-radius:16px;box-shadow:0 28px 90px rgba(0,0,0,.65)}.int-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 22px;border-bottom:1px solid var(--brd)}.int-head h2{margin:0;font-size:19px}.int-head p{margin:5px 0 0;color:var(--t3);font-size:11px}.int-body{padding:22px}.int-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.int-field{display:grid;gap:6px}.int-field.full{grid-column:1/-1}.int-field label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--t3);font-weight:700}.int-field textarea{min-height:82px;resize:vertical}.int-note{font-size:10.5px;color:var(--t3);line-height:1.5;margin:12px 0}.int-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:18px}.int-actions .int-msg{margin-right:auto;font-size:11px}.int-secret{border-left:2px solid rgba(212,247,69,.38);padding-left:10px}
+      
       @media(max-width:1080px){.team-layout{grid-template-columns:1fr}.team-side{grid-template-columns:repeat(2,minmax(0,1fr))}.team-ops{grid-template-columns:1fr 1fr}}
       @media(max-width:760px){.team-head{align-items:stretch;flex-direction:column}.team-org{justify-content:flex-start}.team-org .fi{width:100%;min-width:0}.team-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.team-side,.team-ops{grid-template-columns:1fr}.team-finding{grid-template-columns:72px minmax(0,1fr)}.team-finding>:last-child{grid-column:1/-1}.team-form{grid-template-columns:minmax(0,1fr) 110px}.team-form .btn{grid-column:1/-1}.team-actions{justify-content:flex-start}}
       @media(max-width:480px){.team-pg{padding-left:14px;padding-right:14px}.team-kpis{grid-template-columns:1fr 1fr;gap:8px}.team-kpi{min-height:98px;padding:14px}.team-card{padding:16px}.team-org{align-items:stretch;flex-direction:column}.team-finding{grid-template-columns:1fr}.team-finding>:last-child{grid-column:auto}.team-form{grid-template-columns:1fr}.team-form .btn{grid-column:auto}}
@@ -1941,7 +1966,7 @@ async function pgTeam(){
       <div class="team-layout">
         <main class="team-stack"><section class="team-card"><div class="team-card-head"><h2>${ico('shield',{cls:'ico-sm'})} Finding queue</h2><small>${open.length} open · ${ff.findings.length} total</small></div>
           <div class="team-findings team-scroll">${ff.findings.length?ff.findings.map(f=>`<div class="team-finding"><span class="bx ${f.severity==='critical'?'bx-r':f.severity==='high'?'bx-o':f.severity==='low'?'bx-g':'bx-b'}">${H(f.severity)}</span><div class="team-finding-main"><b>${H(f.title)}</b><div class="team-meta">${H(f.source)} · ${H(f.assigneeUserId||'unassigned')} · ${fmtDate(f.updatedAt||f.createdAt)}</div></div>${canTriage?`<select class="fi" aria-label="Finding status" onchange="teamFindingStatus('${H(orgId)}','${H(f.id)}',this.value)">${statuses.map(s=>`<option ${s===f.status?'selected':''}>${s}</option>`).join('')}</select>`:`<span class="bx">${H(f.status)}</span>`}</div>`).join(''):'<div class="team-empty">No shared findings yet. Confirmed scan findings appear here automatically.</div>'}</div></section>
-          <div class="team-ops"><section class="team-card"><div class="team-card-head"><div><h2>${ico('zap',{cls:'ico-sm'})} Alert integrations</h2><small>encrypted organization delivery channels</small></div>${canManage?`<button class="btn btn-p" onclick="teamIntegrationOpen('${H(orgId)}')">Connect service</button>`:''}</div><div>${ii.integrations.map(i=>{const d=latestDelivery.get(i.id);return `<article class="team-integration"><div class="team-integration-top"><span class="team-integration-logo">${H(i.type==='siem-http'?'SIEM':i.type.slice(0,3))}</span><div class="team-integration-copy"><b>${H(i.name)}</b><small>${H(i.type)} · credentials ${i.hasSecret?'encrypted':'missing'}</small></div><span class="bx ${i.enabled?'bx-g':''}">${i.enabled?'active':'paused'}</span></div><div class="team-integration-status"><small id="team-int-msg-${H(i.id)}">${d?`Last delivery ${H(d.status)} · ${fmtDate(d.completedAt||d.createdAt)}`:'No delivery attempted yet'}</small>${canManage?`<div class="team-actions"><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Send test</button><button class="btn" onclick="teamIntegrationToggle('${H(orgId)}','${H(i.id)}',${i.enabled?'false':'true'})">${i.enabled?'Pause':'Enable'}</button><button class="btn" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Remove</button></div>`:''}</div></article>`}).join('')||'<div class="team-empty">Connect Slack, Microsoft Teams, Jira, Linear, a webhook, or your SIEM. Defender incidents and findings will be delivered automatically.</div>'}</div></section>
+          <div class="team-ops"><section class="team-card"><div class="team-card-head"><div><h2>${ico('zap',{cls:'ico-sm'})} Alert integrations</h2><small>encrypted organization delivery channels</small></div>${canManage?`<button class="btn btn-p" onclick="teamIntegrationOpen('${H(orgId)}')">Connect service</button>`:''}</div><div>${ii.integrations.map(i=>{const d=latestDelivery.get(i.id);return `<article class="team-integration"><div class="team-integration-top"><span class="team-integration-logo">${H(i.type==='siem-http'?'SIEM':i.type.slice(0,3).toUpperCase())}</span><div class="team-integration-copy"><b>${H(i.name)}</b><small>${H(TEAM_INTEGRATION_LABELS[i.type]||i.type)} · secret ${i.hasSecret?'encrypted':'not configured'}</small></div><span class="bx ${i.enabled?'bx-g':''}">${i.enabled?'active':'paused'}</span></div><div class="team-integration-status"><small id="team-int-msg-${H(i.id)}">${d?`Last delivery ${H(d.status)} · ${fmtDate(d.completedAt||d.createdAt)}`:'No delivery attempted yet'}</small>${canManage?`<div class="team-actions"><button class="btn btn-g" onclick="teamTestIntegration('${H(orgId)}','${H(i.id)}')">Send test</button><button class="btn" onclick="teamIntegrationToggle('${H(orgId)}','${H(i.id)}',${i.enabled?'false':'true'})">${i.enabled?'Pause':'Enable'}</button><button class="btn" onclick="teamDeleteIntegration('${H(orgId)}','${H(i.id)}')">Remove</button></div>`:''}</div></article>`}).join('')||'<div class="team-empty">Connect Slack, Microsoft Teams, Jira, Linear, a webhook, or your SIEM. Defender incidents and findings will be delivered automatically.</div>'}</div></section>
             <section class="team-card"><div class="team-card-head"><h2>${ico('list',{cls:'ico-sm'})} Durable jobs</h2><small>latest ${Math.min(jj.jobs.length,20)}</small></div><div class="team-list team-scroll">${jj.jobs.slice(0,20).map(j=>`<div class="team-row"><div class="team-row-main"><b>${H(j.type)}</b><small>${H(j.id)} · attempt ${j.attempts}/${j.maxAttempts}</small></div><span class="bx ${j.status==='succeeded'?'bx-g':j.status==='dead-letter'?'bx-r':j.status==='running'?'bx-o':''}">${H(j.status)}</span></div>`).join('')||'<div class="team-empty">No durable jobs yet.</div>'}</div></section></div>
           <section class="team-card"><div class="team-card-head"><h2>${ico('file-text',{cls:'ico-sm'})} Audit trail</h2><small>organization activity</small></div><div class="team-list team-scroll">${aa.events.slice(0,40).map(e=>`<div class="team-row"><div class="team-row-main"><b>${H(e.action)}</b><small>${H(e.resourceType)} ${H(e.resourceId||'')} · actor ${H(e.actorUserId||'system')}</small></div><small>${fmtDate(e.createdAt)}</small></div>`).join('')||'<div class="team-empty">No audit events yet.</div>'}</div></section>
         </main>
@@ -1953,7 +1978,7 @@ async function pgTeam(){
   }catch(e){M.innerHTML=`<div class="pg"><div class="empty"><h2>Team workspace unavailable</h2><p>${H(e.detail||e.message)}</p></div></div>`}
 }
 async function teamSwitch(orgId){await api('/team/active',{method:'POST',body:JSON.stringify({orgId})});pgTeam()}
-async function teamCreateOrg(){const name=prompt('Organization name');if(!name)return;const x=await api('/team/organizations',{method:'POST',body:JSON.stringify({name})});await teamSwitch(x.organization.id)}
+async function teamCreateOrg(){const v=await showForm('Create an organization',[{id:'name',label:'Organization name',required:true}],{submitLabel:'Create'});if(!v)return;try{const x=await api('/team/organizations',{method:'POST',body:JSON.stringify({name:v.name})});await teamSwitch(x.organization.id)}catch(e){alert(e.message)}}
 async function teamInviteMember(orgId){const email=$('tm-email').value.trim(),role=$('tm-role').value;try{await api(`/team/${orgId}/invitations`,{method:'POST',body:JSON.stringify({email,role})});alert('Invitation sent to '+email);pgTeam()}catch(e){alert(e.detail||e.message)}}
 const TEAM_INTEGRATION_LABELS={slack:'Slack',teams:'Microsoft Teams',jira:'Jira Cloud',linear:'Linear',webhook:'Generic webhook','siem-http':'SIEM HTTP collector'};
 function teamIntegrationClose(){const el=$('team-integration-modal');if(el)el.remove()}
@@ -1986,7 +2011,7 @@ async function teamIntegrationToggle(orgId,id,enabled){try{await api(`/team/${or
 async function teamTestIntegration(orgId,id){const msg=$(`team-int-msg-${id}`);if(msg)msg.innerHTML='<span class="sp"></span> Test queued…';try{await api(`/team/${orgId}/integrations/${id}/test`,{method:'POST'});if(msg)msg.textContent=queuedMsg(await workerReady(),'Test queued on the durable worker; refresh shortly to see the delivery result.')}catch(e){if(msg)msg.innerHTML=`<span class="err">${H(e.detail||e.message)}</span>`}}
 async function teamDeleteIntegration(orgId,id){if(!confirm('Delete this integration?'))return;try{await api(`/team/${orgId}/integrations/${id}`,{method:'DELETE'});go(INTEGRATION_RETURN)}catch(e){alert(e.detail||e.message)}}
 async function teamCreateProject(orgId){const name=$('tp-name').value.trim(),criticality=$('tp-criticality').value;try{await api(`/team/${orgId}/projects`,{method:'POST',body:JSON.stringify({name,criticality,environment:'production'})});pgTeam()}catch(e){alert(e.detail||e.message)}}
-async function teamFindingStatus(orgId,id,status){let body={status};if(['risk-accepted','false-positive'].includes(status)){body.reason=prompt('Reason (required)')||'';if(status==='risk-accepted')body.expiresAt=new Date(Date.now()+90*86400000).toISOString()}try{await api(`/team/${orgId}/findings/${id}`,{method:'PATCH',body:JSON.stringify(body)});pgTeam()}catch(e){alert(e.detail||e.message);pgTeam()}}
+async function teamFindingStatus(orgId,id,status){let body={status};if(['risk-accepted','false-positive'].includes(status)){const v=await showForm(status==='risk-accepted'?'Accept this risk':'Mark as false positive',[{id:'reason',label:'Reason',type:'textarea',required:true}],{submitLabel:'Confirm',note:status==='risk-accepted'?'Risk acceptance expires automatically after 90 days.':''});if(!v)return;body.reason=v.reason;if(status==='risk-accepted')body.expiresAt=new Date(Date.now()+90*86400000).toISOString()}try{await api(`/team/${orgId}/findings/${id}`,{method:'PATCH',body:JSON.stringify(body)});pgTeam()}catch(e){alert(e.detail||e.message);pgTeam()}}
 
 function pgShield(){
   M.innerHTML=`<div class="pg sec-page">
@@ -4358,6 +4383,63 @@ async function stopScan(sid){
 // ===== SCAN RESULTS — Advanced =====
 // Shared "this page failed to load" view with a retry — an eternal spinner is the worst failure
 // mode a page can have, and it was reachable from the Dashboard's main table.
+// Small form modal with its own inline styles, so it renders identically on every page. Resolves
+// with {id:value} on submit or null on cancel. Replaces the window.prompt() chains that collected,
+// among other things, an OIDC client secret one field at a time.
+function showForm(title,fields,{submitLabel='Save',note=''}={}){
+  return new Promise(resolve=>{
+    document.getElementById('sx-form')?.remove();
+    const ov=document.createElement('div');ov.id='sx-form';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:120;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto';
+    const ctl='width:100%;box-sizing:border-box;padding:10px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:9px;color:var(--t0);font-size:13px;font-family:inherit';
+    const inp=f=>f.type==='textarea'
+      ?`<textarea id="sxf-${f.id}" rows="3" placeholder="${H(f.placeholder||'')}" style="${ctl}"></textarea>`
+      :`<input id="sxf-${f.id}" type="${f.type||'text'}" placeholder="${H(f.placeholder||'')}" autocomplete="${f.type==='password'?'new-password':'off'}" spellcheck="false" style="${ctl}">`;
+    ov.innerHTML=`<form role="dialog" aria-modal="true" style="background:var(--bg2);border:1px solid var(--brd2);border-radius:14px;max-width:520px;width:100%;padding:22px 24px;color:var(--t0);box-shadow:0 24px 60px rgba(0,0,0,.6)">
+      <h2 style="margin:0 0 14px;font-size:17px">${H(title)}</h2>
+      ${fields.map(f=>`<label style="display:block;margin:0 0 12px"><span style="display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--t3);font-weight:700;margin-bottom:5px">${H(f.label)}${f.required?' *':''}</span>${inp(f)}</label>`).join('')}
+      ${note?`<p style="font-size:11.5px;color:var(--t3);line-height:1.5;margin:0 0 12px">${note}</p>`:''}
+      <div id="sxf-err" style="color:var(--red);font-size:12px;min-height:16px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap"><button type="button" class="btn" id="sxf-cancel">Cancel</button><button type="submit" class="btn btn-p">${H(submitLabel)}</button></div>
+    </form>`;
+    // Prefill via the property, not the attribute: H() does not escape quotes.
+    for(const f of fields)if(f.value!==undefined){const c=ov.querySelector('#sxf-'+f.id);if(c)c.value=f.value}
+    const done=v=>{ov.remove();resolve(v)};
+    ov.querySelector('#sxf-cancel').onclick=()=>done(null);
+    ov.addEventListener('click',e=>{if(e.target===ov)done(null)});
+    ov.addEventListener('keydown',e=>{if(e.key==='Escape')done(null)});
+    ov.querySelector('form').onsubmit=e=>{
+      e.preventDefault();
+      const out={};
+      for(const f of fields){
+        const c=ov.querySelector('#sxf-'+f.id),v=(c?.value||'').trim();
+        if(f.required&&!v){ov.querySelector('#sxf-err').textContent=f.label+' is required.';c?.focus();return}
+        out[f.id]=v;
+      }
+      done(out);
+    };
+    document.body.appendChild(ov);
+    ov.querySelector('input,textarea')?.focus();
+  });
+}
+// Show a value the user must copy (a token, a URL) in a real field with a Copy button. Replaces
+// window.prompt() being used as a copy box. The value is set via the property, never an attribute.
+function showCopy(title,value,noteHtml=''){
+  document.getElementById('sx-notice')?.remove();
+  const ov=document.createElement('div');ov.id='sx-notice';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:120;display:flex;align-items:center;justify-content:center;padding:24px';
+  ov.innerHTML=`<div role="dialog" aria-modal="true" style="background:var(--bg2);border:1px solid var(--brd2);border-radius:14px;max-width:520px;width:100%;padding:22px 24px;color:var(--t0);box-shadow:0 24px 60px rgba(0,0,0,.6)">
+    <h2 style="margin:0 0 10px;font-size:17px">${H(title)}</h2>
+    ${noteHtml?`<p style="font-size:13px;line-height:1.55;color:var(--t1);margin:0 0 10px">${noteHtml}</p>`:''}
+    <input id="sxc-val" readonly style="width:100%;box-sizing:border-box;padding:10px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:9px;color:var(--t0);font-size:12.5px;font-family:ui-monospace,monospace">
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn" id="sxc-copy">Copy</button><button class="btn btn-p" id="sxc-ok">Done</button></div>
+  </div>`;
+  const i=ov.querySelector('#sxc-val');i.value=value;i.onclick=()=>i.select();
+  ov.querySelector('#sxc-copy').onclick=function(){navigator.clipboard?.writeText(value).then(()=>{this.textContent='Copied'}).catch(()=>i.select())};
+  ov.querySelector('#sxc-ok').onclick=()=>ov.remove();
+  ov.addEventListener('click',e=>{if(e.target===ov)ov.remove()});
+  document.body.appendChild(ov);
+}
 function pageLoadError(title,e,retryJs){
   return `<div class="pg"><div class="empty"><h2>Couldn't load ${H(title)}</h2>
     <p style="color:var(--t2);max-width:520px;margin:10px auto 18px">${H(e?.message||'Something went wrong.')}</p>
@@ -5178,13 +5260,16 @@ async function settingsClearProviderKeys(){
 }
 
 async function settingsConfigureOidc(){
-  const issuer=prompt('OIDC issuer URL (HTTPS)');if(!issuer)return;
-  const clientId=prompt('OIDC client ID');if(!clientId)return;
-  const clientSecret=prompt('OIDC client secret');if(!clientSecret)return;
-  const allowedDomains=prompt('Verified email domains, comma-separated (required; verify them on the Domains page first)','')||'';
+  const v=await showForm('Configure organization SSO (OIDC)',[
+    {id:'issuer',label:'Issuer URL (HTTPS)',placeholder:'https://login.example.com',required:true},
+    {id:'clientId',label:'Client ID',required:true},
+    {id:'clientSecret',label:'Client secret',type:'password',required:true},
+    {id:'allowedDomains',label:'Allowed email domains (comma-separated)',placeholder:'example.com, example.org',required:true},
+  ],{submitLabel:'Save SSO',note:'Allowed domains must already be verified on the Domains page. The client secret is encrypted for this organization and never returned by the API.'});
+  if(!v)return;
   try{
-    const out=await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity/oidc`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({issuer,clientId,clientSecret,allowedDomains})});
-    prompt('Register this organization SSO start URL with your users. Register /auth/sso/org/callback as the provider callback.',out.startUrl);
+    const out=await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity/oidc`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(v)});
+    showCopy('SSO is configured',out.startUrl,'Share this start URL with your users, and register <code>/auth/sso/org/callback</code> as the provider callback.');
     pgCfg();
   }catch(e){alert(e.message||'Could not configure OIDC.')}
 }
@@ -5194,7 +5279,7 @@ async function settingsRotateScim(){
   try{
     const out=await api(`/team/${encodeURIComponent(ACTIVE_AI_ORG)}/identity/scim`,{method:'PUT',headers:{'content-type':'application/json'},body:'{}'});
     try{await navigator.clipboard.writeText(out.token)}catch{}
-    prompt(`Copy this SCIM token now; it will not be shown again. Base URL: ${out.baseUrl}`,out.token);
+    showCopy('Your new SCIM token',out.token,'Copy it now — it will not be shown again. Base URL: <code>'+H(out.baseUrl)+'</code>');
     pgCfg();
   }catch(e){alert(e.message||'Could not create the SCIM token.')}
 }
@@ -5277,45 +5362,9 @@ async function pgCode(){
 }
 
 // renderCodePaywall — removed. Code Scan is free for everyone, no paywall to render.
-let CS_BILL_CYCLE='monthly';  // legacy placeholder
 
 // ===== Dedicated Billing / Plans page =====
 // Billing page — every feature is FREE FOR EVERYONE. No plans, no checkout.
-function pgBilling(){
-  CID=null;sList();
-  M.innerHTML=`<div class="pg" style="max-width:920px">
-    <div style="position:relative;padding:48px 44px;border-radius:24px;overflow:hidden;background:linear-gradient(160deg,rgba(212,247,69,.12) 0%,rgba(74,222,128,.05) 100%),linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid rgba(212,247,69,.32);margin-bottom:24px;text-align:center">
-      <div style="position:absolute;inset:0;background-image:radial-gradient(800px 400px at 50% 0%,rgba(212,247,69,.18),transparent 60%);pointer-events:none"></div>
-      <div style="position:relative">
-        <div style="display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:rgba(74,222,128,.14);border:1px solid rgba(74,222,128,.32);margin-bottom:18px">
-          <span style="width:8px;height:8px;border-radius:50%;background:var(--grn);box-shadow:0 0 8px var(--grn);animation:pdot 1.4s ease-in-out infinite"></span>
-          <span style="font:700 11px 'JetBrains Mono',monospace;letter-spacing:1.4px;text-transform:uppercase;color:var(--grn)">All features unlocked</span>
-        </div>
-        <h1 class="h-display" style="font-size:54px;letter-spacing:-1.2px;line-height:1.0;margin-bottom:14px;background:linear-gradient(135deg,var(--t0) 0%,var(--acc) 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">Free for everyone.</h1>
-        <p style="color:var(--t2);font-size:16px;line-height:1.6;max-width:560px;margin:0 auto">No subscription, no plan tiers. Bring your own API keys. Fair-use daily limits apply per organization — your current usage is shown in Settings.</p>
-      </div>
-    </div>
-
-    <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
-      <div class="crd" style="padding:22px 24px"><div style="font-size:24px;margin-bottom:6px">⚡</div><div style="font-family:'Inter',system-ui,sans-serif;font-size:15px;font-weight:700;color:var(--t0);margin-bottom:4px">Unlimited scans</div><div style="font-size:12.5px;color:var(--t2);line-height:1.55">Web pentest and code scan, both with no daily cap.</div></div>
-      <div class="crd" style="padding:22px 24px"><div style="font-size:24px;margin-bottom:6px">🔓</div><div style="font-family:'Inter',system-ui,sans-serif;font-size:15px;font-weight:700;color:var(--t0);margin-bottom:4px">Every feature</div><div style="font-size:12.5px;color:var(--t2);line-height:1.55">Multi-LLM war room, live constellation, full report — all unlocked.</div></div>
-      <div class="crd" style="padding:22px 24px"><div style="font-size:24px;margin-bottom:6px">🔑</div><div style="font-family:'Inter',system-ui,sans-serif;font-size:15px;font-weight:700;color:var(--t0);margin-bottom:4px">Your keys, your bill</div><div style="font-size:12.5px;color:var(--t2);line-height:1.55">Anthropic / OpenAI / Gemini / GLM costs go straight to your provider — Securovix charges you nothing.</div></div>
-    </div>
-
-    <div style="display:flex;gap:10px;justify-content:center;margin-top:32px;flex-wrap:wrap">
-      <button class="btn btn-p" onclick="go('new')">▶ New Scan</button>
-      <button class="btn btn-g" onclick="go('code')">⚔ Code Scan</button>
-      <button class="btn btn-g" onclick="go('cfg')">Settings &amp; API Keys</button>
-    </div>
-  </div>`;
-}
-
-// Subscription helpers — kept as no-ops so any leftover button references don't crash.
-async function csSubscribe(){ alert('Everything is free for everyone — no subscription needed.'); }
-async function csCancelSub(){ /* no-op: nothing to cancel */ }
-async function csManageSub(){ go('billing'); }
-function csSetCycle(){ /* no-op */ }
-function csRenderPlanCards(){ return ''; }
 
 // ----- Multi-agent state -----
 let CS_AGENTS=[],CS_PHASES=[],CS_RUN=null,CS_EVT=null,CS_RESULT=null,CS_TURNS=[];
@@ -5330,7 +5379,7 @@ function renderCodeScanner(me){
   const providerCount=PROVIDER_ROWS.filter((provider)=>!!csLoadKeys()[provider.field]).length;
   const planBadge=me.isOwner
     ? `<span class="sev sev-medium">${ico('flame',{cls:'ico-sm'})}<span>Owner · ${me.used}/${limit} today</span></span>`
-    : `<span class="sev sev-info">${ico('circle-check',{cls:'ico-sm'})}<span>${H(me.label||'Subscribed')} · ${me.used}/${limit} today</span></span><button class="btn btn-g" style="padding:5px 11px;font-size:10.5px;margin-left:8px" onclick="csManageSub()">Manage</button>`;
+    : `<span class="sev sev-info">${ico('circle-check',{cls:'ico-sm'})}<span>${H(me.label||'Subscribed')} · ${me.used}/${limit} today</span></span>`;
 
   M.innerHTML=`<div class="pg sec-page code-page">
     <section class="cs-hero">
@@ -5485,94 +5534,6 @@ function csReadFile(file){
 }
 
 // ===== SINGLE FILE MODE — single-pass quick scan, no war room =====
-function csRenderFileMode(pane){
-  pane.innerHTML=`<div class="crd" style="padding:24px">
-    <div class="cs-dz" id="cs-dz-file" tabindex="0" role="button" aria-label="Select or drop a file">
-      <div class="cs-dz-icon">${ico('file-text',{cls:'ico-xl'})}</div>
-      <h3>Drop a file or click to select</h3>
-      <p>One source file, up to <strong style="color:var(--t1)">256KB</strong>. Shannon runs a single-pass Red+Blue scan and returns the patched code. Faster &amp; cheaper than the full war room.</p>
-      <div class="cs-dz-actions">
-        <button class="btn btn-p" type="button" id="cs-pick-file" style="display:inline-flex;align-items:center;gap:6px">${ico('plus',{cls:'ico-sm'})} Choose file</button>
-      </div>
-      <input type="file" id="cs-single-file" accept=".js,.ts,.tsx,.jsx,.mjs,.cjs,.py,.go,.rs,.java,.kt,.rb,.php,.cs,.cpp,.cc,.c,.h,.hpp,.swift,.sol,.sql,.html,.css,.scss,.vue,.svelte,.yaml,.yml,.json,.md,.txt,.sh,.ps1,.bash,.dockerfile,text/*" style="display:none">
-    </div>
-    <div id="cs-file-status" style="margin-top:14px;font-size:12.5px;color:var(--t3);text-align:center"></div>
-    <div id="cs-file-result"></div>
-  </div>`;
-
-  const dz=$('cs-dz-file'),inp=$('cs-single-file');
-  $('cs-pick-file').onclick=()=>inp.click();
-  dz.onclick=e=>{if(e.target===dz||e.target.classList.contains('cs-dz-icon')||e.target.tagName==='H3'||e.target.tagName==='P')inp.click()};
-  inp.onchange=e=>{const f=e.target.files[0];if(f)csQuickScanFile(f)};
-  ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag')}));
-  ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag')}));
-  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');const f=e.dataTransfer.files[0];if(f)csQuickScanFile(f)});
-}
-
-async function csQuickScanFile(file){
-  const status=$('cs-file-status'),resultBox=$('cs-file-result');
-  if(!file)return;
-  if(file.size>256_000){status.innerHTML=`<span style="color:var(--red)">${H(file.name)} is too large (${(file.size/1024).toFixed(0)}KB). Maximum 256KB — try Project mode.</span>`;return}
-  const text=await file.text();
-  await csRefreshKeys();
-  const keys=csLoadKeys();
-  if(!keys.claude){const k=await promptForAnthropicKey('Anthropic key required to start the scan.');if(!k)return}
-
-  status.innerHTML=`<span class="sp" style="vertical-align:middle;margin-right:8px"></span> Scanning <strong style="color:var(--t1)">${H(file.name)}</strong> (${(file.size/1024).toFixed(1)}KB)…`;
-  resultBox.innerHTML='';
-
-  try{
-    const r=await fetch('/api/code-scan/quick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:text,filename:file.name})});
-    const d=await r.json();
-    if(!d.ok){throw new Error(d.error||'Scan failed')}
-    if(!d.result){throw new Error(d.error||'No result')}
-    status.innerHTML=`<span style="color:var(--grn)">${ico('check',{cls:'ico-sm'})} Scan complete</span>`;
-    CS_RESULT=d.result;
-    csRenderQuickResult(d.result,file.name,resultBox);
-  }catch(e){
-    status.innerHTML=`<span style="color:var(--red)">Error: ${H(e.message)}</span>`;
-  }
-}
-
-function csRenderQuickResult(r,filename,box){
-  const findings=r.redTeam?.findings||[];
-  const fixed=r.blueTeam?.fixedCode||'';
-  const risk=r.overallRisk||'info';
-  const riskColor={critical:'var(--red)',high:'var(--org)',medium:'var(--ylw)',low:'var(--blu)',clean:'var(--grn)',info:'var(--t2)'}[risk]||'var(--t2)';
-  const sevCount=findings.reduce((a,f)=>{a[f.severity]=(a[f.severity]||0)+1;return a},{});
-
-  box.innerHTML=`
-    <div style="margin-top:18px;padding:18px 20px;border-radius:14px;background:linear-gradient(180deg,var(--s1),var(--bg2));border:1px solid var(--brd);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px">
-      <div>
-        <div style="color:var(--t3);font-size:11px;text-transform:uppercase;letter-spacing:.7px">${H(r.language||'unknown')}</div>
-        <div class="h-display" style="font-size:24px;margin-top:4px">${H(filename)} — risk <span style="color:${riskColor}">${H(risk)}</span></div>
-        <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
-          ${sevCount.critical?`<span class="sev sev-critical">${ico('alert-octagon',{cls:'ico-sm'})}<span>${sevCount.critical} Critical</span></span>`:''}
-          ${sevCount.high    ?`<span class="sev sev-high">${ico('alert-triangle',{cls:'ico-sm'})}<span>${sevCount.high} High</span></span>`:''}
-          ${sevCount.medium  ?`<span class="sev sev-medium">${ico('info',{cls:'ico-sm'})}<span>${sevCount.medium} Medium</span></span>`:''}
-          ${sevCount.low     ?`<span class="sev sev-low">${ico('info',{cls:'ico-sm'})}<span>${sevCount.low} Low</span></span>`:''}
-          ${findings.length===0?`<span class="sev sev-info">${ico('circle-check',{cls:'ico-sm'})}<span>Clean</span></span>`:''}
-        </div>
-      </div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-g" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" onclick="csCopyText(window._csQuickFixed||'')">${ico('check',{cls:'ico-sm'})} Copy fixed</button>
-        <button class="btn btn-p" style="padding:8px 14px;font-size:12px;display:inline-flex;align-items:center;gap:6px" onclick="csDl(window._csQuickFixed||'',${JSON.stringify(filename)},'text/plain')">${ico('file-text',{cls:'ico-sm'})} Download fixed file</button><button class="btn btn-g" style="padding:8px 14px;font-size:12px" onclick="csExportSarif('result')">Export SARIF</button>
-      </div>
-    </div>
-
-    <div class="crd" style="padding:0;margin-top:14px;overflow:hidden">
-      <div class="cs-tabs" style="padding:0 14px">
-        <button class="cs-tab on" data-tab="findings">${ico('alert-octagon',{cls:'ico-sm'})} Findings (${findings.length})</button>
-        <button class="cs-tab" data-tab="fixed">${ico('file-text',{cls:'ico-sm'})} Fixed Code</button>
-      </div>
-      <div id="cs-tab-content" style="padding:18px 20px"></div>
-    </div>
-  `;
-  window._csQuickFixed=fixed;
-  document.querySelectorAll('#cs-file-result .cs-tab').forEach(b=>b.onclick=()=>csShowTab(b.dataset.tab));
-  csShowTab('findings');
-}
-
 function csCopyText(t){navigator.clipboard.writeText(t).then(()=>csToast('Copied to clipboard','success')).catch(()=>csToast('Copy failed','error'))}
 function csToast(msg,kind){let el=document.getElementById('cs-toast');if(!el){el=document.createElement('div');el.id='cs-toast';el.className='toast '+(kind||'');document.body.appendChild(el)}el.className='toast '+(kind||'')+' show';el.innerHTML=`${ico(kind==='error'?'x':'check',{cls:'ico-sm'})}<span>${H(msg)}</span>`;setTimeout(()=>el.classList.remove('show'),2200)}
 
@@ -6256,7 +6217,7 @@ function mountApp(){
   API_AUTH_SHOWN=false; // a fresh session may expire again later; re-arm the global 401 handler
   // Inject the user pill into the sidebar (above logo's bottom border)
   injectUserPill();
-  load().then(()=>go('dash'));
+  load().then(()=>{const r=parseHash();go(r.p,r.d)});
 }
 
 function injectUserPill(){
