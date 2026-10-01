@@ -761,6 +761,17 @@ app.post('/api/auth/email/resend', async (req, res) => {
 
 app.post('/api/auth/password/request', async (req, res) => {
   if (limited(req, res, 'password-reset', 5, 60 * 60_000)) return;
+  // In production sendEmail() throws when no provider is configured. That throw used to be caught
+  // below and the route still answered "a reset link has been sent" — so on a deployment without
+  // RESEND_API_KEY / SHANNON_EMAIL_WEBHOOK_URL, password reset was 100% broken and reported success.
+  // Say so instead. This is a deployment-level fact, identical for every email address, so it leaks
+  // nothing about whether an account exists.
+  if (process.env.NODE_ENV === 'production' && !process.env.RESEND_API_KEY && !process.env.SHANNON_EMAIL_WEBHOOK_URL) {
+    return res.status(503).json({
+      error: 'Password reset by email is not available on this deployment: no email provider is configured. Contact your administrator.',
+      code: 'EMAIL_NOT_CONFIGURED',
+    });
+  }
   const email = String(req.body?.email || '').trim().toLowerCase();
   const user = findUserByEmail(email);
   let reset = null;

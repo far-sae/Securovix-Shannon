@@ -1753,12 +1753,57 @@ async function api(u,o){
   }
   const r=await fetch('/api'+u,o);
   if(!r.ok){
-    const e=new Error('HTTP '+r.status);e.status=r.status;
-    // Keep .message as-is (existing callers render it); expose the server's reason as .detail.
-    try{const b=await r.json();if(b&&b.error)e.detail=b.error}catch{}
+    // Carry the server's actual reason. Before this, .message was the literal "HTTP 403" and 25+
+    // call sites printed exactly that — so "verify your domain first" reached the user as a number.
+    let b=null;try{b=await r.json()}catch{}
+    const reason=(b&&(b.error||b.message))||('HTTP '+r.status);
+    const e=new Error(reason);e.status=r.status;e.detail=reason;e.body=b||{};
+    // Two failures are the same everywhere, so handle them once here rather than per page.
+    if(r.status===401&&!u.startsWith('/auth/'))apiSessionExpired();
+    if(r.status===429&&b&&b.code==='ORG_USAGE_LIMIT')apiQuotaReached(b);
     throw e
   }
   return r.json();
+}
+
+// Session gone (expired, revoked by MFA changes, server restart with a rotated secret): return the
+// user to the sign-in screen instead of each page inventing its own "please sign in" text — several
+// of which linked to Settings, a page that itself needs a session.
+let API_AUTH_SHOWN=false;
+function apiSessionExpired(){
+  if(API_AUTH_SHOWN)return;API_AUTH_SHOWN=true;
+  CURRENT_USER=null;
+  if(EVT){EVT.close();EVT=null}
+  if(POLL){clearInterval(POLL);POLL=null}
+  renderAuthScreen();
+  const sub=document.getElementById('auth-sub');
+  if(sub)sub.textContent='Your session ended. Sign in again to continue.';
+}
+
+// Generic notice modal with its own inline styles, so it renders identically on every page — the
+// per-page <style> blocks (.int-*, .def-*, …) only exist while that page is mounted.
+function showNotice(title,bodyHtml,{actions=''}={}){
+  document.getElementById('sx-notice')?.remove();
+  const ov=document.createElement('div');ov.id='sx-notice';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:120;display:flex;align-items:center;justify-content:center;padding:24px';
+  ov.innerHTML=`<div role="dialog" aria-modal="true" style="background:var(--bg2);border:1px solid var(--brd2);border-radius:14px;max-width:460px;width:100%;padding:22px 24px;color:var(--t0);box-shadow:0 24px 60px rgba(0,0,0,.6)">
+    <h2 style="margin:0 0 10px;font-size:17px">${title}</h2>
+    <div style="font-size:13.5px;line-height:1.6;color:var(--t1)">${bodyHtml}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">${actions}<button class="btn btn-p" onclick="document.getElementById('sx-notice').remove()">OK</button></div>
+  </div>`;
+  ov.addEventListener('click',e=>{if(e.target===ov)ov.remove()});
+  document.body.appendChild(ov);
+}
+
+// Daily fair-use cap hit. The server sends metric/used/limit; show them, plus when they reset,
+// instead of the bare "HTTP 429" that used to appear.
+function apiQuotaReached(b){
+  const names={scans:'scans',codeFiles:'code-scan files',agentRuns:'agent runs'};
+  const what=names[b.metric]||b.metric||'this action';
+  showNotice('Daily limit reached',
+    `Your organization has used <b>${H(String(b.used??'?'))}/${H(String(b.limit??'?'))}</b> ${H(what)} today on the <b>${H(b.plan||'free')}</b> plan.
+     Counters reset at <b>00:00 UTC</b>.${b.upgradeAvailable?' Upgrading lifts the cap.':''}`,
+    {actions:b.upgradeAvailable?`<button class="btn" onclick="document.getElementById('sx-notice').remove();go('cfg')">See plan</button>`:''});
 }
 
 async function pgVuln(){
@@ -3486,13 +3531,15 @@ async function doScan(){
       networkScan:WIZ.networkScan===true,
       networkAuthorized:WIZ.networkAuthorized===true,
     })});
-    if(r.error){
-      // Server says we must prove we own the domain → open the verification flow, then let them retry.
-      if(r.needsVerification){ reenable(); await verifyModal(r.needsVerification); return; }
-      alert(r.error); reenable(); return;
-    }
     WIZ={};go('live',r.scanId);
-  }catch(e){alert(e.message);reenable();}
+  }catch(e){
+    reenable();
+    // api() throws on any non-2xx, so the server's reasons arrive here, on e.body — not on `r`.
+    // (An earlier version checked r.needsVerification after the await; that branch could never run.)
+    if(e.status===403&&e.body?.needsVerification){ await verifyModal(e.body.needsVerification); return; }
+    if(e.status===429&&e.body?.code==='ORG_USAGE_LIMIT') return; // the shared quota dialog is already up
+    alert(e.message);
+  }
 }
 
 // Authorization attestation — shown before scanning any external target. Active testing of a
@@ -3854,6 +3901,11 @@ function pgLive(sid){
     else if(d.type==='output')handleOutput(d.line||'');
     else if(d.type==='complete'||d.type==='failed'||d.type==='stopped')handleEnd(d.type);
   };
+  // Without this, a dropped connection is indistinguishable from a scan that is still running:
+  // the timer keeps counting and nothing on screen changes. The browser reconnects on its own;
+  // we just say so, and clear the banner when the stream comes back.
+  EVT.onerror=()=>{ if(EVT)liveConnBanner(true) };
+  EVT.onopen=()=>liveConnBanner(false);
 
   POLL=setInterval(()=>{
     const elapsed=(Date.now()-LIVE.startedAt)/1000|0;
@@ -4008,9 +4060,20 @@ function handleOutput(line){
   if(LIVE.arena.mode){feedArena(phaseId,kind,txt)}
 }
 
+function liveConnBanner(lost){
+  let b=$('lv-conn');
+  if(!b){
+    b=document.createElement('div');b.id='lv-conn';
+    b.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:90;padding:8px 14px;border-radius:8px;font-size:12.5px;background:#2e2300;color:#ffd166;border:1px solid #6e5400;display:none';
+    b.textContent='Connection to the live scan was lost — reconnecting…';
+    document.body.appendChild(b);
+  }
+  b.style.display=lost?'block':'none';
+}
 function handleEnd(type){
   if(EVT){EVT.close();EVT=null}
   if(POLL){clearInterval(POLL);POLL=null}
+  liveConnBanner(false);
   const labels={complete:'Complete',failed:'Failed',stopped:'Stopped'};
   const titles={complete:'Scan Complete',failed:'Scan Failed',stopped:'Scan Stopped'};
   const colors={complete:'var(--grn)',failed:'var(--red)',stopped:'var(--ylw)'};
@@ -4243,9 +4306,19 @@ async function stopScan(sid){
 }
 
 // ===== SCAN RESULTS — Advanced =====
+// Shared "this page failed to load" view with a retry — an eternal spinner is the worst failure
+// mode a page can have, and it was reachable from the Dashboard's main table.
+function pageLoadError(title,e,retryJs){
+  return `<div class="pg"><div class="empty"><h2>Couldn't load ${H(title)}</h2>
+    <p style="color:var(--t2);max-width:520px;margin:10px auto 18px">${H(e?.message||'Something went wrong.')}</p>
+    <button class="btn btn-p" onclick="${retryJs}">Try again</button>
+    <button class="btn" onclick="go('dash')">Back to dashboard</button></div></div>`;
+}
 async function pgScan(sid){
   M.innerHTML=`<div class="pg" style="display:flex;align-items:center;justify-content:center;padding-top:140px;gap:14px"><span class="sp sp-l"></span><span style="color:var(--t2)">Loading results…</span></div>`;
-  const d=await api('/scans/'+sid);
+  let d;
+  try{ d=await api('/scans/'+sid); }
+  catch(e){ if(e.status===401)return; M.innerHTML=pageLoadError('this report',e,`go('scan','${H(sid)}')`); return; }
   const s=d.session,f=d.files;
   // Track B/C — broker-verified exploitation findings + compliance roll-up (may be empty).
   const broker=await api('/scans/'+sid+'/broker').catch(()=>({findings:[],rows:[],owaspCoverage:{},cweCoverage:{}}));
@@ -4832,6 +4905,13 @@ const PROVIDER_ROWS=[
   {field:'glm',   name:'Zhipu — GLM-4-Plus',          provider:'glm',   placeholder:'bigmodel api key', note:'open.bigmodel.cn → API keys',                               strength:'Cost-efficient — handy for high-volume blue-team passes.',           getUrl:'https://open.bigmodel.cn/usercenter/apikeys',  getLabel:'open.bigmodel.cn',     short:'Z',gradient:'background:radial-gradient(circle at 30% 30%,#aacfc4,#88b3a8 60%,#557b73)'},
 ];
 async function pgCfg(){
+  // Settings fires six requests before it paints anything; a slow or failed load used to leave the
+  // PREVIOUS page on screen with "Settings" highlighted in the nav. Paint a loading state first.
+  M.innerHTML=`<div class="pg" style="display:flex;align-items:center;justify-content:center;padding-top:140px;gap:14px"><span class="sp sp-l"></span><span style="color:var(--t2)">Loading settings…</span></div>`;
+  try{ await pgCfgInner(); }
+  catch(e){ if(e.status===401)return; M.innerHTML=pageLoadError('settings',e,"go('cfg')"); }
+}
+async function pgCfgInner(){
   await csRefreshKeys();
   await csRefreshRepositoryProvider();
   const stored=csLoadKeys();
@@ -5160,7 +5240,7 @@ function pgBilling(){
           <span style="font:700 11px 'JetBrains Mono',monospace;letter-spacing:1.4px;text-transform:uppercase;color:var(--grn)">All features unlocked</span>
         </div>
         <h1 class="h-display" style="font-size:54px;letter-spacing:-1.2px;line-height:1.0;margin-bottom:14px;background:linear-gradient(135deg,var(--t0) 0%,var(--acc) 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">Free for everyone.</h1>
-        <p style="color:var(--t2);font-size:16px;line-height:1.6;max-width:560px;margin:0 auto">No subscription, no plan tiers, no daily limits. Bring your own API keys and run as many scans as you like.</p>
+        <p style="color:var(--t2);font-size:16px;line-height:1.6;max-width:560px;margin:0 auto">No subscription, no plan tiers. Bring your own API keys. Fair-use daily limits apply per organization — your current usage is shown in Settings.</p>
       </div>
     </div>
 
@@ -5197,7 +5277,7 @@ function renderCodeScanner(me){
   const limit=me.dailyLimit===-1?'∞':me.dailyLimit;
   const providerCount=PROVIDER_ROWS.filter((provider)=>!!csLoadKeys()[provider.field]).length;
   const planBadge=me.isOwner
-    ? `<span class="sev sev-medium">${ico('flame',{cls:'ico-sm'})}<span>Owner · ${me.used}/∞ today</span></span>`
+    ? `<span class="sev sev-medium">${ico('flame',{cls:'ico-sm'})}<span>Owner · ${me.used}/${limit} today</span></span>`
     : `<span class="sev sev-info">${ico('circle-check',{cls:'ico-sm'})}<span>${H(me.label||'Subscribed')} · ${me.used}/${limit} today</span></span><button class="btn btn-g" style="padding:5px 11px;font-size:10.5px;margin-left:8px" onclick="csManageSub()">Manage</button>`;
 
   M.innerHTML=`<div class="pg sec-page code-page">
@@ -5850,7 +5930,10 @@ function csOpenStream(runId){
   if(CS_EVT){CS_EVT.close();CS_EVT=null}
   CS_EVT=new EventSource('/api/code-scan/multi/'+runId+'/events');
   CS_EVT.onmessage=ev=>{try{csHandle(JSON.parse(ev.data))}catch(e){console.error(e)}};
-  CS_EVT.onerror=()=>{};
+  // Previously swallowed outright, which left the war room spinning forever on a dropped stream.
+  // csHandle closes CS_EVT on complete/failed, so an error while CS_EVT is still set is a real drop.
+  CS_EVT.onerror=()=>{ if(!CS_EVT)return; const s=$('cs-status'); if(s)s.textContent='Connection lost — reconnecting…'; };
+  CS_EVT.onopen=()=>{ const s=$('cs-status'); if(s&&/Connection lost/.test(s.textContent))s.textContent='Reconnected — waiting for the next update…'; };
 }
 
 function csHandle(e){
@@ -6118,6 +6201,7 @@ async function authBoot(){
 }
 
 function mountApp(){
+  API_AUTH_SHOWN=false; // a fresh session may expire again later; re-arm the global 401 handler
   // Inject the user pill into the sidebar (above logo's bottom border)
   injectUserPill();
   load().then(()=>go('dash'));
@@ -6149,7 +6233,7 @@ function injectUserPill(){
       <div style="display:flex;align-items:center;gap:6px;min-width:0">
         <span style="width:6px;height:6px;border-radius:50%;background:${planColor};box-shadow:0 0 8px ${planColor};flex-shrink:0;animation:bxDot 1.8s ease-in-out infinite"></span>
         <span style="font-size:11px;font-weight:700;color:${planColor};text-transform:uppercase;letter-spacing:.6px;white-space:nowrap">${H(planName)}</span>
-        <span style="margin-left:auto;font-size:10px;color:var(--t3);letter-spacing:.4px">all features unlocked</span>
+        <span style="margin-left:auto;font-size:10px;color:var(--t3);letter-spacing:.4px">free · fair-use limits</span>
       </div>
     </div>`;
   sidebar.appendChild(pill);
@@ -6338,7 +6422,7 @@ function authSwitch(mode){
   document.getElementById('auth-tab-signin').classList.toggle('on',mode==='signin');
   document.getElementById('auth-tab-signup').classList.toggle('on',mode==='signup');
   document.getElementById('auth-h').textContent=mode==='signup'?'Create your account':'Welcome back';
-  document.getElementById('auth-sub').textContent=mode==='signup'?'Create an account to keep your scan history. Every feature is free for everyone — no plans or limits.':'Sign in to access your scan history. All features are free.';
+  document.getElementById('auth-sub').textContent=mode==='signup'?'Create an account to keep your scan history. Every feature is free; fair-use daily limits apply per organization.':'Sign in to access your scan history. All features are free.';
   document.getElementById('auth-signup-fields').style.display=mode==='signup'?'block':'none';
   document.getElementById('auth-consent').style.display=mode==='signup'?'flex':'none';
   document.getElementById('auth-pwd').setAttribute('autocomplete',mode==='signup'?'new-password':'current-password');
@@ -6383,7 +6467,11 @@ function authSso(){window.location.href='/auth/sso'}
 async function authForgot(){
   const email=document.getElementById('auth-email').value.trim()||prompt('Account email');if(!email)return;
   const r=await fetch('/api/auth/password/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email})});
-  const d=await r.json();const err=document.getElementById('auth-err');err.style.color='var(--grn)';err.textContent=d.message||'Check your email.';
+  const d=await r.json().catch(()=>({}));const err=document.getElementById('auth-err');
+  // A 503 here means this deployment has no email provider — the request did NOT go anywhere.
+  // Painting that green as "check your email" sends the user to wait for mail that cannot arrive.
+  if(!r.ok){err.style.color='var(--red)';err.textContent=d.error||('Could not request a reset (HTTP '+r.status+').');return}
+  err.style.color='var(--grn)';err.textContent=d.message||'Check your email.';
 }
 
 function authMfaPrompt(challenge){
