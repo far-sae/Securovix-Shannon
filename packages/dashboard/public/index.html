@@ -3155,10 +3155,59 @@ async function defSelfLoad() {
       el.innerHTML = '<p style="margin-top:0">Protect the Securovix control plane itself with inline request analysis.</p><p class="def-fine">Set <code>SHANNON_DEFEND_SELF=1</code> in Railway. Start with <code>SHANNON_DEFEND_SELF_MODE=monitor</code>, review telemetry, then enforce.</p>';
       return;
     }
-    el.innerHTML = `<p style="margin-top:0">Mode <b>${H(s.mode)}</b> · ${Number(s.stats.events || 0).toLocaleString()} requests inspected · ${Number(s.stats.defenses || 0).toLocaleString()} detections</p><p class="def-fine">${(s.recent || []).length ? `${s.recent.length} recent detections retained in process.` : 'No dashboard threats detected in this process.'}</p><div class="def-actions"><button class="btn ${s.mode === 'enforce' ? 'btn-g' : 'btn-p'}" onclick="defSelfMode('${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">Switch to ${s.mode === 'enforce' ? 'monitor' : 'enforce'}</button></div>`;
+    const pol = s.banPolicy || {};
+    const banLine = !pol.enabled
+      ? 'Repeat-offender ban: off (<code>SHANNON_DEFEND_SELF_BAN=1</code> to report, <code>…_BAN_MODE=enforce</code> to refuse).'
+      : `Repeat-offender ban: ${pol.enforce ? '<b>enforcing</b>' : '<b>report-only</b> — shows what it would do'} · ${H(String(pol.threshold))} confirmed attacks within ${Math.round(Number(pol.windowMs || 0) / 1000)}s bans an IP for ${Math.round(Number(pol.ttlMs || 0) / 60000)} min.`;
+    el.innerHTML = `<p style="margin-top:0">Mode <b id="def-self-mode">${H(s.mode)}</b> · ${Number(s.stats.events || 0).toLocaleString()} requests inspected · ${Number(s.stats.defenses || 0).toLocaleString()} detections${Number(s.stats.banned || 0) ? ` · ${Number(s.stats.banned).toLocaleString()} refused (banned)` : ''}</p>
+      <p class="def-fine">${banLine}${s.platformOrgConfigured ? '' : '<br>Set <code>SHANNON_PLATFORM_ORG_ID</code> to persist these detections and send them to your alert integrations.'}</p>
+      <div id="def-self-bans">${defSelfBans(s.bans)}</div>
+      <div class="def-actions"><button class="btn ${s.mode === 'enforce' ? 'btn-g' : 'btn-p'}" onclick="defSelfMode('${s.mode === 'enforce' ? 'monitor' : 'enforce'}')">Switch to ${s.mode === 'enforce' ? 'monitor' : 'enforce'}</button></div>
+      <p class="def-fine" style="margin:10px 0 4px"><b>Live</b> · <span id="def-self-live-state">connecting…</span></p>
+      <div id="def-self-live">${(s.recent || []).slice(0, 25).map(defSelfRow).join('') || '<span class="def-fine">No detections yet — they will appear here the moment they happen.</span>'}</div>`;
+    defSelfStream();
   } catch (e) {
     el.innerHTML = e.status === 403 ? '<p class="def-fine">Platform self-defense controls are restricted to platform administrators. Organization Defender remains available.</p>' : `<span class="err">${H(e.detail || e.message || 'failed to load')}</span>`;
   }
+}
+
+function defSelfRow(r) {
+  return `<div><code>${H(r.method || '')} ${H(r.url || '')}</code> — <b>${H(r.cls || '—')}</b>${r.srcIp ? ` <span class="def-fine">from ${H(r.srcIp)}</span>` : ''} — ${H(r.action || '')}${r.enforced ? ' <b>(blocked)</b>' : ''}</div>`;
+}
+function defSelfBans(bans) {
+  if (!bans || !bans.length) return '';
+  return `<div class="def-fine" style="margin:6px 0"><b>Banned IPs:</b> ${bans.map((b) => `<code>${H(b.ip)}</code> until ${new Date(b.until).toLocaleTimeString()} <button class="btn" style="padding:2px 8px;font-size:10.5px" onclick="defSelfUnban('${H(b.ip)}')">Unban</button>`).join(' · ')}</div>`;
+}
+async function defSelfUnban(ip) {
+  try {
+    await api('/defender/self/unban', { method: 'POST', body: JSON.stringify({ ip }) });
+    defSelfLoad();
+  } catch (e) {
+    alert(e.detail || e.message || 'could not lift the ban');
+  }
+}
+// Live feed. Uses the shared EVT handle so go() closes it on navigation (the Phase-3 leak lesson);
+// the Defender page opens no other EventSource, so there is no contention.
+function defSelfStream() {
+  if (EVT) { EVT.close(); EVT = null; }
+  const live = $('def-self-live'), state = $('def-self-live-state');
+  if (!live) return;
+  EVT = new EventSource('/api/defender/self/events');
+  EVT.onopen = () => { if (state) state.textContent = 'connected'; };
+  EVT.onerror = () => { if (EVT && state) state.textContent = 'connection lost — reconnecting…'; };
+  EVT.onmessage = (m) => {
+    let d;
+    try { d = JSON.parse(m.data); } catch { return; }
+    if (d.type === 'hello') { if (state) state.textContent = 'connected'; return; }
+    if (d.type === 'mode') { const el = $('def-self-mode'); if (el) el.textContent = d.mode; return; }
+    if (d.type === 'ban' || d.type === 'unban') { defSelfLoad(); return; }
+    if (d.type !== 'detection') return;
+    if (live.querySelector('span.def-fine')) live.innerHTML = '';
+    const tmp = document.createElement('div');
+    tmp.innerHTML = defSelfRow(d);
+    live.prepend(tmp.firstChild);
+    while (live.children.length > 50) live.lastChild.remove();
+  };
 }
 
 async function defSelfMode(mode) {

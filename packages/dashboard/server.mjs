@@ -232,12 +232,72 @@ function limited(req, res, bucket, limit, windowMs) {
 // Mounted after express.json() so a JSON body is already parsed and can be inspected, and before
 // the routes so a confirmed attack is stopped before it reaches any of them.
 // Off unless SHANNON_DEFEND_SELF=1, and monitor-only unless SHANNON_DEFEND_SELF_MODE=enforce.
+// Repeat-offender ban. Off unless SHANNON_DEFEND_SELF_BAN=1, and report-only ("would have banned")
+// unless SHANNON_DEFEND_SELF_BAN_MODE=enforce — so an operator sees the policy's decisions before it
+// is allowed to refuse anyone. Only confirmed ENFORCEABLE classes ever count (see middleware.mjs).
+const SELF_BAN = {
+  enabled: process.env.SHANNON_DEFEND_SELF_BAN === '1',
+  enforce: process.env.SHANNON_DEFEND_SELF_BAN_MODE === 'enforce',
+  threshold: Number(process.env.SHANNON_DEFEND_SELF_BAN_THRESHOLD || 5),
+  windowMs: Number(process.env.SHANNON_DEFEND_SELF_BAN_WINDOW_MS || 60_000),
+  ttlMs: Number(process.env.SHANNON_DEFEND_SELF_BAN_TTL_MS || 15 * 60_000),
+};
 const SELF_DEFENSE = process.env.SHANNON_DEFEND_SELF === '1'
-  ? createSelfDefense({ mode: process.env.SHANNON_DEFEND_SELF_MODE === 'enforce' ? 'enforce' : 'monitor' })
+  ? createSelfDefense({ mode: process.env.SHANNON_DEFEND_SELF_MODE === 'enforce' ? 'enforce' : 'monitor', ban: SELF_BAN })
   : null;
+// Live subscribers of /api/defender/self/events (platform operators watching the Defender page).
+const SELF_SSE = new Set();
+function selfSseBroadcast(payload) {
+  const line = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const client of SELF_SSE) {
+    try {
+      client.write(line);
+    } catch {}
+  }
+}
 if (SELF_DEFENSE) {
   app.use(SELF_DEFENSE.middleware);
-  console.log(`[defender] self-defense active in ${SELF_DEFENSE.getMode()} mode`);
+  console.log(`[defender] self-defense active in ${SELF_DEFENSE.getMode()} mode; repeat-offender ban ${SELF_BAN.enabled ? (SELF_BAN.enforce ? 'ENFORCING' : 'report-only') : 'off'}`);
+  // Every detection and ban decision: stream it live; and when a platform organization is
+  // configured, persist it and fan it out to that organization's alert integrations exactly as
+  // SDK and edge detections already are. Detect-only classes (an apostrophe, an HTML tag) are
+  // streamed for visibility but never alerted — they would page someone for every signup.
+  SELF_DEFENSE.subscribe((payload) => {
+    selfSseBroadcast(payload);
+    const orgId = process.env.SHANNON_PLATFORM_ORG_ID || '';
+    if (!orgId) return;
+    const isBan = payload.type === 'ban';
+    const confirmed = payload.type === 'detection' && payload.recommendedAction === 'block-inline';
+    if (!isBan && !confirmed) return;
+    const enforced = isBan ? payload.enforce === true : payload.enforced === true;
+    const event = {
+      id: randomUUID(),
+      orgId,
+      userId: null,
+      at: payload.at,
+      method: isBan ? 'BAN' : String(payload.method || '').slice(0, 10),
+      url: isBan ? `repeat offender ${payload.ip} (${payload.count} confirmed attacks)` : String(payload.url || '').slice(0, 300),
+      cls: isBan ? 'repeat-offender' : String(payload.cls || '').slice(0, 60),
+      // eventText() in enterprise-integrations titles a message as data.title || event.type; without
+      // this a Slack alert would read "[HIGH] defender.detection (open)".
+      title: isBan
+        ? `Repeat offender ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after ${payload.count} confirmed attacks on the dashboard`
+        : `${String(payload.cls || 'attack')} ${enforced ? 'blocked' : 'detected'} on the dashboard: ${String(payload.method || '')} ${String(payload.url || '').slice(0, 120)}`,
+      enforced,
+      srcIp: payload.srcIp || payload.ip || null,
+      severity: isBan ? 'high' : defenderSeverity(payload.cls),
+      source: 'self',
+      status: enforced ? 'contained' : 'open',
+      metadata: { platform: true, ...(isBan ? { until: payload.until, count: payload.count } : {}) },
+      createdAt: Date.now(),
+    };
+    appendDefenseEvent(event);
+    queueIntegrationEvent(orgId, { id: `defender:${event.id}`, type: 'defender.detection', at: event.at, data: event }, null)
+      .catch((error) => console.error('[defender] self-defense integration event failed:', error.message));
+  });
+  if (!process.env.SHANNON_PLATFORM_ORG_ID) {
+    console.warn('[defender] SHANNON_PLATFORM_ORG_ID is not set — self-defense detections stream live to operators but are not persisted or sent to alert integrations');
+  }
 }
 
 // `extensions: ['html']` lets us serve `/terms` from `terms.html` etc.
@@ -4980,7 +5040,39 @@ app.get('/api/defender/self', (req, res) => {
     mode: SELF_DEFENSE.getMode(),
     stats: SELF_DEFENSE.stats(),
     recent: SELF_DEFENSE.recent().slice(0, 25),
+    bans: SELF_DEFENSE.bans(),
+    banPolicy: SELF_DEFENSE.banPolicy(),
+    platformOrgConfigured: !!process.env.SHANNON_PLATFORM_ORG_ID,
   });
+});
+
+// Live stream of self-defense activity: detections as they happen, ban decisions, mode changes.
+app.get('/api/defender/self/events', (req, res) => {
+  if (!requirePlatformOperator(req, res)) return;
+  if (!SELF_DEFENSE) return res.status(409).json({ error: 'self-defense is not enabled' });
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+  res.write(`data: ${JSON.stringify({ type: 'hello', mode: SELF_DEFENSE.getMode(), stats: SELF_DEFENSE.stats(), bans: SELF_DEFENSE.bans(), banPolicy: SELF_DEFENSE.banPolicy() })}\n\n`);
+  SELF_SSE.add(res);
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': ping\n\n'); // keeps intermediaries from dropping an idle stream
+    } catch {}
+  }, 25_000);
+  heartbeat.unref?.();
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    SELF_SSE.delete(res);
+  });
+});
+
+app.post('/api/defender/self/unban', (req, res) => {
+  if (!requirePlatformOperator(req, res)) return;
+  if (!SELF_DEFENSE) return res.status(409).json({ error: 'self-defense is not enabled' });
+  const ip = String(req.body?.ip || '').trim().slice(0, 64);
+  if (!ip) return res.status(400).json({ error: 'ip required' });
+  const lifted = SELF_DEFENSE.unban(ip);
+  audit(requestContext(req), 'defender.self_unban', 'defender', ip, { lifted });
+  res.json({ ok: true, lifted });
 });
 
 app.post('/api/defender/self/mode', (req, res) => {
