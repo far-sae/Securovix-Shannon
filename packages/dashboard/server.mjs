@@ -18,6 +18,7 @@ import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import { sendMonitorAlert } from '../../monitor.mjs';
 import {
+  COMPLIANCE,
   PROBERS,
   detectionRule,
   fetchT,
@@ -80,13 +81,31 @@ import {
   updateDefenseEvent,
   waitForUserWrites,
 } from './db.mjs';
+import {
+  cancelOrder,
+  catalogItem,
+  commerceEnabled,
+  creditBalance,
+  creditGrantFor,
+  markCardPaid,
+  newOrder,
+  paymentInstructions,
+  paymentMethods,
+  publicCatalog,
+  reviewOrder,
+  submitEvidence,
+} from './commerce.mjs';
 import { openPullRequest } from './github-pr.mjs';
+import { renderPricingPage } from './pricing-page.mjs';
+import { renderSecurityArea, renderSecurityIndex, renderSitemap, securityArea } from './security-pages.mjs';
 import { gatherLeads } from './leads.mjs';
 import { diffToDelta, dueMonitors } from './monitor-schedule.mjs';
 import { applyLineFix, generatePatch } from './patch.mjs';
 import { runInSandbox, sandboxAvailable } from './sandbox.mjs';
 import {
+  addCreditGrant,
   appendOperationalEvent,
+  consumeCredits,
   consumeScanAuthGrant,
   consumeUsage,
   consumeAuthToken,
@@ -101,10 +120,13 @@ import {
   findSsoIdentity,
   getJob,
   getIntegration,
+  getCommerceOrder,
   getEntitlement,
   getDefenseProgram,
   getOrgSecret,
   listArtifacts,
+  listCommerceOrders,
+  listCreditGrants,
   listDeliveries,
   listDefenseAssets,
   listDefenseCycles,
@@ -116,6 +138,7 @@ import {
   listOperationalEvents,
   listOrgSecrets,
   readArtifact,
+  saveCommerceOrder,
   saveIntegration,
   saveEntitlement,
   saveDefenseAsset,
@@ -300,6 +323,32 @@ if (SELF_DEFENSE) {
   }
 }
 
+// Public, server-rendered landing pages for each security-testing area (see security-pages.mjs).
+app.get('/security-testing', (req, res) => {
+  res.setHeader('cache-control', 'public, max-age=300');
+  res.type('html').send(renderSecurityIndex({ baseUrl: publicBaseUrl(req) }));
+});
+app.get('/security-testing/:slug', (req, res) => {
+  const area = securityArea(String(req.params.slug || ''));
+  if (!area) return res.status(404).type('html').send(renderSecurityIndex({ baseUrl: publicBaseUrl(req) }));
+  res.setHeader('cache-control', 'public, max-age=300');
+  res.type('html').send(renderSecurityArea(area, { baseUrl: publicBaseUrl(req), compliance: COMPLIANCE }));
+});
+app.get('/pricing', (req, res) => {
+  res.setHeader('cache-control', 'public, max-age=60');
+  res.type('html').send(renderPricingPage(commerceCatalog(), { baseUrl: publicBaseUrl(req) }));
+});
+app.get('/sitemap.xml', (req, res) => {
+  res.type('application/xml').send(renderSitemap(publicBaseUrl(req)));
+});
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send(`User-agent: *
+Allow: /
+Disallow: /api/
+Sitemap: ${publicBaseUrl(req)}/sitemap.xml
+`);
+});
+
 // `extensions: ['html']` lets us serve `/terms` from `terms.html` etc.
 app.use(express.static(join(__dirname, 'public'), { extensions: ['html'] }));
 
@@ -361,6 +410,10 @@ const PRO_PLAN = {
   limits: PRO_LIMITS,
 };
 
+function stripeCardReady() {
+  return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET);
+}
+
 function billingEnabled() {
   return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET && process.env.STRIPE_PRO_MONTHLY_PRICE_ID);
 }
@@ -372,14 +425,25 @@ async function organizationPlan(orgId) {
   return { plan: paid ? 'pro' : 'free', limits: paid ? { ...PRO_LIMITS, ...(entitlement.limits || {}) } : FREE_LIMITS, entitlement };
 }
 
-async function consumeOrgQuota(ctx, res, metric, amount = 1) {
-  const current = await organizationPlan(ctx.org.id);
+// Daily plan allowance first; once it is spent, fall back to prepaid credits (soonest-expiring first).
+export async function consumeOrgAllowance(orgId, metric, amount = 1) {
+  const current = await organizationPlan(orgId);
   const limit = Number(current.limits[metric] || 0);
-  const usage = await consumeUsage(ctx.org.id, metric, amount, limit);
-  res.setHeader('x-shannon-limit', String(limit));
-  res.setHeader('x-shannon-remaining', String(Math.max(0, limit - usage.used)));
-  if (usage.allowed) return true;
-  res.status(429).json({ error: `Daily organization limit reached for ${metric}.`, code: 'ORG_USAGE_LIMIT', metric, used: usage.used, limit, plan: current.plan, upgradeAvailable: billingEnabled() });
+  const usage = await consumeUsage(orgId, metric, amount, limit);
+  if (usage.allowed) return { allowed: true, source: 'daily', used: usage.used, limit, plan: current.plan };
+  const credit = await consumeCredits(orgId, metric, amount);
+  if (credit.allowed) return { allowed: true, source: 'credits', used: usage.used, limit, plan: current.plan, creditsRemaining: credit.remaining };
+  return { allowed: false, source: null, used: usage.used, limit, plan: current.plan };
+}
+
+async function consumeOrgQuota(ctx, res, metric, amount = 1) {
+  const quota = await consumeOrgAllowance(ctx.org.id, metric, amount);
+  res.setHeader('x-shannon-limit', String(quota.limit));
+  res.setHeader('x-shannon-remaining', String(Math.max(0, quota.limit - quota.used)));
+  if (quota.source === 'credits') res.setHeader('x-shannon-credits-remaining', String(quota.creditsRemaining));
+  if (quota.allowed) return true;
+  const buyable = billingEnabled() || commerceEnabled();
+  res.status(429).json({ error: `Daily organization limit reached for ${metric}.`, code: 'ORG_USAGE_LIMIT', metric, used: quota.used, limit: quota.limit, plan: quota.plan, upgradeAvailable: buyable, creditsAvailable: commerceEnabled() });
   return false;
 }
 
@@ -585,6 +649,7 @@ const PUBLIC_API = new Set([
   '/auth/invitations/accept',
   '/auth/plans',
   '/billing/webhook',
+  '/commerce/catalog',
 ]);
 app.use('/api', async (req, res, next) => {
   try {
@@ -1532,10 +1597,20 @@ app.post('/api/auth/subscribe', async (req, res) => {
 });
 
 app.post('/api/billing/webhook', async (req, res) => {
-  if (!billingEnabled()) return res.status(503).json({ error: 'Billing is not configured.' });
+  if (!stripeCardReady()) return res.status(503).json({ error: 'Billing is not configured.' });
   const event = verifiedStripeEvent(req);
   if (!event) return res.status(400).json({ error: 'Invalid Stripe signature.' });
   const object = event.data?.object || {};
+  if (object.metadata?.kind === 'commerce') {
+    try {
+      const outcome = await applyCommerceWebhook(event, object);
+      return res.json({ received: true, ...outcome });
+    } catch (error) {
+      console.error('[commerce] webhook failed:', error.message);
+      return res.status(500).json({ error: 'Could not apply payment.' });
+    }
+  }
+  if (!billingEnabled()) return res.json({ received: true, ignored: 'subscription billing is not configured' });
   const orgId = String(object.metadata?.orgId || object.client_reference_id || '');
   if (orgId && getOrganization(orgId)) {
     const eventAt = Number(event.created || 0) * 1000 || Date.now();
@@ -1566,12 +1641,165 @@ app.post('/api/auth/cancel', async (req, res) => {
   } catch (error) { res.status(502).json({ error: `Could not open billing portal: ${error.message}` }); }
 });
 
+// ===== Commerce: fixed-price scan offers, credit packs, card + manual payments =====
+// Everything answers "free during beta" until SHANNON_COMMERCE_ENABLED=1. Prices come only from
+// commerce.mjs; the client never sends an amount.
+
+function commerceCatalog() {
+  return publicCatalog(process.env, { cardReady: stripeCardReady(), plans: billingEnabled() ? [FREE_PLAN, PRO_PLAN] : [FREE_PLAN], freeLimits: FREE_LIMITS });
+}
+
+async function grantCreditsForOrder(order) {
+  const grant = creditGrantFor(order);
+  if (!grant) return null;
+  const { created } = await addCreditGrant(grant);
+  return { grantId: grant.id, created };
+}
+
+async function applyCommerceWebhook(event, object) {
+  const paidEvent = event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded';
+  if (!paidEvent) return { ignored: event.type };
+  if (object.payment_status !== 'paid') return { pending: true };
+  const order = await getCommerceOrder(String(object.metadata?.orderId || ''));
+  if (!order || order.orgId !== String(object.metadata?.orgId || '')) return { ignored: 'unknown order' };
+  const expected = Math.round(order.amount * 100);
+  if (Number(object.amount_total) !== expected || String(object.currency || '').toUpperCase() !== order.currency) {
+    console.error(`[commerce] amount mismatch for order ${order.id}: got ${object.amount_total} ${object.currency}`);
+    return { ignored: 'amount mismatch' };
+  }
+  const result = markCardPaid(order, { providerRef: object.payment_intent || object.id });
+  if (!result.ok) return { ignored: result.code };
+  if (!result.alreadyApplied) await saveCommerceOrder(result.order);
+  const grant = await grantCreditsForOrder(result.order);
+  return { orderId: order.id, applied: !result.alreadyApplied, grant };
+}
+
+function commerceClosed(res) {
+  res.status(503).json({ error: 'Securovix is free during beta, so purchases are not open yet.', code: 'COMMERCE_DISABLED' });
+}
+
+function orderView(order) {
+  const { history, ...rest } = order;
+  return { ...rest, history: (history || []).map(({ status, at }) => ({ status, at })) };
+}
+
+app.get('/api/commerce/catalog', (_req, res) => {
+  res.setHeader('cache-control', 'public, max-age=60');
+  res.json(commerceCatalog());
+});
+
+app.get('/api/commerce/account', async (req, res) => {
+  const ctx = requirePermission(req, res, 'audit.read');
+  if (!ctx) return;
+  const [orders, grants] = await Promise.all([listCommerceOrders({ orgId: ctx.org.id, limit: 50 }), listCreditGrants(ctx.org.id)]);
+  const now = Date.now();
+  res.json({
+    ok: true, catalog: commerceCatalog(), credits: creditBalance(grants, now),
+    grants: grants.filter((grant) => grant.expiresAt > now).map(({ id, orderId, remaining, expiresAt }) => ({ id, orderId, remaining, expiresAt })),
+    orders: orders.map(orderView), canPurchase: can(ctx.membership.role, 'settings.manage'),
+  });
+});
+
+app.post('/api/commerce/orders', async (req, res) => {
+  const ctx = requirePermission(req, res, 'settings.manage');
+  if (!ctx) return;
+  if (!commerceEnabled()) return commerceClosed(res);
+  if (limited(req, res, `commerce:order:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
+  const item = catalogItem(req.body?.itemId);
+  const method = String(req.body?.method || '');
+  const created = newOrder({ id: randomUUID(), orgId: ctx.org.id, userId: ctx.user.id, itemId: item?.id, method, methods: paymentMethods(process.env, { cardReady: stripeCardReady() }) });
+  if (!created.ok) return res.status(400).json({ error: created.error, code: created.code });
+  const order = created.order;
+  if (method === 'card') {
+    try {
+      const base = publicBaseUrl(req);
+      const session = await stripeRequest('checkout/sessions', {
+        mode: 'payment', customer_email: ctx.user.email, client_reference_id: ctx.org.id,
+        'line_items[0][quantity]': '1',
+        'line_items[0][price_data][currency]': order.currency.toLowerCase(),
+        'line_items[0][price_data][unit_amount]': String(Math.round(order.amount * 100)),
+        'line_items[0][price_data][product_data][name]': `Securovix — ${order.itemName}`,
+        'metadata[kind]': 'commerce', 'metadata[orderId]': order.id, 'metadata[orgId]': ctx.org.id,
+        'payment_intent_data[metadata][orderId]': order.id,
+        success_url: `${base}/?purchase=success#billing`, cancel_url: `${base}/?purchase=cancelled#billing`,
+      });
+      await saveCommerceOrder({ ...order, providerRef: session.id });
+      audit(ctx, 'commerce.order_created', 'commerce_order', order.id, { itemId: order.itemId, method });
+      return res.status(201).json({ ok: true, order: orderView(order), checkoutUrl: session.url });
+    } catch (error) {
+      return res.status(502).json({ error: `Could not start card checkout: ${error.message}` });
+    }
+  }
+  await saveCommerceOrder(order);
+  audit(ctx, 'commerce.order_created', 'commerce_order', order.id, { itemId: order.itemId, method });
+  res.status(201).json({ ok: true, order: orderView(order), instructions: paymentInstructions(order) });
+});
+
+async function ownedOrder(req, res, permission) {
+  const ctx = requirePermission(req, res, permission);
+  if (!ctx) return null;
+  const order = await getCommerceOrder(String(req.params.id || ''));
+  if (!order || order.orgId !== ctx.org.id) {
+    res.status(404).json({ error: 'Order not found.' });
+    return null;
+  }
+  return { ctx, order };
+}
+
+app.get('/api/commerce/orders/:id/instructions', async (req, res) => {
+  const found = await ownedOrder(req, res, 'settings.manage');
+  if (!found) return;
+  if (found.order.status !== 'pending_evidence') return res.status(409).json({ error: `Order is ${found.order.status}.` });
+  res.json({ ok: true, instructions: paymentInstructions(found.order) });
+});
+
+app.post('/api/commerce/orders/:id/evidence', async (req, res) => {
+  const found = await ownedOrder(req, res, 'settings.manage');
+  if (!found) return;
+  const result = submitEvidence(found.order, { reference: req.body?.reference, note: req.body?.note, userId: found.ctx.user.id });
+  if (!result.ok) return res.status(result.code === 'INVALID_STATE' ? 409 : 400).json({ error: result.error, code: result.code });
+  await saveCommerceOrder(result.order);
+  audit(found.ctx, 'commerce.evidence_submitted', 'commerce_order', result.order.id, { method: result.order.method });
+  res.json({ ok: true, order: orderView(result.order) });
+});
+
+app.post('/api/commerce/orders/:id/cancel', async (req, res) => {
+  const found = await ownedOrder(req, res, 'settings.manage');
+  if (!found) return;
+  const result = cancelOrder(found.order, { userId: found.ctx.user.id });
+  if (!result.ok) return res.status(409).json({ error: result.error, code: result.code });
+  await saveCommerceOrder(result.order);
+  audit(found.ctx, 'commerce.order_cancelled', 'commerce_order', result.order.id, {});
+  res.json({ ok: true, order: orderView(result.order) });
+});
+
+app.get('/api/platform/commerce/orders', async (req, res) => {
+  if (!requirePlatformOperator(req, res)) return;
+  const status = ['pending_review', 'pending_evidence', 'pending_payment', 'approved', 'rejected', 'cancelled'].includes(String(req.query.status)) ? String(req.query.status) : 'pending_review';
+  const orders = await listCommerceOrders({ status, limit: 200 });
+  res.json({ ok: true, status, orders: orders.map((order) => ({ ...orderView(order), orgName: getOrganization(order.orgId)?.name || null })) });
+});
+
+app.post('/api/platform/commerce/orders/:id/review', async (req, res) => {
+  const operator = requirePlatformOperator(req, res);
+  if (!operator) return;
+  const order = await getCommerceOrder(String(req.params.id || ''));
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const result = reviewOrder(order, { decision: req.body?.decision, reviewer: operator.email, reason: req.body?.reason });
+  if (!result.ok) return res.status(result.code === 'INVALID_STATE' ? 409 : 400).json({ error: result.error, code: result.code });
+  await saveCommerceOrder(result.order);
+  const grant = result.order.status === 'approved' ? await grantCreditsForOrder(result.order) : null;
+  const org = getOrganization(order.orgId);
+  if (org) audit({ org, user: operator }, `commerce.order_${result.order.status}`, 'commerce_order', order.id, { reviewer: operator.email });
+  res.json({ ok: true, order: orderView(result.order), grant });
+});
+
 app.get('/api/team/:orgId/usage', async (req, res) => {
   const ctx = orgContext(req, res, 'audit.read');
   if (!ctx) return;
   const current = await organizationPlan(ctx.org.id);
-  const usage = await listUsage(ctx.org.id);
-  res.json({ ok: true, plan: current.plan, limits: current.limits, usage, billingEnabled: billingEnabled() });
+  const [usage, grants] = await Promise.all([listUsage(ctx.org.id), listCreditGrants(ctx.org.id)]);
+  res.json({ ok: true, plan: current.plan, limits: current.limits, usage, credits: creditBalance(grants), billingEnabled: billingEnabled(), commerceEnabled: commerceEnabled() });
 });
 
 // Personal Security Shield — deterministic, read-only triage for suspicious messages and links.
@@ -3725,9 +3953,8 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
   }
   try {
     const headers = await resolveAuthHeaders(req, target);
-    const plan = await organizationPlan(ctx.org.id);
-    const quota = await consumeUsage(ctx.org.id, 'agentRuns', 1, Number(plan.limits.agentRuns || 0));
-    if (!quota.allowed) return { status: 429, error: `Daily organization limit reached for agent runs (${quota.used}/${quota.limit}).` };
+    const quota = await consumeOrgAllowance(ctx.org.id, 'agentRuns', 1);
+    if (!quota.allowed) return { status: 429, error: `Daily organization limit reached for agent runs (${quota.used}/${quota.limit}) and no prepaid credits remain.` };
     const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120, headers });
     return { target, surface, headers, ctx };
   } catch (e) {

@@ -1739,7 +1739,7 @@ export async function runExploitDefend({ target, classes, label, workspaceDir })
 
 export const ALL_CLASSES = Object.keys(PROBERS);
 // Exported for unit tests (pure helpers).
-export { buildCompositeFilter, detectionRule, fetchT, injectParam, injReq, mergeCookies, PROBERS, setParam, targetUrlOf };
+export { buildCompositeFilter, COMPLIANCE, detectionRule, fetchT, injectParam, injReq, mergeCookies, PROBERS, setParam, targetUrlOf };
 
 // WHOLE-APP: crawl the target to discover pages/params/forms/APIs, then run every prober
 // across the discovered surface (auth headers applied to all requests), aggregate, defend, report.

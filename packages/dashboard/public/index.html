@@ -788,6 +788,7 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
     <button onclick="go('code')" id="n-code" aria-label="Code Scan"><span aria-hidden="true">&#9876;</span> Code Scan</button>
     <button onclick="go('shield')" id="n-shield" aria-label="Personal Security Shield"><span aria-hidden="true">&#9670;</span> Personal Shield</button>
     <button onclick="go('cfg')" id="n-cfg" aria-label="Settings"><span aria-hidden="true">&#9881;</span> Settings</button>
+    <button onclick="go('billing')" id="n-billing" aria-label="Billing and credits"><span aria-hidden="true">&#163;</span> Billing</button>
     <button onclick="go('defender')" id="n-defender" aria-label="Defender"><span aria-hidden="true">&#9730;</span> Defender</button>
   </nav>
   <div class="slist" id="slist"><div class="slist-h">Past Scans</div></div>
@@ -1733,7 +1734,7 @@ function resetLive(){
   PHASES.forEach(p=>{LIVE.phaseLogs[p.id]=[];LIVE.phaseState[p.id]={status:'waiting',thinking:''}});
 }
 
-const PAGES={dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,vuln:pgVuln,integrations:pgIntegrations,agent:pgAgent,shield:pgShield,cfg:pgCfg,scan:pgScan,live:pgLive,code:pgCode,defender:pgDefender};
+const PAGES={dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,vuln:pgVuln,integrations:pgIntegrations,agent:pgAgent,shield:pgShield,cfg:pgCfg,billing:pgBilling,scan:pgScan,live:pgLive,code:pgCode,defender:pgDefender};
 // Report and live-scan pages have no sidebar button; highlight the section they belong to instead of
 // clearing the nav, which is what used to happen.
 const NAV_FOR={scan:'dash',live:'dash'};
@@ -1827,8 +1828,8 @@ function apiQuotaReached(b){
   const what=names[b.metric]||b.metric||'this action';
   showNotice('Daily limit reached',
     `Your organization has used <b>${H(String(b.used??'?'))}/${H(String(b.limit??'?'))}</b> ${H(what)} today on the <b>${H(b.plan||'free')}</b> plan.
-     Counters reset at <b>00:00 UTC</b>.${b.upgradeAvailable?' Upgrading lifts the cap.':''}`,
-    {actions:b.upgradeAvailable?`<button class="btn" onclick="document.getElementById('sx-notice').remove();go('cfg')">See plan</button>`:''});
+     Counters reset at <b>00:00 UTC</b>.${b.creditsAvailable?' Prepaid credits are used automatically once the daily allowance runs out.':b.upgradeAvailable?' Upgrading lifts the cap.':''}`,
+    {actions:b.creditsAvailable?`<button class="btn" onclick="document.getElementById('sx-notice').remove();go('billing')">Buy credits</button>`:b.upgradeAvailable?`<button class="btn" onclick="document.getElementById('sx-notice').remove();go('cfg')">See plan</button>`:''});
 }
 
 // /api/system/readiness is an operator view (backups, metrics tokens, secrets…) and needs
@@ -5125,7 +5126,7 @@ async function pgCfgInner(){
 
     ${identity?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>${ico('lock',{cls:'ico-sm'})} Organization identity</h2><small>customer-specific SSO and provisioning</small></div><div class="readiness-grid"><div class="readiness-row ${identity.oidc?.configured?'ready':'optional'}"><span class="readiness-dot"></span><div><b>OIDC SSO</b><small>${identity.oidc?.configured?H(identity.oidc.issuer):'Not configured'}</small></div><button class="btn btn-g" onclick="settingsConfigureOidc()">${identity.oidc?.configured?'Rotate':'Configure'}</button>${identity.oidc?.configured?'<button class="btn" onclick="settingsDeleteIdentity(\'oidc\')">Remove</button>':''}</div><div class="readiness-row ${identity.scim?.configured?'ready':'optional'}"><span class="readiness-dot"></span><div><b>SCIM 2.0</b><small>${identity.scim?.configured?H(identity.scim.baseUrl):'Not configured'}</small></div><button class="btn btn-g" onclick="settingsRotateScim()">${identity.scim?.configured?'Rotate token':'Create token'}</button>${identity.scim?.configured?'<button class="btn" onclick="settingsDeleteIdentity(\'scim\')">Remove</button>':''}</div></div></section>`:''}
 
-    ${usage?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>${ico('gauge',{cls:'ico-sm'})} Plan and daily usage</h2><small>${H(usage.plan)} plan · counters reset at 00:00 UTC</small></div><div class="sec-kpis">${['scans','codeFiles','agentRuns'].map(metric=>{const used=(usage.usage||[]).find(x=>x.metric===metric)?.quantity||0,limit=usage.limits?.[metric]||0;return `<div class="sec-kpi ${used>=limit?'warn':'good'}"><span>${H(metric)}</span><strong>${used}/${limit}</strong><small>organization total today</small></div>`}).join('')}</div>${plans.billingEnabled&&usage.plan==='free'?'<button class="btn btn-p" onclick="settingsUpgrade()">Upgrade to Pro</button>':'<p style="font-size:12px;color:var(--t3);margin:0">Paid checkout is enabled only when the operator has configured and verified Stripe webhooks.</p>'}</section>`:''}
+    ${usage?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>${ico('gauge',{cls:'ico-sm'})} Plan and daily usage</h2><small>${H(usage.plan)} plan · counters reset at 00:00 UTC</small></div><div class="sec-kpis">${['scans','codeFiles','agentRuns'].map(metric=>{const used=(usage.usage||[]).find(x=>x.metric===metric)?.quantity||0,limit=usage.limits?.[metric]||0;return `<div class="sec-kpi ${used>=limit?'warn':'good'}"><span>${H(metric)}</span><strong>${used}/${limit}</strong><small>organization total today</small></div>`}).join('')}</div>${plans.billingEnabled&&usage.plan==='free'?'<button class="btn btn-p" onclick="settingsUpgrade()">Upgrade to Pro</button>':'<p style="font-size:12px;color:var(--t3);margin:0">Paid checkout is enabled only when the operator has configured and verified Stripe webhooks.</p>'}<p style="margin:10px 0 0"><button class="btn" onclick="go('billing')">Billing, credits and orders</button></p></section>`:''}
 
     <section class="set-section">
       <div class="set-section-head">
@@ -5412,8 +5413,108 @@ async function pgCode(){
 
 // renderCodePaywall — removed. Code Scan is free for everyone, no paywall to render.
 
-// ===== Dedicated Billing / Plans page =====
-// Billing page — every feature is FREE FOR EVERYONE. No plans, no checkout.
+// ===== Billing: plan, daily usage, prepaid credits, scan offers, credit packs, orders =====
+// Prices and payment methods come only from GET /api/commerce/account (commerce.mjs). While
+// SHANNON_COMMERCE_ENABLED is off the page shows "free during beta" and no buy buttons.
+const BILL_METRIC={scans:'Verified scans',codeFiles:'Code-scan files',agentRuns:'Agent runs'};
+const BILL_METHOD={card:'Card',crypto:'Crypto',qr:'QR payment',bank:'Bank transfer'};
+const BILL_STATUS={pending_payment:'Awaiting card payment',pending_evidence:'Awaiting your payment reference',pending_review:'Being reviewed',approved:'Approved',rejected:'Rejected',cancelled:'Cancelled'};
+let BILL_STATE=null;
+function billMoney(n,c){return (c==='GBP'?'£':c==='USD'?'$':c==='EUR'?'€':(c||'')+' ')+Number(n||0).toLocaleString('en-GB',{maximumFractionDigits:2})}
+function billGrants(g){return Object.entries(g||{}).filter(([,n])=>n>0).map(([m,n])=>`${n} ${(BILL_METRIC[m]||m).toLowerCase()}`).join(' · ')}
+function billMethods(cat){const m=cat.methods||{};return ['card','crypto','qr','bank'].filter(id=>id==='crypto'?(m.crypto||[]).length:!!m[id])}
+
+async function pgBilling(focus){
+  M.innerHTML='<div class="pg"><h1 class="h-display" style="font-size:30px">Billing</h1><p style="color:var(--t2)">Loading…</p></div>';
+  let acct,usage=null,queue=null;
+  try{acct=await api('/commerce/account')}catch(e){M.innerHTML=`<div class="pg"><h1 class="h-display" style="font-size:30px">Billing</h1><p style="color:var(--red)">${H(e.detail||e.message)}</p></div>`;return}
+  try{const team=await api('/team/context');const org=team.active?.organization?.id;if(org)usage=await api(`/team/${encodeURIComponent(org)}/usage`)}catch{}
+  try{queue=await api('/platform/commerce/orders?status=pending_review')}catch{queue=null}
+  BILL_STATE={acct,usage,queue};
+  const cat=acct.catalog,open=cat.enabled&&acct.canPurchase,methods=billMethods(cat);
+  const kpi=(metric)=>{const used=(usage?.usage||[]).find(x=>x.metric===metric)?.quantity||0,limit=usage?.limits?.[metric]??cat.freeLimits?.[metric]??0,credits=acct.credits?.[metric]||0;
+    return `<div class="sec-kpi ${used>=limit&&!credits?'warn':'good'}"><span>${H(BILL_METRIC[metric])}</span><strong>${used}/${limit}</strong><small>today · ${credits} prepaid credit${credits===1?'':'s'}</small></div>`};
+  const buy=(item)=>open
+    ? `<button class="btn btn-p" onclick="billBuy('${item.id}')">Buy · ${billMoney(item.price,item.currency)}</button>`
+    : `<button class="btn" disabled title="${cat.enabled?'Only organization admins can buy':'Free during beta'}">${cat.enabled?'Admins only':'Available after beta'}</button>`;
+  const card=(item)=>`<div class="sec-card" id="bill-item-${item.id}" style="margin:0;${focus===item.id?'border-color:rgba(212,247,69,.6)':''}">
+    <div class="sec-card-head"><h2 style="font-size:15px">${H(item.name)}</h2><small>${billMoney(item.price,item.currency)}</small></div>
+    ${item.summary?`<p style="font-size:13px;color:var(--t2);margin:0 0 6px">${H(item.summary)}</p>`:''}
+    <p style="font-size:12.5px;color:var(--acc2);margin:0 0 12px">Includes ${H(billGrants(item.grants))}</p>${buy(item)}</div>`;
+  const orderRow=(o)=>`<tr><td>${H(o.itemName)}</td><td>${billMoney(o.amount,o.currency)}</td><td>${H(BILL_METHOD[o.method]||o.method)}</td><td><code>${H(o.reference)}</code></td><td>${H(BILL_STATUS[o.status]||o.status)}${o.review?.reason?`<br><small style="color:var(--t3)">${H(o.review.reason)}</small>`:''}</td><td style="white-space:nowrap">${
+      o.status==='pending_evidence'&&acct.canPurchase?`<button class="btn btn-g" onclick="billInstructions('${o.id}')">How to pay</button> <button class="btn btn-p" onclick="billEvidence('${o.id}')">Submit reference</button> `:''}${
+      ['pending_payment','pending_evidence','pending_review'].includes(o.status)&&acct.canPurchase?`<button class="btn" onclick="billCancel('${o.id}')">Cancel</button>`:''}</td></tr>`;
+  const reviewRow=(o)=>`<tr><td>${H(o.orgName||o.orgId)}</td><td>${H(o.itemName)}</td><td>${billMoney(o.amount,o.currency)}</td><td>${H(BILL_METHOD[o.method]||o.method)}</td><td><code>${H(o.reference)}</code></td><td><code>${H(o.evidence?.reference||'')}</code>${o.evidence?.note?`<br><small style="color:var(--t3)">${H(o.evidence.note)}</small>`:''}</td><td style="white-space:nowrap"><button class="btn btn-p" onclick="billReview('${o.id}','approve')">Approve</button> <button class="btn" onclick="billReview('${o.id}','reject')">Reject</button></td></tr>`;
+  const table=(head,rows)=>`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>${head.map(h=>`<th style="text-align:left;padding:8px 10px;border-bottom:1px solid var(--brd);color:var(--t3);font-size:11px;text-transform:uppercase;letter-spacing:.05em">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  M.innerHTML=`<div class="pg sec-page">
+    <section class="cs-hero"><div class="section-eyebrow">Plan · credits · orders</div><h1>Billing</h1>
+      <p>${cat.enabled?'Buy fixed-price verified scans or top up credits. Credits are used automatically once the daily allowance runs out.':'<b style="color:var(--acc2)">Free during beta.</b> Every feature is free within the daily limits. Prices below are launch prices; nothing is charged until purchases open.'} <a href="/pricing" target="_blank" rel="noopener" style="color:var(--acc2)">Public pricing</a></p></section>
+    <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>${ico('gauge',{cls:'ico-sm'})} Today</h2><small>${H(usage?.plan||'free')} plan · resets 00:00 UTC · credits last ${cat.creditValidityDays} days</small></div>
+      <div class="sec-kpis">${['scans','codeFiles','agentRuns'].map(kpi).join('')}</div></section>
+    ${queue&&queue.orders?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Payment review queue</h2><small>platform operator · ${queue.orders.length} waiting</small></div>${queue.orders.length?table(['Organization','Item','Amount','Method','Order ref','Buyer reference',''],queue.orders.map(reviewRow).join('')):'<p style="color:var(--t3);font-size:13px;margin:0">Nothing waiting for review.</p>'}</section>`:''}
+    <h2 style="font-size:18px;margin:22px 0 10px">Fixed-price verified scans</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px">${cat.offers.map(card).join('')}</div>
+    <h2 style="font-size:18px;margin:26px 0 10px">Credit packs</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">${cat.packs.map(card).join('')}</div>
+    ${cat.enabled?`<p style="font-size:12px;color:var(--t3);margin:14px 0 0">Payment methods available: ${methods.length?methods.map(m=>BILL_METHOD[m]).join(', '):'none configured yet'}.</p>`:''}
+    <section class="sec-card" style="margin-top:26px"><div class="sec-card-head"><h2>Your orders</h2><small>${acct.orders.length} order${acct.orders.length===1?'':'s'}</small></div>
+      ${acct.orders.length?table(['Item','Amount','Method','Reference','Status',''],acct.orders.map(orderRow).join('')):'<p style="color:var(--t3);font-size:13px;margin:0">No orders yet.</p>'}</section>
+  </div>`;
+  if(focus){const el=document.getElementById('bill-item-'+focus);if(el)el.scrollIntoView({block:'center'})}
+  const qs=new URLSearchParams(location.search);
+  if(qs.get('purchase')==='success')showNotice('Payment received','Your card payment went through. Credits appear as soon as Stripe confirms it, usually within a minute.');
+  if(qs.has('purchase'))history.replaceState(null,'',location.pathname+location.hash);
+}
+
+async function billBuy(itemId){
+  const cat=BILL_STATE?.acct?.catalog;if(!cat)return;
+  const item=[...cat.offers,...cat.packs].find(x=>x.id===itemId);if(!item)return;
+  const methods=billMethods(cat);
+  if(!methods.length){showNotice('No payment method yet','The operator has not configured a payment method. Please try again later.');return}
+  if(methods.length===1)return billOrder(itemId,methods[0]);
+  showNotice('Choose how to pay',`<p><b>${H(item.name)}</b> · ${billMoney(item.price,item.currency)}</p><p style="color:var(--t2)">Card payments are confirmed automatically. Crypto, QR and bank payments are confirmed by our team after you submit the transaction reference.</p>`,
+    {actions:methods.map(m=>`<button class="btn btn-g" onclick="document.getElementById('sx-notice').remove();billOrder('${itemId}','${m}')">${BILL_METHOD[m]}</button>`).join('')});
+}
+
+async function billOrder(itemId,method){
+  try{
+    const out=await api('/commerce/orders',{method:'POST',body:JSON.stringify({itemId,method})});
+    if(out.checkoutUrl){location.href=out.checkoutUrl;return}
+    await pgBilling();
+    if(out.instructions)billShowInstructions(out.instructions,out.order.id);
+  }catch(e){showNotice('Could not create order',H(e.detail||e.message))}
+}
+
+function billShowInstructions(ins,orderId){
+  const lines=[`<p>Amount: <b>${billMoney(ins.amount,ins.currency)}</b> · Reference: <code>${H(ins.reference)}</code></p>`];
+  if(ins.wallets)lines.push(ins.wallets.map(w=>`<p><b>${H(w.asset)}</b><br><code style="word-break:break-all">${H(w.address)}</code></p>`).join(''));
+  if(ins.imageUrl)lines.push(`<p><img src="${encodeURI(ins.imageUrl)}" alt="Payment QR code" style="max-width:220px;border-radius:10px;background:#fff;padding:8px"></p>`);
+  if(ins.details)lines.push(`<p style="white-space:pre-wrap">${H(ins.details)}</p>`);
+  if(ins.note)lines.push(`<p style="color:var(--t2)">${H(ins.note)}</p>`);
+  showNotice('How to pay',lines.join(''),{actions:`<button class="btn btn-g" onclick="document.getElementById('sx-notice').remove();billEvidence('${orderId}')">I have paid</button>`});
+}
+
+async function billInstructions(orderId){
+  try{const out=await api(`/commerce/orders/${encodeURIComponent(orderId)}/instructions`);billShowInstructions(out.instructions,orderId)}catch(e){showNotice('Could not load instructions',H(e.detail||e.message))}
+}
+
+async function billEvidence(orderId){
+  const v=await showForm('Submit payment reference',[{id:'reference',label:'Transaction hash or payment reference',required:true},{id:'note',label:'Note (optional)',type:'textarea'}],{submitLabel:'Submit for review',note:'We match this against the payment we received. Approved orders add credits to your organization immediately.'});
+  if(!v)return;
+  try{await api(`/commerce/orders/${encodeURIComponent(orderId)}/evidence`,{method:'POST',body:JSON.stringify({reference:v.reference,note:v.note||''})});await pgBilling();showNotice('Submitted','Thanks. Your payment is being reviewed; credits appear as soon as it is approved.')}catch(e){showNotice('Could not submit',H(e.detail||e.message))}
+}
+
+async function billCancel(orderId){
+  if(!confirm('Cancel this order? Do not cancel an order you have already paid for.'))return;
+  try{await api(`/commerce/orders/${encodeURIComponent(orderId)}/cancel`,{method:'POST',body:'{}'});pgBilling()}catch(e){showNotice('Could not cancel',H(e.detail||e.message))}
+}
+
+async function billReview(orderId,decision){
+  let reason='';
+  if(decision==='reject'){const v=await showForm('Reject payment',[{id:'reason',label:'Reason shown to the buyer',type:'textarea',required:true}],{submitLabel:'Reject'});if(!v)return;reason=v.reason}
+  else if(!confirm('Approve this payment and add the credits?'))return;
+  try{await api(`/platform/commerce/orders/${encodeURIComponent(orderId)}/review`,{method:'POST',body:JSON.stringify({decision,reason})});pgBilling()}catch(e){showNotice('Could not save decision',H(e.detail||e.message))}
+}
 
 // ----- Multi-agent state -----
 let CS_AGENTS=[],CS_PHASES=[],CS_RUN=null,CS_EVT=null,CS_RESULT=null,CS_TURNS=[];
