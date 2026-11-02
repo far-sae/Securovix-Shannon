@@ -1357,7 +1357,7 @@ function startProxy(origin, filter, onBlock) {
       if (filter(req.url, body)) {
         onBlock();
         res.writeHead(403, { 'content-type': 'text/plain' });
-        res.end('Blocked by Shannon WAF rule');
+        res.end('Blocked by Securovix WAF rule');
         return;
       }
       const fwd = agent.request(

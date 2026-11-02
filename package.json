@@ -1,6 +1,7 @@
 {
   "name": "shannon-monorepo",
   "private": true,
+  "license": "AGPL-3.0-only",
   "packageManager": "pnpm@9.15.4",
   "engines": {
     "node": ">=20.0.0"

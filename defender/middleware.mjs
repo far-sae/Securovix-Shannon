@@ -131,7 +131,7 @@ export function createSelfDefense({
       const ip = req.ip || req.socket?.remoteAddress || null;
       if (policy.enabled && policy.enforce && ip && isBanned(ip)) {
         counters.banned++;
-        res.status(403).json({ error: 'Blocked by Shannon Defender (repeat offender)' });
+        res.status(403).json({ error: 'Blocked by Securovix Defender (repeat offender)' });
         return;
       }
 
@@ -162,7 +162,7 @@ export function createSelfDefense({
       };
 
       if (handle(event).block) {
-        res.status(403).json({ error: 'Blocked by Shannon Defender' });
+        res.status(403).json({ error: 'Blocked by Securovix Defender' });
         return;
       }
     } catch {
