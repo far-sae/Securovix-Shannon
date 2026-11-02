@@ -12,6 +12,30 @@ host at `packages/dashboard/server.mjs` and it works. Docker is offered only for
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | for persistence | Users, leaderboard, verified domains survive restarts (else local JSON, wiped on redeploy). See `supabase/schema.sql`. |
 | `ANTHROPIC_API_KEY` | optional | Only the AI *narrative* + war-room. The agent, all 36 proof classes, and the deterministic fix/plan run **without** it. |
 
+### Pricing, credits and payments (all optional — off by default)
+
+While `SHANNON_COMMERCE_ENABLED` is unset, Securovix is **free during beta**: `/pricing` shows launch
+prices, the in-app **Billing** page shows usage and prices, and every purchase answers
+`503 COMMERCE_DISABLED`. Prices live only in `packages/dashboard/commerce.mjs`.
+
+| Env var | Purpose |
+|---|---|
+| `SHANNON_COMMERCE_ENABLED=1` | Opens purchases of fixed-price scan offers and credit packs. |
+| `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` | Enables card payments (one-off Stripe Checkout). Point the Stripe webhook at `/api/billing/webhook` and send `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Add `STRIPE_PRO_MONTHLY_PRICE_ID` (and optional `STRIPE_PRO_YEARLY_PRICE_ID`) to also sell the Pro subscription. |
+| `SHANNON_PAY_CRYPTO_WALLETS` | Crypto by manual review, e.g. `BTC=bc1q...;ETH=0x...;USDT=T...`. Addresses are shown only to a buyer with an open order. |
+| `SHANNON_PAY_QR_IMAGE_URL` (+ `SHANNON_PAY_QR_LABEL`) | Regional QR payment by manual review. An `https://` URL or a path under `public/`. |
+| `SHANNON_PAY_BANK_DETAILS` | Bank transfer by manual review (free text). |
+| `SHANNON_PLATFORM_ADMINS` | Comma-separated emails that see the **Payment review queue** on the Billing page and approve or reject manual payments. |
+
+Manual payments: the buyer creates an order, pays using the order reference, then submits the
+transaction hash / reference. An admin approves it and the credits are added. Credits last 90 days, are
+used automatically after the daily allowance runs out, and spend soonest-expiring first. Apply
+`supabase/migrations/20261102120000_commerce_credits.sql` before enabling commerce on Supabase.
+
+Public marketing pages: `/pricing`, `/security-testing` and one page per area
+(`/security-testing/web-application-security`, `api-security`, `llm-security`, `tls-ssl`,
+`subdomain-takeover`, `cloud-storage-exposure`, `network-services`), plus `/sitemap.xml` and `/robots.txt`.
+
 ## Option A — Railway / Render / Fly / any Node host (simplest)
 
 - **Start command:** `node packages/dashboard/server.mjs`

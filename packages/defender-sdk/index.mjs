@@ -127,7 +127,7 @@ export function shannonDefender(opts = {}) {
         } catch {}
 
         if (enforced) {
-          res.status(403).json({ error: 'Blocked by Shannon Defender' });
+          res.status(403).json({ error: 'Blocked by Securovix Defender' });
           return;
         }
       }
