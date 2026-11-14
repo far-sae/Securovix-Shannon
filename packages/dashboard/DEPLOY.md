@@ -12,6 +12,112 @@ host at `packages/dashboard/server.mjs` and it works. Docker is offered only for
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | for persistence | Users, leaderboard, verified domains survive restarts (else local JSON, wiped on redeploy). See `supabase/schema.sql`. |
 | `ANTHROPIC_API_KEY` | optional | Only the AI *narrative* + war-room. The agent, all 36 proof classes, and the deterministic fix/plan run **without** it. |
 
+### Defender self-protection (recommended production settings)
+
+| Env var | Set to | What it does |
+|---|---|---|
+| `SHANNON_DEFEND_SELF` | `1` | Inspects every dashboard request. |
+| `SHANNON_DEFEND_SELF_MODE` | `enforce` | Blocks confirmed attacks (403). `monitor` only records. Can also be flipped live on the Defender page — the fastest kill switch. |
+| `SHANNON_DEFEND_SELF_BAN` | `1` | Tracks repeat offenders. |
+| `SHANNON_DEFEND_SELF_BAN_MODE` | `enforce` | Refuses banned IPs. Without it bans are report-only. |
+| `SHANNON_DEFEND_SELF_HONEYPOT` | (unset) | Honeypot paths are on by default; set `0` to turn them off. |
+| `SHANNON_DEFEND_SELF_SCANNERS` | (unset) | Attack-tool detection is on by default; set `0` to turn it off (for example while you run your own scanner against the dashboard). |
+| `SHANNON_PLATFORM_ORG_ID` | your org id | Sends confirmed detections and bans to that organization's alert integrations. |
+| `SHANNON_LOGIN_LOCK_THRESHOLD` | (unset = 10) | Failed sign-ins for one account, from any address, before that account is locked. |
+| `SHANNON_LOGIN_LOCK_MINUTES` | (unset = 15) | How long the lock lasts. A password reset lifts it at once. |
+| `SHANNON_DEFENSE_DIGEST` | (unset) | The weekly attack summary email is on by default; set `0` to turn it off for everyone. Needs `SHANNON_PUBLIC_URL` for the link back to the dashboard. |
+
+What is blocked: path traversal, NoSQL injection, prompt injection, and the strict (structural)
+forms of SQL injection, XSS, command injection, template injection, server-side request forgery and
+XML external entities. "Strict" means the shape of a real attack, never a single character: a quote
+that breaks out into a tautology, comment or stacked statement; `<script>`, inline event handlers and
+`javascript:` calls; a shell separator followed by a command (`; cat /etc/…`, `$(id)`); `{{7*7}}` and
+`${jndi:…}`; cloud metadata addresses; `<!ENTITY … SYSTEM …>`. The full table is in
+`packages/defender-sdk/README.md`. A request for scanner bait (`/.env`, `/.git/config`,
+`/wp-login.php`, `*.php` …) gets a plain 404, and a request from a tool that names itself (sqlmap,
+nikto, nuclei …) gets a 403; both ban that IP immediately. Bans are stored in the database
+(`supabase/migrations/20261112120000_defender_bans.sql`), so a redeploy does not lift them and every
+instance enforces the same list. The assistant, finding evidence and API scan routes are not
+inspected because they carry attack text by design. Alerts are delivered by the worker service
+(`railway.worker.json`) — deploy it or detections stay queued.
+
+Account lockout: sign-in is limited per address (10 attempts in 15 minutes) and per account. After
+10 wrong passwords for one account — from any number of addresses — that account is locked for 15
+minutes, including for the correct password, and the same happens for wrong two-factor codes. The
+count is kept in memory, per server instance.
+
+Weekly attack summary: every Monday from 08:00 UTC, each organization's owners and admins get one
+email covering the previous Monday-to-Sunday week — attacks detected and blocked, bans, attack types
+and the most active source addresses. An organization with no attacks that week gets nothing. Each
+person can turn it off on the Defender page, where they can also preview the last 7 days or send it
+to themselves. It uses the same email provider as password reset (`RESEND_API_KEY` or
+`SHANNON_EMAIL_WEBHOOK_URL`) and is skipped in production when neither is set.
+
+Protecting a site hosted elsewhere (for example `www.securovix.com` on Vercel): use the web adapter,
+`@securovix/defender/web`. The ready-made file is `packages/defender-sdk/examples/vercel-middleware.js`
+and the instructions are in `packages/defender-sdk/README.md`.
+
+### Guard: identity and cloud defence (Microsoft 365, Google Workspace)
+
+Apply `supabase/migrations/20261113120000_guard.sql` first. Guard runs inside the dashboard
+process (no worker needed): every 2 minutes it reads each connected tenant, runs the detections,
+groups alerts into incidents, sends new or escalated incidents to the organization's alert
+integrations as `guard.incident`, and runs autopilot if an owner switched it on.
+
+| Env var | Set to | What it does |
+|---|---|---|
+| `SHANNON_GUARD_SYNC` | (unset) | Background sync is on by default; `0` turns it off (the "Check now" button still works). |
+| `SHANNON_GUARD_INTERVAL_MS` | (unset = 120000) | How often to sync. Minimum 60000. |
+| `SHANNON_GUARD_INTEL` | (unset) | Downloads the abuse.ch Feodo Tracker IP blocklist every 6 hours; `0` turns it off. Nothing about the customer is sent. |
+| `SHANNON_ENCRYPTION_KEY` | 32+ random characters | Required in production; tenant secrets are stored encrypted with it. |
+
+Customers connect on the **Guard** page (owners and admins). Microsoft 365 needs an app
+registration with application permissions `AuditLog.Read.All`, `Directory.Read.All` and Office 365
+Management APIs `ActivityFeed.Read`; one-click responses also need `User.ReadWrite.All`,
+`User.RevokeSessions.All`, `MailboxSettings.ReadWrite`, `DelegatedPermissionGrant.ReadWrite.All`,
+`AppRoleAssignment.ReadWrite.All`. Sign-in logs need Entra ID P1 (included in Business Premium).
+Google Workspace needs a service account with domain-wide delegation for
+`admin.reports.audit.readonly`, `admin.directory.user`, `admin.directory.user.security`. Google's
+logs have no location, so travel checks are Microsoft-only. The **demo tenant** needs nothing and
+can play an account takeover, a password spray or insider data theft.
+
+What it detects: impossible travel, first sign-in from a new country (after a 7-day, 10-sign-in
+learning period per person), sign-ins from threat-feed or blocklisted addresses, the provider's own
+risk flag, MFA fatigue, brute force, password spraying, suspicious inbox rules and external
+forwarding, risky app consents (mail/file scopes), download spikes against each person's normal,
+sharing to personal addresses or anonymous links, new administrators, MFA turned off. Each is
+mapped to MITRE ATT&CK. Joined to Shannon: Defender traffic that hits a path Shannon proved
+vulnerable opens a critical incident, which can only close once the finding is resolved (re-tested)
+unless someone overrides it; every open finding gets a path-scoped Cloudflare and AWS WAF rule.
+
+Responses: sign out everywhere, force a password change, disable/enable, remove/restore an inbox
+rule, revoke/restore an app's access, block an address. Disable, rule removal, app revocation and
+blocking can be undone; Google cannot re-grant a revoked app token. Autopilot is off by default and
+is chosen per action. Guard stores alerts and per-person baselines, never the raw logs. The AI
+analyst ("Explain") uses the organization's own Anthropic key; the built-in summary needs none.
+
+### Guard Phase 2: endpoint agent, ransomware, malware sandbox
+
+Apply `supabase/migrations/20261114120000_guard_endpoint.sql`. The agent (`packages/guard-agent`,
+see its README) talks to `/api/endpoint-agent/v1/*` with its own credential; the dashboard's
+self-defense skips that path because agents upload attack command lines as evidence. Agent alerts
+join the same Guard incidents, autopilot and alert integrations; isolate/stop/quarantine actions
+are queued for the machine and complete when it confirms (normally within 10 seconds).
+
+| Env var | Set to | What it does |
+|---|---|---|
+| `SHANNON_CAPE_URL` | your CAPE v2 server | Optional. Files from agents are detonated there and scored; a malicious verdict blocks that hash on every customer's machines (hash, family and verdict only are shared). Without it, files are recorded but not analysed. |
+| `SHANNON_CAPE_TOKEN` | CAPE API token | Sent as `Authorization: Token …`. |
+| `SHANNON_CAPE_TIMEOUT_SEC` | (unset = 180) | Analysis time per file. |
+| `SHANNON_GUARD_AGENT_DIR` | folder with release binaries | Optional. Lets **Add a machine** offer downloads; otherwise customers get the binaries from the release. |
+
+CAPE needs its own KVM host with analysis VMs and cannot run on Railway. The sandbox verdict is a
+logistic regression over the CAPE report (malscore, signatures, YARA, family, dropped files,
+recovery tampering) with hand-set starting weights; `fitWeights` / `evaluate` in
+`guard/sandbox.mjs` retrain and measure it on your labelled reports — do that before relying on
+the ">95% accuracy" goal. Machines that stop checking in for 10 minutes raise a medium "agent
+stopped" alert; queued commands expire after 24 hours.
+
 ### Pricing, credits and payments (all optional — off by default)
 
 While `SHANNON_COMMERCE_ENABLED` is unset, Securovix is **free during beta**: `/pricing` shows launch
@@ -31,6 +137,26 @@ Manual payments: the buyer creates an order, pays using the order reference, the
 transaction hash / reference. An admin approves it and the credits are added. Credits last 90 days, are
 used automatically after the daily allowance runs out, and spend soonest-expiring first. Apply
 `supabase/migrations/20261102120000_commerce_credits.sql` before enabling commerce on Supabase.
+
+### Security assistant, research reports, developer API, share links
+
+Apply `supabase/migrations/20261102130000_assistant_api_share.sql` before using these on Supabase.
+
+- **Assistant** (sidebar → Assistant): chat about the organization's findings and scans, with
+  organization **memory** (notes, or `/remember …` in chat), **research reports** (a full assessment
+  of a verified domain, written in the background; costs one agent run) and **shared links**.
+  It calls Claude with the organization's own Anthropic key. Model: `claude-opus-5-5` by default;
+  override with `SHANNON_ASSISTANT_MODEL`. Server-side refusal fallbacks are enabled for models
+  that support them. Scan data sent to the model is wrapped as data, not instructions.
+- **Developer API** (sidebar → Developer API): owners/admins create keys
+  (`Authorization: Bearer svx_…`) with scopes `scans:read`, `scans:write`, `findings:read`. Routes:
+  `GET /api/v1/me`, `GET /api/v1/scans`, `GET /api/v1/scans/:id`, `GET /api/v1/scans/:id/report`
+  (`?format=md|sarif`), `POST /api/v1/scans`, `GET /api/v1/findings`. A key acts as its creator in
+  its organization; domain verification, the `authorized` attestation and daily limits still apply.
+  `/api/v1` accepts keys only (no browser cookies). Only a hash of each key is stored.
+- **Share links** (`/share/<token>`): read-only, `noindex`, expire after 1–30 days, revocable, with a
+  view count. Research and conversation pages are rendered with raw HTML escaped; shared scan
+  reports are served under a `sandbox` Content-Security-Policy.
 
 Public marketing pages: `/pricing`, `/security-testing` and one page per area
 (`/security-testing/web-application-security`, `api-security`, `llm-security`, `tls-ssl`,

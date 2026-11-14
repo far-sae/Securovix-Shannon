@@ -1,15 +1,18 @@
 {
   "name": "@securovix/defender",
-  "version": "0.1.0",
-  "description": "Drop-in request inspection for Express/Connect apps. Detects and optionally blocks attacks in-process, and reports detections to your Securovix dashboard.",
+  "version": "0.2.0",
+  "description": "Drop-in request inspection for Express/Connect apps and Web Fetch runtimes (Vercel, Next.js middleware, Cloudflare Workers). Detects and optionally blocks attacks in-process, and reports detections to your Securovix dashboard.",
   "type": "module",
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs",
+    "./web": "./web.mjs",
     "./signatures.mjs": "./signatures.mjs"
   },
-  "files": ["index.mjs", "signatures.mjs", "README.md"],
-  "engines": { "node": ">=18" },
+  "files": ["index.mjs", "web.mjs", "signatures.mjs", "examples", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
   "license": "AGPL-3.0-only",
-  "keywords": ["security", "waf", "express", "middleware", "securovix", "shannon"]
+  "keywords": ["security", "waf", "express", "middleware", "securovix", "shannon", "vercel", "edge"]
 }

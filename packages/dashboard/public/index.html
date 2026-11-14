@@ -785,11 +785,14 @@ background:radial-gradient(1200px 700px at 85% -10%,rgba(212,247,69,.04),transpa
     <button onclick="go('vuln')" id="n-vuln" aria-label="Vulnerability Management"><span aria-hidden="true">&#9888;</span> Vulnerabilities</button>
     <button onclick="go('integrations')" id="n-integrations" aria-label="Integrations"><span aria-hidden="true">&#8644;</span> Integrations</button>
     <button onclick="go('agent')" id="n-agent" aria-label="AI Agent"><span aria-hidden="true">&#9673;</span> AI Agent</button>
+    <button onclick="go('assistant')" id="n-assistant" aria-label="Security Assistant"><span aria-hidden="true">&#10070;</span> Assistant</button>
     <button onclick="go('code')" id="n-code" aria-label="Code Scan"><span aria-hidden="true">&#9876;</span> Code Scan</button>
     <button onclick="go('shield')" id="n-shield" aria-label="Personal Security Shield"><span aria-hidden="true">&#9670;</span> Personal Shield</button>
     <button onclick="go('cfg')" id="n-cfg" aria-label="Settings"><span aria-hidden="true">&#9881;</span> Settings</button>
     <button onclick="go('billing')" id="n-billing" aria-label="Billing and credits"><span aria-hidden="true">&#163;</span> Billing</button>
+    <button onclick="go('developer')" id="n-developer" aria-label="Developer API"><span aria-hidden="true">&#123;&#125;</span> Developer API</button>
     <button onclick="go('defender')" id="n-defender" aria-label="Defender"><span aria-hidden="true">&#9730;</span> Defender</button>
+    <button onclick="go('guard')" id="n-guard" aria-label="Guard: identity and cloud defence"><span aria-hidden="true">&#9737;</span> Guard</button>
   </nav>
   <div class="slist" id="slist"><div class="slist-h">Past Scans</div></div>
 </aside>
@@ -1734,7 +1737,7 @@ function resetLive(){
   PHASES.forEach(p=>{LIVE.phaseLogs[p.id]=[];LIVE.phaseState[p.id]={status:'waiting',thinking:''}});
 }
 
-const PAGES={dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,vuln:pgVuln,integrations:pgIntegrations,agent:pgAgent,shield:pgShield,cfg:pgCfg,billing:pgBilling,scan:pgScan,live:pgLive,code:pgCode,defender:pgDefender};
+const PAGES={dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,vuln:pgVuln,integrations:pgIntegrations,agent:pgAgent,shield:pgShield,cfg:pgCfg,billing:pgBilling,assistant:pgAssistant,developer:pgDeveloper,scan:pgScan,live:pgLive,code:pgCode,defender:pgDefender,guard:pgGuard};
 // Report and live-scan pages have no sidebar button; highlight the section they belong to instead of
 // clearing the nav, which is what used to happen.
 const NAV_FOR={scan:'dash',live:'dash'};
@@ -2865,7 +2868,8 @@ function pgDefender() {
         <aside class="def-stack"><section class="def-card"><div class="def-card-head"><h2>Attack surface signal</h2><small>top detection classes</small></div><div id="def-class-bars" class="def-bars"><div class="def-empty">No signal yet.</div></div></section><section class="def-card"><div class="def-card-head"><h2>Exploited vulnerability intelligence</h2><small>live CISA KEV catalog</small></div><p class="def-fine">Search vulnerabilities confirmed as exploited in the wild. Match results to your software inventory before taking action.</p><div class="def-intel-search"><input class="fi" id="def-intel-query" placeholder="CVE, vendor, or product" onkeydown="if(event.key==='Enter')defIntelLoad(this.value)"><button class="btn btn-g" onclick="defIntelLoad($('def-intel-query').value)">Search</button></div><div id="def-intel-summary" class="def-fine">Loading authoritative intelligence…</div><div id="def-intel-results" class="def-intel-list"></div></section></aside></div>
       <div class="def-deploy"><section class="def-card"><div class="def-card-head"><h3>${ico('shield',{cls:'ico-sm'})} Dashboard protection</h3><span class="bx">platform</span></div><div class="def-deploy-body" id="def-self">Checking platform self-defense…</div></section>
         <section class="def-card"><div class="def-card-head"><h3>${ico('file-text',{cls:'ico-sm'})} Application SDK</h3><span class="bx bx-g">recommended</span></div><div class="def-deploy-body" id="def-sdk">Loading SDK deployment…</div></section>
-        <section class="def-card"><div class="def-card-head"><h3>${ico('gauge',{cls:'ico-sm'})} Response automation</h3><span class="bx">SOC</span></div><div class="def-deploy-body"><p>Defender detections enter the durable incident queue and fan out to enabled Slack, Teams, Jira, Linear, webhook, and SIEM destinations.</p><p class="def-fine">Use Team Workspace to configure delivery targets and inspect retries or dead-letter jobs.</p><div class="def-actions"><button class="btn btn-g" onclick="go('team')">Open Team Workspace</button></div></div></section></div>
+        <section class="def-card"><div class="def-card-head"><h3>${ico('gauge',{cls:'ico-sm'})} Response automation</h3><span class="bx">SOC</span></div><div class="def-deploy-body"><p>Defender detections enter the durable incident queue and fan out to enabled Slack, Teams, Jira, Linear, webhook, and SIEM destinations.</p><p class="def-fine">Use Team Workspace to configure delivery targets and inspect retries or dead-letter jobs.</p><div class="def-actions"><button class="btn btn-g" onclick="go('team')">Open Team Workspace</button></div></div></section>
+        <section class="def-card"><div class="def-card-head"><h3>${ico('file-text',{cls:'ico-sm'})} Weekly attack summary</h3><span class="bx">email</span></div><div class="def-deploy-body" id="def-digest">Loading summary…</div></section></div>
     </div>`;
   defRefreshAll();
 }
@@ -2885,7 +2889,7 @@ let DEF_INTEL_ITEMS = {};
 async function defRefreshAll() {
   const refresh = document.querySelector('.def-head-actions .btn-p');
   if (refresh) refresh.disabled = true;
-  await Promise.allSettled([defOverviewLoad(), defProgramLoad(), defSelfLoad(), defSdkLoad(), defIntelLoad()]);
+  await Promise.allSettled([defOverviewLoad(), defProgramLoad(), defSelfLoad(), defSdkLoad(), defIntelLoad(), defDigestLoad()]);
   if (refresh) refresh.disabled = false;
 }
 
@@ -3144,6 +3148,52 @@ async function defRotateSdkKey() {
     await defSdkLoad();
   } catch (error) {
     alert(error.detail || error.message || 'Could not rotate the SDK key.');
+  }
+}
+
+// Weekly attack summary email (owners and admins). The card shows what the last 7 days would say.
+let DEF_DIGEST = null;
+async function defDigestLoad() {
+  const el = $('def-digest');
+  if (!el) return;
+  try {
+    const d = await api('/defender/digest');
+    DEF_DIGEST = d.digest || null;
+    const t = DEF_DIGEST && DEF_DIGEST.totals;
+    const summary = t
+      ? `Last 7 days: <b>${Number(t.attacks).toLocaleString()}</b> attack${t.attacks === 1 ? '' : 's'} detected, <b>${Number(t.blocked).toLocaleString()}</b> blocked${t.bans ? `, ${Number(t.bans).toLocaleString()} address${t.bans === 1 ? '' : 'es'} banned` : ''}.`
+      : 'No attacks recorded in the last 7 days.';
+    const about = d.eligible
+      ? `Every Monday you get an email with the week's attacks: what was blocked, who was banned and where it came from. A week with no attacks sends nothing. Currently <b>${d.enabled ? 'on' : 'off'}</b>.`
+      : 'The weekly email goes to organization owners and admins.';
+    el.innerHTML = `<p style="margin-top:0">${summary}</p><p class="def-fine">${about}</p>
+      <div class="def-actions">${d.eligible ? `<button class="btn btn-g" onclick="defDigestToggle(${d.enabled ? 'false' : 'true'})">Turn ${d.enabled ? 'off' : 'on'}</button>` : ''}${t ? '<button class="btn btn-g" onclick="defDigestPreview()">Preview</button><button class="btn btn-g" onclick="defDigestSend()">Email it to me now</button>' : ''}</div>
+      <div id="def-digest-out" class="def-fine"></div>`;
+  } catch (e) {
+    el.innerHTML = `<span class="err">${H(e.detail || e.message)}</span>`;
+  }
+}
+async function defDigestToggle(enabled) {
+  try {
+    await api('/defender/digest', { method: 'POST', body: JSON.stringify({ enabled }) });
+    defDigestLoad();
+  } catch (e) {
+    const out = $('def-digest-out');
+    if (out) out.innerHTML = `<span class="err">${H(e.detail || e.message)}</span>`;
+  }
+}
+function defDigestPreview() {
+  const out = $('def-digest-out');
+  if (out && DEF_DIGEST) out.innerHTML = `<pre style="white-space:pre-wrap;margin:10px 0 0;font-size:12px;line-height:1.5">${H(`Subject: ${DEF_DIGEST.subject}\n\n${DEF_DIGEST.text}`)}</pre>`;
+}
+async function defDigestSend() {
+  const out = $('def-digest-out');
+  if (out) out.textContent = 'Sending…';
+  try {
+    const r = await api('/defender/digest/send', { method: 'POST' });
+    if (out) out.textContent = `Sent to ${r.to}.`;
+  } catch (e) {
+    if (out) out.innerHTML = `<span class="err">${H(e.detail || e.message)}</span>`;
   }
 }
 
@@ -5412,6 +5462,387 @@ async function pgCode(){
 }
 
 // renderCodePaywall — removed. Code Scan is free for everyone, no paywall to render.
+
+// ===== Security assistant: chat, research reports, memory, shared links =====
+// Assistant and report HTML arrives pre-rendered and escaped by the server (share-page.mjs), so it
+// is inserted as-is; everything else goes through H().
+let AS_TAB='chat',AS_CONV=null,AS_BUSY=false;
+const AS_TABS=[['chat','Chat'],['research','Research reports'],['memory','Memory'],['shared','Shared links']];
+function HA(v){return H(String(v??'')).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
+function asWhen(t){try{return new Date(t).toLocaleString()}catch{return ''}}
+function asTabsHtml(){return `<div class="cs-tabs" style="margin-bottom:18px">${AS_TABS.map(([id,label])=>`<button class="cs-tab ${AS_TAB===id?'on':''}" onclick="pgAssistant('${id}')">${label}</button>`).join('')}</div>`}
+
+async function pgAssistant(tab){
+  if(tab&&AS_TABS.some(([id])=>id===tab))AS_TAB=tab;
+  M.innerHTML=`<div class="pg sec-page"><section class="cs-hero"><div class="section-eyebrow">Ask · research · remember · share</div><h1>Security Assistant</h1>
+    <p>Ask about your findings and scans, get prioritized fixes, and generate full assessment reports for domains you own. It runs on your organization's Anthropic key and only sees your organization's data.</p></section>
+    ${asTabsHtml()}<div id="as-pane"><p style="color:var(--t3)">Loading…</p></div></div>`;
+  try{
+    if(AS_TAB==='chat')await asRenderChat();
+    else if(AS_TAB==='research')await asRenderResearch();
+    else if(AS_TAB==='memory')await asRenderMemory();
+    else await asRenderShared();
+  }catch(e){const p=$('as-pane');if(p)p.innerHTML=`<p style="color:var(--red)">${H(e.detail||e.message)}</p>`}
+}
+
+async function asRenderChat(){
+  const list=await api('/assistant/conversations');
+  let convo=null;
+  if(AS_CONV){try{convo=(await api(`/assistant/conversations/${encodeURIComponent(AS_CONV)}`)).conversation}catch{AS_CONV=null}}
+  const pane=$('as-pane');if(!pane)return;
+  const msgs=(convo?.messages||[]).map(m=>m.role==='user'
+    ?`<div style="align-self:flex-end;max-width:85%;background:var(--s2);border:1px solid var(--brd2);border-radius:12px;padding:10px 14px;white-space:pre-wrap">${H(m.content)}</div>`
+    :`<div class="as-md" style="max-width:100%;background:var(--s1);border:1px solid var(--brd);border-radius:12px;padding:10px 16px;${m.refusal?'border-color:rgba(255,90,90,.4)':''}">${m.html||H(m.content)}${m.truncated?'<p style="color:var(--t3);font-size:12px">Answer cut off at the length limit.</p>':''}</div>`).join('');
+  pane.innerHTML=`<div style="display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:16px;align-items:start" class="as-grid">
+    <aside class="sec-card" style="margin:0;padding:12px"><button class="btn btn-p" style="width:100%;margin-bottom:10px" onclick="AS_CONV=null;pgAssistant('chat')">+ New conversation</button>
+      ${list.conversations.length?list.conversations.map(c=>`<button class="btn" style="display:block;width:100%;text-align:left;margin:0 0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${c.id===AS_CONV?'border-color:rgba(212,247,69,.5)':''}" onclick="AS_CONV='${c.id}';pgAssistant('chat')" title="${HA(c.title)}">${H(c.title)}</button>`).join(''):'<p style="font-size:12px;color:var(--t3);margin:0">No conversations yet.</p>'}</aside>
+    <section class="sec-card" style="margin:0;display:flex;flex-direction:column;gap:10px;min-height:420px">
+      ${convo?`<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" onclick="asShare('conversation','${convo.id}')">Share</button><button class="btn" onclick="asDeleteConversation('${convo.id}')">Delete</button></div>`:''}
+      <div id="as-msgs" style="display:flex;flex-direction:column;gap:10px;flex:1;overflow:auto;max-height:60vh">${msgs||`<div style="color:var(--t2);font-size:13.5px;line-height:1.7"><b>Try asking:</b><br>• What should we fix first this week?<br>• Explain our highest-severity finding and how to fix it in Express.<br>• Which of our domains have not been scanned recently?<br><span style="color:var(--t3)">Tip: type <code>/remember</code> followed by a note to save something the assistant should always know.</span></div>`}</div>
+      <form onsubmit="event.preventDefault();asSend()" style="display:flex;gap:8px;align-items:flex-end">
+        <textarea id="as-input" rows="3" placeholder="Ask about your findings, scans or fixes…" style="flex:1;padding:10px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font:inherit;resize:vertical" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();asSend()}"></textarea>
+        <button class="btn btn-p" id="as-send" type="submit">Send</button></form>
+    </section></div>`;
+  const box=$('as-msgs');if(box)box.scrollTop=box.scrollHeight;
+  $('as-input')?.focus();
+}
+
+async function asSend(){
+  const input=$('as-input');const text=(input?.value||'').trim();if(!text||AS_BUSY)return;
+  AS_BUSY=true;const btn=$('as-send');if(btn){btn.disabled=true;btn.textContent='Thinking…'}
+  const box=$('as-msgs');if(box){if(!AS_CONV)box.innerHTML='';box.insertAdjacentHTML('beforeend',`<div style="align-self:flex-end;max-width:85%;background:var(--s2);border:1px solid var(--brd2);border-radius:12px;padding:10px 14px;white-space:pre-wrap">${H(text)}</div><div id="as-pending" style="color:var(--t3);font-size:13px">The assistant is thinking…</div>`);box.scrollTop=box.scrollHeight}
+  input.value='';
+  try{const out=await api('/assistant/chat',{method:'POST',body:JSON.stringify({message:text,conversationId:AS_CONV})});AS_CONV=out.conversation.id;await pgAssistant('chat')}
+  catch(e){$('as-pending')?.remove();showNotice('Assistant unavailable',H(e.detail||e.message));if(input)input.value=text}
+  finally{AS_BUSY=false;const b=$('as-send');if(b){b.disabled=false;b.textContent='Send'}}
+}
+
+async function asDeleteConversation(id){
+  if(!confirm('Delete this conversation?'))return;
+  try{await api(`/assistant/conversations/${encodeURIComponent(id)}`,{method:'DELETE'});AS_CONV=null;pgAssistant('chat')}catch(e){showNotice('Could not delete',H(e.detail||e.message))}
+}
+
+async function asRenderResearch(view){
+  const out=await api('/assistant/research');
+  const pane=$('as-pane');if(!pane)return;
+  const badge=r=>r.status==='completed'?'<span class="sev sev-info">Ready</span>':r.status==='running'?'<span class="sev sev-medium">Writing…</span>':`<span class="sev sev-high" title="${HA(r.error||'')}">Failed</span>`;
+  let detail='';
+  if(view){try{const r=(await api(`/assistant/research/${encodeURIComponent(view)}`)).report;detail=r.html?`<section class="sec-card as-md" style="margin-top:16px"><div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:6px"><button class="btn" onclick="asShare('research','${r.id}')">Share</button></div>${r.html}</section>`:''}catch{}}
+  pane.innerHTML=`<section class="sec-card" style="margin:0 0 16px"><div class="sec-card-head"><h2>New assessment report</h2><small>uses 1 agent run · domains you have verified only</small></div>
+      <form onsubmit="event.preventDefault();asStartResearch()" style="display:flex;gap:8px;flex-wrap:wrap"><input id="as-domain" placeholder="example.com" style="flex:1;min-width:200px;padding:10px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font:inherit"><button class="btn btn-p" type="submit">Write report</button></form>
+      <p style="font-size:12px;color:var(--t3);margin:10px 0 0">The assistant reads this domain's findings and scan reports and writes an executive summary, confirmed findings, a remediation plan and the gaps still to test. It only uses evidence Securovix collected.</p></section>
+    <section class="sec-card" style="margin:0"><div class="sec-card-head"><h2>Reports</h2><small>${out.reports.length}</small></div>
+      ${out.reports.length?out.reports.map(r=>`<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--brd);flex-wrap:wrap"><div><b>${H(r.domain)}</b> ${badge(r)}<br><small style="color:var(--t3)">${asWhen(r.createdAt)}${r.sources?` · ${r.sources.findings} findings, ${r.sources.scans} scans`:''}</small></div><div style="display:flex;gap:6px">${r.status==='completed'?`<button class="btn btn-g" onclick="asRenderResearch('${r.id}')">Open</button>`:''}<button class="btn" onclick="asDeleteResearch('${r.id}')">Delete</button></div></div>`).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">No reports yet.</p>'}</section>${detail}`;
+  if(out.reports.some(r=>r.status==='running')){if(POLL)clearInterval(POLL);POLL=setInterval(()=>{if(AS_TAB==='research'&&$('as-domain'))asRenderResearch(view);else{clearInterval(POLL);POLL=null}},6000)}
+  else if(POLL){clearInterval(POLL);POLL=null}
+}
+
+async function asStartResearch(){
+  const domain=($('as-domain')?.value||'').trim();if(!domain)return;
+  try{await api('/assistant/research',{method:'POST',body:JSON.stringify({domain})});asRenderResearch()}
+  catch(e){showNotice('Could not start report',H(e.detail||e.message),{actions:e.body?.needsVerification?`<button class="btn" onclick="document.getElementById('sx-notice').remove();go('domains')">Verify domain</button>`:''})}
+}
+
+async function asDeleteResearch(id){
+  if(!confirm('Delete this report? Share links to it stop working.'))return;
+  try{await api(`/assistant/research/${encodeURIComponent(id)}`,{method:'DELETE'});asRenderResearch()}catch(e){showNotice('Could not delete',H(e.detail||e.message))}
+}
+
+async function asRenderMemory(){
+  const out=await api('/assistant/memory');
+  const pane=$('as-pane');if(!pane)return;
+  pane.innerHTML=`<section class="sec-card" style="margin:0"><div class="sec-card-head"><h2>Organization memory</h2><small>${out.notes.length}/50 notes · shared with everyone in this organization</small></div>
+    <p style="font-size:13px;color:var(--t2);margin:0 0 12px">Facts the assistant should always know: your stack, which domains matter most, accepted risks, team conventions. You can also type <code>/remember …</code> in chat.</p>
+    ${out.canEdit?`<form onsubmit="event.preventDefault();asAddMemory()" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"><input id="as-mem" maxlength="500" placeholder="e.g. Our API runs on Express 5 behind Cloudflare" style="flex:1;min-width:220px;padding:10px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font:inherit"><button class="btn btn-p" type="submit">Remember</button></form>`:''}
+    ${out.notes.length?out.notes.map(n=>`<div style="display:flex;gap:10px;justify-content:space-between;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--brd)"><span>${H(n.text)}</span>${out.canEdit?`<button class="btn" onclick="asDeleteMemory('${n.id}')">Forget</button>`:''}</div>`).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">Nothing remembered yet.</p>'}</section>`;
+}
+
+async function asAddMemory(){
+  const text=($('as-mem')?.value||'').trim();if(!text)return;
+  try{await api('/assistant/memory',{method:'POST',body:JSON.stringify({text})});asRenderMemory()}catch(e){showNotice('Could not save',H(e.detail||e.message))}
+}
+async function asDeleteMemory(id){
+  try{await api(`/assistant/memory/${encodeURIComponent(id)}`,{method:'DELETE'});asRenderMemory()}catch(e){showNotice('Could not delete',H(e.detail||e.message))}
+}
+
+async function asShare(type,id){
+  const v=await showForm('Create a share link',[{id:'days',label:'Expires after (days, 1–30)',value:'7',required:true}],{submitLabel:'Create link',note:'Anyone with the link can read it until it expires. You can revoke it any time under Assistant → Shared links.'});
+  if(!v)return;
+  try{const out=await api('/share-links',{method:'POST',body:JSON.stringify({resourceType:type,resourceId:id,days:Number(v.days)||7})});showCopy('Share link',out.url,'Copy it now: the full link is shown only once.')}
+  catch(e){showNotice('Could not share',H(e.detail||e.message))}
+}
+
+async function asRenderShared(){
+  const [out,scans]=await Promise.all([api('/share-links'),api('/scans').catch(()=>[])]);
+  const pane=$('as-pane');if(!pane)return;
+  const withReport=(scans||[]).filter(s=>s.hasReport);
+  const label={research:'Research report',conversation:'Conversation','scan-report':'Scan report'};
+  pane.innerHTML=`<section class="sec-card" style="margin:0 0 16px"><div class="sec-card-head"><h2>Share a scan report</h2><small>read-only, expiring link</small></div>
+      ${withReport.length?`<div style="display:flex;gap:8px;flex-wrap:wrap"><select id="as-scan" style="flex:1;min-width:220px;padding:10px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0)">${withReport.map(s=>`<option value="${HA(s.id)}">${H(s.target)} · ${H(s.id)}</option>`).join('')}</select><button class="btn btn-p" onclick="asShare('scan-report',$('as-scan').value)">Create link</button></div>`:'<p style="color:var(--t3);font-size:13px;margin:0">No finished scan reports yet.</p>'}</section>
+    <section class="sec-card" style="margin:0"><div class="sec-card-head"><h2>Links</h2><small>${out.links.length}</small></div>
+      ${out.links.length?out.links.map(l=>`<div style="display:flex;gap:10px;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--brd);flex-wrap:wrap"><div><b>${H(l.title||l.resourceId)}</b> <small style="color:var(--t3)">${label[l.resourceType]||H(l.resourceType)}</small><br><small style="color:var(--t3)">${l.active?'Active':l.revokedAt?'Revoked':'Expired'} · expires ${asWhen(l.expiresAt)} · ${l.views||0} views</small></div>${l.active?`<button class="btn" onclick="asRevokeShare('${l.id}')">Revoke</button>`:''}</div>`).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">No links yet.</p>'}</section>`;
+}
+
+async function asRevokeShare(id){
+  if(!confirm('Revoke this link? Anyone holding it loses access immediately.'))return;
+  try{await api(`/share-links/${encodeURIComponent(id)}`,{method:'DELETE'});asRenderShared()}catch(e){showNotice('Could not revoke',H(e.detail||e.message))}
+}
+
+// ===== Developer API: organization API keys for /api/v1 =====
+async function pgDeveloper(){
+  M.innerHTML='<div class="pg"><h1 class="h-display" style="font-size:30px">Developer API</h1><p style="color:var(--t2)">Loading…</p></div>';
+  let out;
+  try{out=await api('/developer/keys')}catch(e){M.innerHTML=`<div class="pg"><h1 class="h-display" style="font-size:30px">Developer API</h1><p style="color:var(--red)">${H(e.detail||e.message)}</p></div>`;return}
+  const base=location.origin;
+  const code=t=>`<pre style="background:var(--s1);border:1px solid var(--brd);border-radius:10px;padding:12px;overflow:auto;font-size:12.5px">${H(t)}</pre>`;
+  M.innerHTML=`<div class="pg sec-page"><section class="cs-hero"><div class="section-eyebrow">CI · automation · integrations</div><h1>Developer API</h1>
+      <p>Start verified scans and read results and findings from your own code or CI pipeline. A key acts as the person who created it, inside this organization, limited to its scopes. Ownership verification and daily limits still apply.</p></section>
+    <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>API keys</h2><small>${out.keys.filter(k=>!k.revokedAt).length} active</small></div>
+      <button class="btn btn-p" onclick="devCreateKey()" style="margin-bottom:12px">Create key</button>
+      ${out.keys.length?out.keys.map(k=>`<div style="display:flex;gap:10px;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--brd);flex-wrap:wrap"><div><b>${H(k.name)}</b> <code>${H(k.hint)}</code><br><small style="color:var(--t3)">${H((k.scopes||[]).join(', '))} · created ${asWhen(k.createdAt)} · ${k.revokedAt?'revoked':k.lastUsedAt?'last used '+asWhen(k.lastUsedAt):'never used'}</small></div>${k.revokedAt?'':`<button class="btn" onclick="devRevokeKey('${k.id}')">Revoke</button>`}</div>`).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">No keys yet.</p>'}</section>
+    <section class="sec-card"><div class="sec-card-head"><h2>Quick start</h2><small>scopes: ${H(out.scopes.join(', '))}</small></div>
+      <p style="font-size:13px;color:var(--t2)">List scans</p>${code(`curl -H "Authorization: Bearer $SECUROVIX_API_KEY" ${base}/api/v1/scans`)}
+      <p style="font-size:13px;color:var(--t2)">Start a scan of a domain you have verified (needs <code>scans:write</code>)</p>${code(`curl -X POST -H "Authorization: Bearer $SECUROVIX_API_KEY" -H "Content-Type: application/json" \\\n  -d '{"targetUrl":"https://app.example.com","authorized":true}' ${base}/api/v1/scans`)}
+      <p style="font-size:13px;color:var(--t2)">Scan status, report and open findings</p>${code(`curl -H "Authorization: Bearer $SECUROVIX_API_KEY" ${base}/api/v1/scans/SCAN_ID
+curl -H "Authorization: Bearer $SECUROVIX_API_KEY" "${base}/api/v1/scans/SCAN_ID/report?format=sarif" -o securovix.sarif
+curl -H "Authorization: Bearer $SECUROVIX_API_KEY" "${base}/api/v1/findings?status=new"`)}
+    </section></div>`;
+}
+
+async function devCreateKey(){
+  const v=await showForm('Create API key',[{id:'name',label:'Name',placeholder:'GitHub Actions',required:true},{id:'scopes',label:'Scopes (comma separated: scans:read, scans:write, findings:read)',value:'scans:read, findings:read',required:true}],{submitLabel:'Create key',note:'The key is shown once. Store it as a secret in your CI system.'});
+  if(!v)return;
+  try{const out=await api('/developer/keys',{method:'POST',body:JSON.stringify({name:v.name,scopes:String(v.scopes||'').split(',').map(x=>x.trim()).filter(Boolean)})});await pgDeveloper();showCopy('Your new API key',out.token,'Copy it now. Securovix stores only a hash and cannot show it again.')}
+  catch(e){showNotice('Could not create key',H(e.detail||e.message))}
+}
+
+async function devRevokeKey(id){
+  if(!confirm('Revoke this key? Anything using it stops working immediately.'))return;
+  try{await api(`/developer/keys/${encodeURIComponent(id)}`,{method:'DELETE'});pgDeveloper()}catch(e){showNotice('Could not revoke',H(e.detail||e.message))}
+}
+
+// ===== Guard: identity and cloud defence (Microsoft 365, Google Workspace), joined to Shannon =====
+// Everything here comes from /api/guard/*. Incident summaries arrive as server-rendered, escaped
+// HTML (summaryHtml / aiSummaryHtml); everything else goes through H(). Ids and indexes are the
+// only values put inside onclick attributes, because H() does not escape quotes.
+const GUARD_STATUS={open:'Open',contained:'Contained',closed:'Closed'};
+let GUARD=null,GUARD_INC=null;
+function guardDur(ms){if(ms==null)return '—';const s=Math.round(ms/1000);if(s<60)return s+' s';const m=Math.floor(s/60);if(m<60)return m+' min'+(m<10&&s%60?' '+(s%60)+' s':'');const h=Math.floor(m/60);return h+' h '+(m%60)+' min'}
+function guardChip(status){const c=status==='open'?'var(--red)':status==='contained'?'var(--acc2)':'var(--t3)';return `<span style="font-size:11px;font-weight:700;color:${c};border:1px solid ${c};border-radius:999px;padding:2px 9px;white-space:nowrap">${H(GUARD_STATUS[status]||status)}</span>`}
+function guardPre(t){return `<div style="position:relative"><button class="btn" style="position:absolute;top:6px;right:6px;padding:3px 9px;font-size:11px" onclick="guardCopy(this)">Copy</button><pre style="background:var(--s1);border:1px solid var(--brd);border-radius:10px;padding:10px 70px 10px 10px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;margin:6px 0">${H(t)}</pre></div>`}
+async function guardCopy(btn){const pre=btn.parentElement.querySelector('pre');try{await navigator.clipboard.writeText(pre.textContent);btn.textContent='Copied'}catch{const r=document.createRange();r.selectNodeContents(pre);getSelection().removeAllRanges();getSelection().addRange(r)}}
+function guardMitre(list){return (list||[]).map(m=>`<span title="${H(m.tactic)}" style="display:inline-block;font-size:11px;border:1px solid var(--brd2);border-radius:6px;padding:1px 6px;margin:2px 4px 2px 0;color:var(--t2)">${H(m.id)} ${H(m.name)}</span>`).join('')}
+const GUARD_AGENT_ACTIONS=new Set(['isolate-host','kill-process','quarantine-file','collect-file']);
+function guardParams(p){return Object.entries(p||{}).filter(([k,v])=>v!=null&&v!==''&&!['clientId','host','sha256'].includes(k)).map(([k,v])=>k==='app'?`app ${v}`:k==='ruleName'?`rule "${v}"`:k==='pid'?`PID ${v}`:k==='hostName'?`on ${v}`:v).join(' · ')}
+const guardHead=(sub)=>`<section class="cs-hero"><div class="section-eyebrow">Identity · cloud · 24/7</div><h1>Guard</h1><p>${sub}</p></section>`;
+
+async function pgGuard(id){
+  if(id)return guardIncidentView(id);
+  M.innerHTML=`<div class="pg sec-page">${guardHead('Loading…')}</div>`;
+  let ov,list,waf;
+  let ep=null;
+  try{[ov,list,waf]=await Promise.all([api('/guard/overview'),api('/guard/incidents'),api('/guard/waf')])}catch(e){M.innerHTML=pageLoadError('Guard',e,"go('guard')");return}
+  try{ep=await api('/guard/endpoints')}catch{ep=null}
+  GUARD={ov,list,waf,ep};
+  const s=ov.score,demo=ov.connections.find(c=>c.provider==='simulation');
+  const kpi=(label,value,small,tone)=>`<div class="sec-kpi ${tone||''}"><span>${label}</span><strong>${value}</strong><small>${small}</small></div>`;
+  const incRow=i=>`<button onclick="go('guard','${i.id}')" style="all:unset;cursor:pointer;display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--brd);width:100%;box-sizing:border-box;flex-wrap:wrap">
+      <span style="display:flex;gap:10px;align-items:center;min-width:0;flex:1">${sevBadge(i.severity)}<span style="min-width:0"><b style="color:var(--t0)">${H(i.title)}</b><br><small style="color:var(--t3)">${i.alertCount} alert${i.alertCount===1?'':'s'} · last ${asWhen(i.lastSeenAt)} · ${(i.mitre||[]).map(m=>H(m.id)).join(' ')}</small></span></span>${guardChip(i.status)}</button>`;
+  const open=list.incidents.filter(i=>i.status!=='closed'),closed=list.incidents.filter(i=>i.status==='closed');
+  const conn=c=>`<div style="padding:10px 0;border-bottom:1px solid var(--brd)">
+      <div style="display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap"><div><b>${H(c.name)}</b> <small style="color:var(--t3)">${H(c.label)}${c.enabled===false?' · paused':''}</small><br>
+        <small style="color:var(--t3)">${c.lastSyncAt?'synced '+asWhen(c.lastSyncAt):'not synced yet'} · ${c.totalEvents||0} events read</small></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${ov.canManage&&c.provider!=='simulation'?`<button class="btn" onclick="guardTest('${c.id}')">Test</button>`:''}${ov.canManage?`<button class="btn" onclick="guardToggle('${c.id}',${c.enabled===false})">${c.enabled===false?'Resume':'Pause'}</button><button class="btn" onclick="guardRemove('${c.id}')">Remove</button>`:''}</div></div>
+      ${c.lastError?`<p style="color:var(--red);font-size:12px;margin:6px 0 0">${H(c.lastError)}</p>`:''}
+      ${c.provider==='simulation'&&ov.canRespond?`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${Object.entries(ov.scenarios).map(([k,v])=>`<button class="btn btn-g" title="${H(v)}" onclick="guardSimulate('${c.id}','${k}')">Run: ${H(k.replace(/-/g,' '))}</button>`).join('')}</div>`:''}</div>`;
+  const ap=ov.autopilot||{};
+  const wafCard=waf.findings.length?waf.findings.map(f=>`<details style="border-bottom:1px solid var(--brd);padding:8px 0"><summary style="cursor:pointer">${sevBadge(f.severity)} <b>${H(f.title)}</b> <small style="color:var(--t3)">${f.rules.applicable?H(f.rules.cls)+' · '+H(f.rules.path):'no WAF rule'}</small></summary>
+      ${f.rules.applicable?`<p style="font-size:12.5px;color:var(--t2);margin:8px 0 0">Cloudflare → Security → WAF → Custom rules → Create rule → Edit expression, action Block:</p>${guardPre(f.rules.cloudflare.expression)}<p style="font-size:12.5px;color:var(--t2);margin:8px 0 0">AWS WAF rule (JSON):</p>${guardPre(JSON.stringify(f.rules.aws,null,2))}${f.rules.notes.map(n=>`<p style="font-size:12px;color:var(--t3);margin:4px 0">${H(n)}</p>`).join('')}`:`<p style="font-size:12.5px;color:var(--t2)">${H(f.rules.reason)}</p>`}</details>`).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">No open Shannon findings. Run a scan; every proven vulnerability gets a WAF rule here.</p>';
+  M.innerHTML=`<div class="pg sec-page">${guardHead('Guard watches sign-ins, mailboxes, app access and file sharing in Microsoft 365 and Google Workspace, and joins them to what Shannon proves about your apps. It catches attacks by spotting behaviour that is new for that person, not only known signatures. No product stops every attack: Guard explains what happened in plain English and gives you one-click responses, most of which you can undo.')}
+    <div class="sec-kpis" style="margin-bottom:18px">
+      ${kpi('Security score',`${s.score} <small style="font-size:15px;color:var(--t3)">${H(s.grade)}</small>`,s.deductions.length?`${s.deductions.length} thing${s.deductions.length===1?'':'s'} to fix`:'nothing to fix',s.score>=75?'good':'warn')}
+      ${kpi('Open incidents',ov.counts.open,`${ov.counts.contained} contained · ${ov.counts.closed} closed`,ov.counts.open?'warn':'good')}
+      ${kpi('Time to contain',guardDur(ov.medianTimeToContainMs),'median, detection to containment','')}
+      ${kpi('Known-exploited CVEs',ov.counts.kev,'CISA KEV, from Vulnerabilities',ov.counts.kev?'warn':'good')}
+    </div>
+    ${s.deductions.length?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Why the score is ${s.score}</h2></div>${s.deductions.map(d=>`<p style="font-size:13px;margin:4px 0"><b style="color:var(--red)">−${d.points}</b> ${H(d.reason)}</p>`).join('')}</section>`:''}
+    <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Incidents</h2><small>${ov.canRespond?`<button class="btn" onclick="guardSync()">Check now</button>`:''}</small></div>
+      ${open.length?open.map(incRow).join(''):`<p style="color:var(--t3);font-size:13px;margin:0">${ov.connections.length?'No open incidents.':'Connect Microsoft 365 or Google Workspace below, or add the demo tenant to see Guard work.'}</p>`}
+      ${closed.length?`<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--t3);font-size:13px">${closed.length} closed</summary>${closed.map(incRow).join('')}</details>`:''}</section>
+    <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Connections</h2><small>checked every 2 minutes</small></div>
+      ${ov.canManage?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn btn-p" onclick="guardConnectMicrosoft()">Connect Microsoft 365</button><button class="btn btn-p" onclick="guardConnectGoogle()">Connect Google Workspace</button>${demo?'':`<button class="btn" onclick="guardConnectDemo()">Add demo tenant</button>`}<button class="btn" onclick="guardEditSettings()">Company domains and trusted apps</button></div>`:''}
+      ${ov.connections.length?ov.connections.map(conn).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">Nothing connected yet.</p>'}
+      <p style="font-size:12px;color:var(--t3);margin:10px 0 0">Threat feed: ${ov.intel.addresses?`${ov.intel.addresses} known-bad addresses (abuse.ch)`:'loads on the first sync of a real tenant'}. Guard keeps alerts and per-person baselines, never the raw logs.</p></section>
+    ${ep?guardEndpointsCard(ep):''}
+    <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Autopilot</h2><small>${ap.enabled?'<b style="color:var(--acc2)">on</b>':'off'}</small></div>
+      <p style="font-size:13px;color:var(--t2);margin:0 0 10px">Off by default. When on, Guard runs the ticked responses by itself on new incidents at or above the chosen severity, and records them like any other action, so reversible ones can be undone.</p>
+      ${ov.canManage?`<label style="display:block;margin:4px 0"><input type="checkbox" id="gap-on" ${ap.enabled?'checked':''}> Autopilot on, for incidents that are <select id="gap-sev"><option value="critical" ${ap.minSeverity==='critical'?'selected':''}>critical</option><option value="high" ${ap.minSeverity==='high'?'selected':''}>high or critical</option></select></label>
+        ${ov.autopilotActions.map(a=>`<label style="display:block;margin:4px 0 4px 18px;font-size:13px"><input type="checkbox" class="gap-act" value="${a.type}" ${ap.actions?.[a.type]?'checked':''}> ${H(a.label)}</label>`).join('')}
+        <button class="btn btn-p" style="margin-top:8px" onclick="guardSaveAutopilot()">Save autopilot</button>`:'<p style="font-size:12.5px;color:var(--t3)">Owners and admins can change autopilot.</p>'}</section>
+    <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Shannon → WAF</h2><small>temporary blocks for proven vulnerabilities</small></div>
+      <p style="font-size:13px;color:var(--t2);margin:0 0 8px">Each rule only covers the vulnerable path, so it cannot break the rest of the site. Keep it until the fix ships and Shannon re-tests it. Attacks that hit one of these paths open a critical Guard incident.</p>${wafCard}</section>
+    <section class="sec-card"><div class="sec-card-head"><h2>Blocklist</h2><small>${ov.blocklist.length} address${ov.blocklist.length===1?'':'es'}</small></div>
+      ${ov.blocklist.length?ov.blocklist.map(b=>`<p style="font-size:13px;margin:4px 0"><code>${H(b.ip)}</code> <small style="color:var(--t3)">${H(b.reason||'')} · ${asWhen(b.at)} · ${H(b.by||'')}</small></p>`).join('')+`<p style="font-size:12.5px;color:var(--t2);margin:10px 0 0">Block them at the edge too (Cloudflare custom rule):</p>${guardPre(waf.blocklist?.cloudflare?.expression||'')}`:'<p style="color:var(--t3);font-size:13px;margin:0">Addresses blocked from an incident appear here. Sign-ins from them become critical alerts.</p>'}</section>
+  </div>`;
+}
+
+async function guardSync(){
+  try{const r=await api('/guard/sync',{method:'POST'});await pgGuard();if(r.result.errors?.length)showNotice('Checked, with problems',r.result.errors.map(H).join('<br>'))}catch(e){showNotice('Could not check',H(e.detail||e.message))}
+}
+async function guardSimulate(id,scenario){
+  try{await api(`/guard/connections/${encodeURIComponent(id)}/simulate`,{method:'POST',body:JSON.stringify({scenario})});await pgGuard()}catch(e){showNotice('Scenario failed',H(e.detail||e.message))}
+}
+async function guardConnectDemo(){
+  try{await api('/guard/connections',{method:'POST',body:JSON.stringify({provider:'simulation'})});await api('/guard/sync',{method:'POST'});await pgGuard();showNotice('Demo tenant added','Guard has learned two weeks of ordinary activity for three demo users. Click <b>Run: account takeover</b> under the demo tenant to watch it catch one.')}catch(e){showNotice('Could not add the demo tenant',H(e.detail||e.message))}
+}
+async function guardConnectMicrosoft(){
+  const v=await showForm('Connect Microsoft 365',[
+    {id:'tenantId',label:'Directory (tenant) ID',placeholder:'00000000-0000-0000-0000-000000000000 or contoso.onmicrosoft.com',required:true},
+    {id:'clientId',label:'Application (client) ID',required:true},
+    {id:'clientSecret',label:'Client secret value',type:'password',required:true},
+    {id:'name',label:'Name',value:'Microsoft 365'}],
+    {submitLabel:'Connect',note:'In Entra admin center → App registrations → New registration. Add a client secret. Under API permissions add <b>application</b> permissions and grant admin consent: Microsoft Graph <code>AuditLog.Read.All</code>, <code>Directory.Read.All</code>; Office 365 Management APIs <code>ActivityFeed.Read</code>. For one-click responses also: <code>User.ReadWrite.All</code>, <code>User.RevokeSessions.All</code>, <code>MailboxSettings.ReadWrite</code>, <code>DelegatedPermissionGrant.ReadWrite.All</code>, <code>AppRoleAssignment.ReadWrite.All</code>. Sign-in logs need Entra ID P1 (in Business Premium). The secret is stored encrypted.'});
+  if(v)guardCreate({provider:'microsoft',...v});
+}
+async function guardConnectGoogle(){
+  const v=await showForm('Connect Google Workspace',[
+    {id:'adminEmail',label:'Super-admin email to act as',placeholder:'admin@yourcompany.com',required:true},
+    {id:'serviceAccountJson',label:'Service account key (paste the JSON file)',type:'textarea',required:true},
+    {id:'name',label:'Name',value:'Google Workspace'}],
+    {submitLabel:'Connect',note:'In Google Cloud create a service account and a JSON key. In the Admin console → Security → API controls → Domain-wide delegation, add its client ID with these scopes: <code>https://www.googleapis.com/auth/admin.reports.audit.readonly</code>, <code>https://www.googleapis.com/auth/admin.directory.user</code>, <code>https://www.googleapis.com/auth/admin.directory.user.security</code>. Google logs carry no location, so travel checks run on Microsoft 365 only. The key is stored encrypted.'});
+  if(v)guardCreate({provider:'google',...v});
+}
+async function guardCreate(body){
+  try{const r=await api('/guard/connections',{method:'POST',body:JSON.stringify(body)});await pgGuard();
+    showNotice(r.test.ok?'Connected':'Connected, with gaps',r.test.checks.map(c=>`${c.ok?'✔':'✖'} <b>${H(c.name)}</b>${c.detail?' — '+H(c.detail):''}`).join('<br>')+'<br><br>The first sync reads the last 7 days of sign-ins to learn what is normal.')}
+  catch(e){showNotice('Could not connect',H(e.detail||e.message))}
+}
+async function guardTest(id){
+  try{const r=await api(`/guard/connections/${encodeURIComponent(id)}/test`,{method:'POST'});showNotice(r.test.ok?'Connection works':'Connection has gaps',r.test.checks.map(c=>`${c.ok?'✔':'✖'} <b>${H(c.name)}</b>${c.detail?' — '+H(c.detail):''}`).join('<br>'))}catch(e){showNotice('Test failed',H(e.detail||e.message))}
+}
+async function guardToggle(id,enabled){
+  try{await api(`/guard/connections/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({enabled})});pgGuard()}catch(e){showNotice('Could not update',H(e.detail||e.message))}
+}
+async function guardRemove(id){
+  if(!confirm('Remove this connection? Guard stops reading it. Incidents already raised stay.'))return;
+  try{await api(`/guard/connections/${encodeURIComponent(id)}`,{method:'DELETE'});pgGuard()}catch(e){showNotice('Could not remove',H(e.detail||e.message))}
+}
+async function guardEditSettings(){
+  let cur;try{cur=(await api('/guard/settings')).settings}catch(e){showNotice('Could not load settings',H(e.detail||e.message));return}
+  const v=await showForm('Company domains and trusted apps',[
+    {id:'domains',label:'Your email domains (comma separated)',value:(cur.domains||[]).join(', '),placeholder:'yourcompany.com, yourcompany.co.uk'},
+    {id:'trustedApps',label:'Trusted apps (names or client IDs, comma separated)',type:'textarea',value:(cur.trustedApps||[]).join(', ')}],
+    {submitLabel:'Save',note:'Mail forwarded or files shared outside these domains are flagged. Domains verified in Microsoft 365 or Google are added automatically. Consents to trusted apps are not flagged.'});
+  if(!v)return;
+  try{await api('/guard/settings',{method:'POST',body:JSON.stringify(v)});pgGuard()}catch(e){showNotice('Could not save',H(e.detail||e.message))}
+}
+async function guardSaveAutopilot(){
+  const actions={};document.querySelectorAll('.gap-act').forEach(c=>{actions[c.value]=c.checked});
+  const enabled=$('gap-on').checked;
+  if(enabled&&actions['disable-user']&&!confirm('Autopilot will be able to disable accounts by itself, including an admin\'s. Continue?'))return;
+  try{await api('/guard/settings',{method:'POST',body:JSON.stringify({autopilot:{enabled,minSeverity:$('gap-sev').value,actions}})});pgGuard()}catch(e){showNotice('Could not save',H(e.detail||e.message))}
+}
+
+// ----- Guard Phase 2: laptops and servers (the Guard agent) -----
+function guardEndpointsCard(ep){
+  const pol=ep.policy||{},rw=pol.ransomware||{};
+  const row=a=>`<div style="padding:9px 0;border-bottom:1px solid var(--brd);display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap">
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${a.online?'var(--acc2)':'var(--t3)'};margin-right:6px" title="${a.online?'online':'offline'}"></span><b>${H(a.hostname)}</b> <small style="color:var(--t3)">${H(a.os||'')} · agent ${H(a.version||'')} · ${a.online?'online':'last seen '+asWhen(a.lastSeenAt)}${a.stats?` · ${a.stats.cpuPercent??'?'}% CPU, ${a.stats.memoryMb??'?'} MB${a.stats.sysmon?' · Sysmon':''}`:''}</small>${a.isolated?' <b style="color:var(--red);font-size:12px">ISOLATED</b>':''}</span>
+    <span style="display:flex;gap:6px;flex-wrap:wrap">${ep.canRespond?(a.isolated?`<button class="btn" onclick="guardMachine('${a.id}','release-host')">Reconnect</button>`:`<button class="btn" onclick="guardMachine('${a.id}','isolate-host')">Isolate</button>`):''}${ep.canManage?`<button class="btn" onclick="guardRetire('${a.id}')">Retire</button>`:''}</span></div>`;
+  const toggle=(key,label,checked,disabled)=>`<label style="display:block;margin:4px 0;font-size:13px${disabled?';color:var(--t3)':''}"><input type="checkbox" class="gep-pol" data-key="${key}" ${checked?'checked':''} ${disabled?'disabled':''}> ${label}</label>`;
+  const verdict=v=>v==='malicious'?'<b style="color:var(--red)">malicious</b>':v==='suspicious'?'<b style="color:var(--amber,#f5b942)">suspicious</b>':v?H(v):'—';
+  return `<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Laptops and servers</h2><small>${ep.agents.filter(a=>a.online).length} of ${ep.agents.length} online</small></div>
+    <p style="font-size:13px;color:var(--t2);margin:0 0 10px">The Guard agent watches processes, autostart entries and people's document folders. It stops ransomware on the spot when it can name the program doing it, and lets you isolate a machine (only Securovix stays reachable) or stop a process from here. Windows and Linux today; macOS builds on a Mac.</p>
+    ${ep.canManage?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn btn-p" onclick="guardAddMachine()">Add a machine</button></div>`:''}
+    ${ep.agents.length?ep.agents.map(row).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">No machines yet.</p>'}
+    ${ep.canManage?`<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--t2)">Protection settings</summary>
+      ${toggle('autoKill','Stop ransomware on the machine as soon as it is caught (only programs started recently from Downloads/Temp-type folders are ever stopped)',rw.autoKill!==false)}
+      ${toggle('canaries','Plant hidden decoy files in document folders',pol.canaries!==false)}
+      ${toggle('quarantineKnownMalware','Stop and quarantine files the sandbox has proven malicious',pol.quarantineKnownMalware!==false)}
+      ${toggle('autoSubmitExecutables','Send unknown programs started from Downloads/Temp to the sandbox',!!pol.autoSubmitExecutables,!ep.sandbox.configured)}
+      ${toggle('useSysmon','Use Sysmon on Windows when it is installed (catches very short-lived programs and LSASS access)',pol.useSysmon!==false)}
+      <button class="btn btn-p" style="margin-top:6px" onclick="guardSavePolicy()">Save settings</button></details>`:''}
+    <details style="margin-top:10px" ${ep.samples.length?'open':''}><summary style="cursor:pointer;font-size:13px;color:var(--t2)">Malware sandbox · ${ep.sandbox.configured?'connected':'not configured'} · ${ep.sandbox.knownMaliciousHashes} known-malicious file${ep.sandbox.knownMaliciousHashes===1?'':'s'} blocked on every machine</summary>
+      ${ep.samples.length?`<div style="overflow-x:auto"><table style="width:100%;font-size:12.5px;border-collapse:collapse;margin-top:6px">${ep.samples.map(x=>`<tr><td style="padding:4px 8px">${H(x.filename||'')}</td><td style="padding:4px 8px">${H(x.hostname||'')}</td><td style="padding:4px 8px">${verdict(x.verdict)}${x.family?' · '+H(x.family):''}${x.score!=null?' · '+Math.round(x.score*100)+'%':''}</td><td style="padding:4px 8px;color:var(--t3)">${H(x.status)}${x.error?' · '+H(x.error):''}</td><td style="padding:4px 8px;color:var(--t3)">${asWhen(x.createdAt)}</td></tr>`).join('')}</table></div>`:`<p style="color:var(--t3);font-size:13px;margin:6px 0 0">${ep.sandbox.configured?'No files analysed yet.':'Set SHANNON_CAPE_URL to a CAPE sandbox to analyse files. Known-malicious hashes are still blocked.'}</p>`}</details></section>`;
+}
+async function guardAddMachine(){
+  let token;try{token=(await api('/guard/endpoints/enroll-token',{method:'POST'})).token}catch(e){showNotice('Could not create a token',H(e.detail||e.message));return}
+  const server=GUARD?.ep?.server||location.origin;
+  showNotice('Add a machine',`<p style="font-size:13px;margin:0 0 6px">Download the agent for the machine (<a href="/api/guard/endpoints/download/windows" style="color:var(--acc2)">Windows</a> · <a href="/api/guard/endpoints/download/linux" style="color:var(--acc2)">Linux</a>), then run as administrator / root:</p>
+    <p style="font-size:12px;color:var(--t3);margin:8px 0 2px">Windows (PowerShell as administrator)</p>${guardPre(`.\\securovix-guard.exe install --server ${server} --token ${token}`)}
+    <p style="font-size:12px;color:var(--t3);margin:8px 0 2px">Linux</p>${guardPre(`sudo ./securovix-guard install --server ${server} --token ${token}`)}
+    <p style="font-size:12px;color:var(--t3);margin:8px 0 0">The token works for any number of machines until you create a new one, and is shown only now. Creating a new token stops this one from enrolling more machines; machines already enrolled keep working.</p>`);
+}
+async function guardMachine(id,type){
+  if(type==='isolate-host'&&!confirm('Isolate this machine? It loses all network access except to Securovix until you reconnect it.'))return;
+  try{await api(`/guard/endpoints/${encodeURIComponent(id)}/actions`,{method:'POST',body:JSON.stringify({type})});showNotice('Sent','The machine carries this out at its next check-in, usually within 10 seconds. Refresh to see it.')}catch(e){showNotice('Could not send',H(e.detail||e.message))}
+}
+async function guardRetire(id){
+  if(!confirm('Retire this machine? Its agent stops being accepted. Uninstall it on the machine too.'))return;
+  try{await api(`/guard/endpoints/${encodeURIComponent(id)}`,{method:'DELETE'});pgGuard()}catch(e){showNotice('Could not retire',H(e.detail||e.message))}
+}
+async function guardSavePolicy(){
+  const body={ransomware:{}};
+  document.querySelectorAll('.gep-pol').forEach(c=>{if(c.disabled)return;if(c.dataset.key==='autoKill')body.ransomware.autoKill=c.checked;else body[c.dataset.key]=c.checked});
+  try{await api('/guard/endpoints/policy',{method:'POST',body:JSON.stringify(body)});pgGuard()}catch(e){showNotice('Could not save',H(e.detail||e.message))}
+}
+
+async function guardIncidentView(id){
+  M.innerHTML=`<div class="pg sec-page">${guardHead('Loading incident…')}</div>`;
+  let out;
+  try{out=await api(`/guard/incidents/${encodeURIComponent(id)}`)}catch(e){M.innerHTML=pageLoadError('this incident',e,`go('guard','${encodeURIComponent(id)}')`);return}
+  GUARD_INC=out;
+  const i=out.incident,canAct=out.canRespond&&i.status!=='closed';
+  const real=out.connections.filter(c=>c.enabled!==false);
+  const connFor=a=>a.type==='block-ip'||GUARD_AGENT_ACTIONS.has(a.type)?null:(real.find(c=>c.id===a.connectionId)||real.find(c=>(c.actions||[]).includes(a.type)));
+  const actBtn=(a,idx)=>{const c=connFor(a);const done=out.actionsTaken.some(t=>(t.status==='done'||t.status==='pending')&&!t.undoneAt&&t.type===a.type&&JSON.stringify(t.params)===JSON.stringify(a.params));
+    return `<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--brd);flex-wrap:wrap"><span><b>${H(a.label)}</b> <small style="color:var(--t3)">${H(guardParams(a.params))}${c?' · via '+H(c.name):''}${a.reversible?' · can be undone':''}</small></span>${done?'<small style="color:var(--acc2)">sent</small>':canAct&&(c||a.type==='block-ip'||GUARD_AGENT_ACTIONS.has(a.type))?`<button class="btn btn-p" onclick="guardAct(${idx})">Do it</button>`:canAct?'<small style="color:var(--t3)">no connection can do this</small>':''}</div>`};
+  const taken=t=>`<div style="padding:7px 0;border-bottom:1px solid var(--brd);font-size:13px;display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap"><span><b>${H(t.label)}</b> <small style="color:var(--t3)">${H(guardParams(t.params))}</small><br>
+      <small style="color:${t.status==='failed'?'var(--red)':t.status==='pending'?'var(--amber,#f5b942)':'var(--t2)'}">${H(t.status==='done'?(t.detail||'Done.'):t.status==='pending'?(t.detail||'Waiting for the machine to confirm.'):'Failed: '+(t.error||''))}</small><br>
+      <small style="color:var(--t3)">${asWhen(t.createdAt)} · ${H(t.mode==='autopilot'?'autopilot':t.actor||'')}${t.undoneAt?` · undone ${asWhen(t.undoneAt)} by ${H(t.undoneBy||'')}`:''}</small></span>${t.undoable&&out.canRespond?`<button class="btn" onclick="guardUndo('${t.id}')">Undo</button>`:''}</div>`;
+  const ev=e=>`<tr><td style="padding:4px 8px;white-space:nowrap">${asWhen(e.at)}</td><td style="padding:4px 8px">${H(e.type||'')}</td><td style="padding:4px 8px">${H(e.user||'')}</td><td style="padding:4px 8px"><code>${H(e.ip||'')}</code></td><td style="padding:4px 8px">${H(e.place||'')}</td><td style="padding:4px 8px">${H(e.outcome||'')}</td></tr>`;
+  const alert=a=>`<div style="padding:10px 0;border-bottom:1px solid var(--brd)"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${sevBadge(a.severity)} <b>${H(a.title)}</b> <small style="color:var(--t3)">${asWhen(a.at)}</small></div>
+      <p style="font-size:13px;color:var(--t1);margin:6px 0">${H(a.explanation)}</p>${guardMitre(a.mitre)}
+      <details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px;color:var(--t3)">Evidence (${(a.evidence||[]).length})</summary><div style="overflow-x:auto"><table style="font-size:12px;border-collapse:collapse;margin-top:6px">${(a.evidence||[]).map(ev).join('')}</table></div></details></div>`;
+  M.innerHTML=`<div class="pg sec-page">
+    <p style="margin:0 0 10px"><a href="#guard" style="color:var(--acc2)">← All incidents</a></p>
+    <section class="cs-hero"><div class="section-eyebrow">Guard incident</div><h1 style="font-size:26px">${H(i.title)}</h1>
+      <p style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${sevBadge(i.severity)} ${guardChip(i.status)} <small style="color:var(--t3)">first seen ${asWhen(i.firstSeenAt)} · detected ${asWhen(i.detectedAt)}${i.timeToDetectMs!=null?' ('+guardDur(i.timeToDetectMs)+' later)':''}${i.containedAt?' · contained '+guardDur(i.timeToContainMs)+' after detection':''}${i.reopened?' · reopened '+i.reopened+'×':''}</small></p></section>
+    <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>What happened</h2><small><button class="btn" onclick="guardExplain('${i.id}')">${i.aiSummaryHtml?'Ask the AI analyst again':'Explain with the AI analyst'}</button></small></div>
+      <div class="md" style="font-size:13.5px;line-height:1.6">${i.summaryHtml}</div>
+      <div id="g-ai">${i.aiSummaryHtml?`<div style="border-top:1px solid var(--brd);margin-top:12px;padding-top:12px"><div class="section-eyebrow">AI analyst</div><div class="md" style="font-size:13.5px;line-height:1.6">${i.aiSummaryHtml}</div></div>`:''}</div></section>
+    <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Respond</h2><small>${canAct?'one click each':i.status==='closed'?'closed':'read only for your role'}</small></div>
+      ${(i.actions||[]).length?i.actions.map(actBtn).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">No automatic response applies; follow the steps above.</p>'}
+      ${canAct?`<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="guardClose('${i.id}')">Close incident</button></div>`:''}</section>
+    ${out.actionsTaken.length?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Actions taken</h2><small>${out.actionsTaken.length}</small></div>${out.actionsTaken.map(taken).join('')}</section>`:''}
+    <section class="sec-card"><div class="sec-card-head"><h2>Alerts</h2><small>${(i.alerts||[]).length} · ${guardMitre(i.mitre).length?'MITRE ATT&amp;CK mapped':''}</small></div>${[...(i.alerts||[])].sort((a,b)=>a.at-b.at).map(alert).join('')}</section>
+  </div>`;
+}
+async function guardAct(idx){
+  const i=GUARD_INC.incident,a=i.actions[idx];if(!a)return;
+  const real=GUARD_INC.connections.filter(c=>c.enabled!==false);
+  const c=a.type==='block-ip'||GUARD_AGENT_ACTIONS.has(a.type)?null:(real.find(x=>x.id===a.connectionId)||real.find(x=>(x.actions||[]).includes(a.type)));
+  if(a.type==='isolate-host'&&!confirm(`Isolate ${a.params.hostName||'this machine'}? It loses all network access except to Securovix until you reconnect it (Undo).`))return;
+  if(a.type==='disable-user'&&!confirm(`Disable ${a.params.user}? They cannot sign in until the account is re-enabled (Undo).`))return;
+  try{await api(`/guard/incidents/${encodeURIComponent(i.id)}/actions`,{method:'POST',body:JSON.stringify({type:a.type,params:a.params,connectionId:c?.id||null})})}
+  catch(e){showNotice('The action did not complete',H(e.detail||e.message))}
+  guardIncidentView(i.id);
+}
+async function guardUndo(actionId){
+  if(!confirm('Undo this action?'))return;
+  try{await api(`/guard/actions/${encodeURIComponent(actionId)}/undo`,{method:'POST'})}catch(e){showNotice('Could not undo',H(e.detail||e.message))}
+  guardIncidentView(GUARD_INC.incident.id);
+}
+async function guardExplain(id){
+  $('g-ai').innerHTML='<p style="color:var(--t3);font-size:13px;margin-top:12px">The AI analyst is reading the incident…</p>';
+  try{await api(`/guard/incidents/${encodeURIComponent(id)}/explain`,{method:'POST'});guardIncidentView(id)}catch(e){$('g-ai').innerHTML=`<p style="color:var(--red);font-size:13px;margin-top:12px">${H(e.detail||e.message)}</p>`}
+}
+async function guardClose(id,force){
+  const v=await showForm(force?'Close without a verified fix':'Close incident',[{id:'note',label:'What was the outcome?',type:'textarea',placeholder:'Confirmed with the person; password changed; rule removed.'}],{submitLabel:'Close incident'});
+  if(!v)return;
+  try{await api(`/guard/incidents/${encodeURIComponent(id)}/close`,{method:'POST',body:JSON.stringify({note:v.note,force:!!force})});guardIncidentView(id)}
+  catch(e){if(e.body?.code==='FIX_NOT_VERIFIED'&&!force){if(confirm(e.detail+'\n\nClose it anyway?'))guardClose(id,true)}else showNotice('Could not close',H(e.detail||e.message))}
+}
 
 // ===== Billing: plan, daily usage, prepaid credits, scan offers, credit packs, orders =====
 // Prices and payment methods come only from GET /api/commerce/account (commerce.mjs). While

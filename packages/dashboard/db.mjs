@@ -922,6 +922,16 @@ export function listDefenseEvents(orgId, limit = 200) {
   return (_defenseEvents[orgId] || []).slice(0, Math.max(1, Math.min(500, limit)));
 }
 
+// For the weekly summary: everything held for one organization since a point in time (the store
+// keeps the most recent 2,000 per organization), and which organizations have any events at all.
+export function listDefenseEventsSince(orgId, since) {
+  return (_defenseEvents[orgId] || []).filter((event) => Number(event.createdAt) >= since);
+}
+
+export function listDefenseEventOrgIds() {
+  return Object.keys(_defenseEvents).filter((orgId) => _defenseEvents[orgId]?.length);
+}
+
 export function updateDefenseEvent(orgId, id, patch) {
   const event = (_defenseEvents[orgId] || []).find((item) => item.id === id);
   if (!event) return null;
