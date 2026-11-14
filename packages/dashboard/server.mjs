@@ -18,6 +18,7 @@ import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import { sendMonitorAlert } from '../../monitor.mjs';
 import {
+  COMPLIANCE,
   PROBERS,
   detectionRule,
   fetchT,
@@ -49,7 +50,9 @@ import {
   initDb,
   isSupabase,
   listAudit,
+  listDefenseEventOrgIds,
   listDefenseEvents,
+  listDefenseEventsSince,
   listEdgeRoutes,
   listAgentRuns,
   listFindings,
@@ -80,13 +83,73 @@ import {
   updateDefenseEvent,
   waitForUserWrites,
 } from './db.mjs';
+import {
+  cancelOrder,
+  catalogItem,
+  commerceEnabled,
+  creditBalance,
+  creditGrantFor,
+  markCardPaid,
+  newOrder,
+  paymentInstructions,
+  paymentMethods,
+  publicCatalog,
+  reviewOrder,
+  submitEvidence,
+} from './commerce.mjs';
 import { openPullRequest } from './github-pr.mjs';
+import { renderPricingPage } from './pricing-page.mjs';
+import {
+  ASSISTANT_INSTRUCTIONS,
+  API_SCOPES,
+  CHAT_LIMITS,
+  RESEARCH_INSTRUCTIONS,
+  SHARE_TYPES,
+  buildOrgContext,
+  cleanUserText,
+  conversationTitle,
+  domainMatches,
+  newApiKey,
+  newShareToken,
+  normalizeMemoryText,
+  normalizeScopes,
+  parseApiKey,
+  parseRememberCommand,
+  parseShareToken,
+  researchMaterial,
+  secretMatches,
+  shareExpiry,
+  shareUsable,
+  toApiMessages,
+  v1RouteScope,
+} from './assistant.mjs';
+import { describeAiError, runChat, runResearch } from './assistant-ai.mjs';
+import { renderMarkdown, renderShareGone, renderSharedConversation, renderSharedResearch } from './share-page.mjs';
+import { renderSecurityArea, renderSecurityIndex, renderSitemap, securityArea } from './security-pages.mjs';
 import { gatherLeads } from './leads.mjs';
 import { diffToDelta, dueMonitors } from './monitor-schedule.mjs';
 import { applyLineFix, generatePatch } from './patch.mjs';
 import { runInSandbox, sandboxAvailable } from './sandbox.mjs';
 import {
+  addCreditGrant,
+  apiKeys,
   appendOperationalEvent,
+  defenderBans,
+  guardActions,
+  guardAgents,
+  guardCommands,
+  guardConnections,
+  guardEndpoint,
+  guardHashes,
+  guardSamples,
+  guardIncidents,
+  guardSettings,
+  guardState,
+  assistantConversations,
+  assistantMemory,
+  researchReports,
+  shareLinks,
+  consumeCredits,
   consumeScanAuthGrant,
   consumeUsage,
   consumeAuthToken,
@@ -101,10 +164,13 @@ import {
   findSsoIdentity,
   getJob,
   getIntegration,
+  getCommerceOrder,
   getEntitlement,
   getDefenseProgram,
   getOrgSecret,
   listArtifacts,
+  listCommerceOrders,
+  listCreditGrants,
   listDeliveries,
   listDefenseAssets,
   listDefenseCycles,
@@ -116,6 +182,7 @@ import {
   listOperationalEvents,
   listOrgSecrets,
   readArtifact,
+  saveCommerceOrder,
   saveIntegration,
   saveEntitlement,
   saveDefenseAsset,
@@ -129,6 +196,17 @@ import {
   updateVulnerabilityMatch,
 } from './enterprise-db.mjs';
 import { queueIntegrationEvent, sendEmail } from './enterprise-integrations.mjs';
+import { buildDefenseDigest, DAY, lastCompleteWeek } from './defender-digest.mjs';
+import { createLoginGuard } from './login-guard.mjs';
+import { createGuardEngine } from './guard/engine.mjs';
+import { createGoogleProvider } from './guard/google.mjs';
+import { loadBadIps } from './guard/intel.mjs';
+import { createMicrosoftProvider } from './guard/microsoft.mjs';
+import { registerGuardRoutes } from './guard/routes.mjs';
+import { createEndpointService } from './guard/endpoint.mjs';
+import { registerEndpointRoutes } from './guard/endpoint-routes.mjs';
+import { createCapeClient } from './guard/sandbox.mjs';
+import { createSimulationProvider } from './guard/simulate.mjs';
 import {
   consumeRecoveryCode,
   createRecoveryCodes,
@@ -181,6 +259,8 @@ app.use((req, res, next) => {
   res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
   res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('cross-origin-opener-policy', 'same-origin');
+  // HTTPS only (trust proxy makes req.secure reflect the edge). Never sent over plain local http.
+  if (req.secure) res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
   res.setHeader(
     'content-security-policy',
     "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
@@ -242,8 +322,25 @@ const SELF_BAN = {
   windowMs: Number(process.env.SHANNON_DEFEND_SELF_BAN_WINDOW_MS || 60_000),
   ttlMs: Number(process.env.SHANNON_DEFEND_SELF_BAN_TTL_MS || 15 * 60_000),
 };
+// Bans are persisted so a redeploy does not forgive a scanner, and so every instance shares them.
+const DEFENDER_BAN_STORE = {
+  async load() {
+    const now = Date.now();
+    const rows = await defenderBans.list({}, { orderBy: 'until', limit: 500 });
+    for (const row of rows) if (!(row.until > now)) defenderBans.remove(row.id).catch(() => {});
+    return rows.filter((row) => row.until > now);
+  },
+  save: ({ ip, until, reason }) => defenderBans.save({ id: ip, ip, until, reason: reason || null, createdAt: Date.now() }),
+  remove: (ip) => defenderBans.remove(ip),
+};
 const SELF_DEFENSE = process.env.SHANNON_DEFEND_SELF === '1'
-  ? createSelfDefense({ mode: process.env.SHANNON_DEFEND_SELF_MODE === 'enforce' ? 'enforce' : 'monitor', ban: SELF_BAN })
+  ? createSelfDefense({
+      mode: process.env.SHANNON_DEFEND_SELF_MODE === 'enforce' ? 'enforce' : 'monitor',
+      ban: SELF_BAN,
+      banStore: DEFENDER_BAN_STORE,
+      honeypot: process.env.SHANNON_DEFEND_SELF_HONEYPOT === '0' ? false : undefined,
+      scanners: process.env.SHANNON_DEFEND_SELF_SCANNERS === '0' ? false : undefined,
+    })
   : null;
 // Live subscribers of /api/defender/self/events (platform operators watching the Defender page).
 const SELF_SSE = new Set();
@@ -281,7 +378,11 @@ if (SELF_DEFENSE) {
       // eventText() in enterprise-integrations titles a message as data.title || event.type; without
       // this a Slack alert would read "[HIGH] defender.detection (open)".
       title: isBan
-        ? `Repeat offender ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after ${payload.count} confirmed attacks on the dashboard`
+        ? payload.reason === 'honeypot'
+          ? `Scanner ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after requesting a honeypot path on the dashboard`
+          : payload.reason === 'scanner-tool'
+            ? `Attack tool at ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after identifying itself to the dashboard`
+          : `Repeat offender ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after ${payload.count} confirmed attacks on the dashboard`
         : `${String(payload.cls || 'attack')} ${enforced ? 'blocked' : 'detected'} on the dashboard: ${String(payload.method || '')} ${String(payload.url || '').slice(0, 120)}`,
       enforced,
       srcIp: payload.srcIp || payload.ip || null,
@@ -299,6 +400,32 @@ if (SELF_DEFENSE) {
     console.warn('[defender] SHANNON_PLATFORM_ORG_ID is not set — self-defense detections stream live to operators but are not persisted or sent to alert integrations');
   }
 }
+
+// Public, server-rendered landing pages for each security-testing area (see security-pages.mjs).
+app.get('/security-testing', (req, res) => {
+  res.setHeader('cache-control', 'public, max-age=300');
+  res.type('html').send(renderSecurityIndex({ baseUrl: publicBaseUrl(req) }));
+});
+app.get('/security-testing/:slug', (req, res) => {
+  const area = securityArea(String(req.params.slug || ''));
+  if (!area) return res.status(404).type('html').send(renderSecurityIndex({ baseUrl: publicBaseUrl(req) }));
+  res.setHeader('cache-control', 'public, max-age=300');
+  res.type('html').send(renderSecurityArea(area, { baseUrl: publicBaseUrl(req), compliance: COMPLIANCE }));
+});
+app.get('/pricing', (req, res) => {
+  res.setHeader('cache-control', 'public, max-age=60');
+  res.type('html').send(renderPricingPage(commerceCatalog(), { baseUrl: publicBaseUrl(req) }));
+});
+app.get('/sitemap.xml', (req, res) => {
+  res.type('application/xml').send(renderSitemap(publicBaseUrl(req)));
+});
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send(`User-agent: *
+Allow: /
+Disallow: /api/
+Sitemap: ${publicBaseUrl(req)}/sitemap.xml
+`);
+});
 
 // `extensions: ['html']` lets us serve `/terms` from `terms.html` etc.
 app.use(express.static(join(__dirname, 'public'), { extensions: ['html'] }));
@@ -361,6 +488,10 @@ const PRO_PLAN = {
   limits: PRO_LIMITS,
 };
 
+function stripeCardReady() {
+  return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET);
+}
+
 function billingEnabled() {
   return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET && process.env.STRIPE_PRO_MONTHLY_PRICE_ID);
 }
@@ -372,14 +503,25 @@ async function organizationPlan(orgId) {
   return { plan: paid ? 'pro' : 'free', limits: paid ? { ...PRO_LIMITS, ...(entitlement.limits || {}) } : FREE_LIMITS, entitlement };
 }
 
-async function consumeOrgQuota(ctx, res, metric, amount = 1) {
-  const current = await organizationPlan(ctx.org.id);
+// Daily plan allowance first; once it is spent, fall back to prepaid credits (soonest-expiring first).
+export async function consumeOrgAllowance(orgId, metric, amount = 1) {
+  const current = await organizationPlan(orgId);
   const limit = Number(current.limits[metric] || 0);
-  const usage = await consumeUsage(ctx.org.id, metric, amount, limit);
-  res.setHeader('x-shannon-limit', String(limit));
-  res.setHeader('x-shannon-remaining', String(Math.max(0, limit - usage.used)));
-  if (usage.allowed) return true;
-  res.status(429).json({ error: `Daily organization limit reached for ${metric}.`, code: 'ORG_USAGE_LIMIT', metric, used: usage.used, limit, plan: current.plan, upgradeAvailable: billingEnabled() });
+  const usage = await consumeUsage(orgId, metric, amount, limit);
+  if (usage.allowed) return { allowed: true, source: 'daily', used: usage.used, limit, plan: current.plan };
+  const credit = await consumeCredits(orgId, metric, amount);
+  if (credit.allowed) return { allowed: true, source: 'credits', used: usage.used, limit, plan: current.plan, creditsRemaining: credit.remaining };
+  return { allowed: false, source: null, used: usage.used, limit, plan: current.plan };
+}
+
+async function consumeOrgQuota(ctx, res, metric, amount = 1) {
+  const quota = await consumeOrgAllowance(ctx.org.id, metric, amount);
+  res.setHeader('x-shannon-limit', String(quota.limit));
+  res.setHeader('x-shannon-remaining', String(Math.max(0, quota.limit - quota.used)));
+  if (quota.source === 'credits') res.setHeader('x-shannon-credits-remaining', String(quota.creditsRemaining));
+  if (quota.allowed) return true;
+  const buyable = billingEnabled() || commerceEnabled();
+  res.status(429).json({ error: `Daily organization limit reached for ${metric}.`, code: 'ORG_USAGE_LIMIT', metric, used: quota.used, limit: quota.limit, plan: quota.plan, upgradeAvailable: buyable, creditsAvailable: commerceEnabled() });
   return false;
 }
 
@@ -585,6 +727,7 @@ const PUBLIC_API = new Set([
   '/auth/invitations/accept',
   '/auth/plans',
   '/billing/webhook',
+  '/commerce/catalog',
 ]);
 app.use('/api', async (req, res, next) => {
   try {
@@ -593,6 +736,23 @@ app.use('/api', async (req, res, next) => {
     return res.status(503).json({ error: `Database refresh failed: ${error.message}` });
   }
   const relative = req.path;
+  if (relative.startsWith('/v1/') || relative === '/v1') {
+    const route = v1RouteScope(req.method, relative);
+    if (!route.known) return res.status(404).json({ error: 'Unknown API route.' });
+    const parsed = parseApiKey(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+    if (!parsed) return res.status(401).json({ error: 'Send a Securovix API key: Authorization: Bearer svx_...' });
+    const key = await apiKeys.get(parsed.id).catch(() => null);
+    if (!key || key.revokedAt || !secretMatches(parsed.secret, key.secretHash)) return res.status(401).json({ error: 'Invalid or revoked API key.' });
+    const keyUser = loadUsers()[key.createdBy];
+    if (!keyUser || keyUser.disabledAt || !getMembership(key.orgId, keyUser.id)) return res.status(401).json({ error: 'The user who created this key no longer has access to the organization.' });
+    if (route.scope && !(key.scopes || []).includes(route.scope)) return res.status(403).json({ error: `This API key does not have the ${route.scope} scope.` });
+    if (limited(req, res, `apikey:${key.id}`, 300, 5 * 60 * 1000)) return;
+    req.shannonUser = keyUser;
+    req.apiKey = key;
+    req.headers['x-shannon-org'] = key.orgId;
+    if (!key.lastUsedAt || Date.now() - key.lastUsedAt > 60_000) apiKeys.save({ ...key, lastUsedAt: Date.now() }).catch(() => {});
+    return next();
+  }
   const bearerRoute =
     req.headers.authorization &&
     (relative === '/defender/report'
@@ -600,6 +760,8 @@ app.use('/api', async (req, res, next) => {
       || (relative === '/defender/edge/routes' && req.method === 'GET')
       || relative === '/platform/defender/edge/routes'
       || relative === '/platform/defender/edge/report');
+  // The Guard endpoint agent authenticates with its own token inside its routes.
+  if (relative.startsWith('/endpoint-agent/v1/')) return next();
   if (PUBLIC_API.has(relative) || bearerRoute) return next();
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Authentication required.' });
@@ -741,16 +903,46 @@ app.post('/api/auth/signup', async (req, res) => {
   });
 });
 
+// Per-ACCOUNT lockout, on top of the per-address limits below. `limited()` stops one address
+// guessing; this stops a guesser that rotates addresses against one account (see login-guard.mjs).
+const LOGIN_GUARD = createLoginGuard({
+  limit: Math.max(3, Number(process.env.SHANNON_LOGIN_LOCK_THRESHOLD || 10)),
+  lockMs: Math.max(1, Number(process.env.SHANNON_LOGIN_LOCK_MINUTES || 15)) * 60_000,
+});
+function accountLocked(res, state) {
+  res.setHeader('retry-after', String(state.retryAfter));
+  const minutes = Math.ceil(state.retryAfter / 60);
+  res.status(429).json({
+    error: `Too many failed sign-in attempts for this account. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}, or reset your password.`,
+    code: 'ACCOUNT_LOCKED',
+  });
+}
+function noteAccountLock(req, scope) {
+  appendOperationalEvent({
+    service: 'dashboard',
+    level: 'warning',
+    event: 'auth.account_locked',
+    metadata: { scope, ip: req.ip || null },
+    createdAt: Date.now(),
+  }).catch(() => {});
+}
+
 app.post('/api/auth/login', (req, res) => {
   if (limited(req, res, 'login', 10, 15 * 60 * 1000)) return;
   const email = String(req.body?.email || '')
     .trim()
     .toLowerCase();
   const password = String(req.body?.password || '');
+  // Checked before the password, and for unknown emails too, so a locked account answers the same
+  // whether the guess was right, wrong, or aimed at an account that does not exist.
+  const lock = email ? LOGIN_GUARD.check('password', email) : { locked: false };
+  if (lock.locked) return accountLocked(res, lock);
   const u = findUserByEmail(email);
   if (!u || !u.passwordHash || !verifyPassword(password, u.passwordHash, u.salt)) {
+    if (email && LOGIN_GUARD.fail('password', email).justLocked) noteAccountLock(req, 'password');
     return res.status(401).json({ error: 'Wrong email or password.' });
   }
+  LOGIN_GUARD.succeed('password', email);
   if (u.disabledAt) return res.status(403).json({ error: 'This account is disabled.' });
   if (process.env.SHANNON_REQUIRE_EMAIL_VERIFICATION === '1' && !u.emailVerifiedAt) {
     return res.status(403).json({ error: 'Verify your email before signing in.', emailVerificationRequired: true });
@@ -767,6 +959,10 @@ app.post('/api/auth/mfa/login', async (req, res) => {
   const challenge = verifyChallenge(req.body?.challenge, 'mfa-login');
   const user = challenge ? loadUsers()[challenge.uid] : null;
   if (!user || !user.mfaEnabled || user.disabledAt) return res.status(401).json({ error: 'Invalid MFA challenge.' });
+  // A six-digit code has a million values; without a per-account cap, rotating addresses could
+  // walk through them.
+  const lock = LOGIN_GUARD.check('mfa', user.id);
+  if (lock.locked) return accountLocked(res, lock);
   let verified = false;
   try {
     verified = verifyTotp(decryptSecret(user.mfaSecretEnc)?.secret, req.body?.code);
@@ -780,7 +976,11 @@ app.post('/api/auth/mfa/login', async (req, res) => {
       verified = true;
     }
   }
-  if (!verified) return res.status(401).json({ error: 'Invalid authentication code.' });
+  if (!verified) {
+    if (LOGIN_GUARD.fail('mfa', user.id).justLocked) noteAccountLock(req, 'mfa');
+    return res.status(401).json({ error: 'Invalid authentication code.' });
+  }
+  LOGIN_GUARD.succeed('mfa', user.id);
   setSessionCookie(res, user.id);
   res.json({ ok: true, user: publicUser(user) });
 });
@@ -865,6 +1065,8 @@ app.post('/api/auth/password/reset', async (req, res) => {
   user.salt = next.salt;
   user.sessionInvalidBefore = Date.now();
   saveUsers(loadUsers());
+  // The owner of the mailbox has proved who they are, so a lock caused by someone else's guesses ends.
+  LOGIN_GUARD.succeed('password', user.email);
   setSessionCookie(res, user.id);
   res.json({ ok: true, user: publicUser(user) });
 });
@@ -1532,10 +1734,20 @@ app.post('/api/auth/subscribe', async (req, res) => {
 });
 
 app.post('/api/billing/webhook', async (req, res) => {
-  if (!billingEnabled()) return res.status(503).json({ error: 'Billing is not configured.' });
+  if (!stripeCardReady()) return res.status(503).json({ error: 'Billing is not configured.' });
   const event = verifiedStripeEvent(req);
   if (!event) return res.status(400).json({ error: 'Invalid Stripe signature.' });
   const object = event.data?.object || {};
+  if (object.metadata?.kind === 'commerce') {
+    try {
+      const outcome = await applyCommerceWebhook(event, object);
+      return res.json({ received: true, ...outcome });
+    } catch (error) {
+      console.error('[commerce] webhook failed:', error.message);
+      return res.status(500).json({ error: 'Could not apply payment.' });
+    }
+  }
+  if (!billingEnabled()) return res.json({ received: true, ignored: 'subscription billing is not configured' });
   const orgId = String(object.metadata?.orgId || object.client_reference_id || '');
   if (orgId && getOrganization(orgId)) {
     const eventAt = Number(event.created || 0) * 1000 || Date.now();
@@ -1566,12 +1778,508 @@ app.post('/api/auth/cancel', async (req, res) => {
   } catch (error) { res.status(502).json({ error: `Could not open billing portal: ${error.message}` }); }
 });
 
+// ===== Security assistant, memory, research reports, developer API keys, share links =====
+// The assistant runs on the organization's own Anthropic key. Org context sent to the model is
+// wrapped as data; see assistant.mjs for the prompts and limits.
+
+const MEMORY_MAX_NOTES = 50;
+const newId = (prefix) => `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
+
+async function readScanText(orgId, scanId, paths) {
+  for (const rel of paths) {
+    const local = join(WORKSPACES, scanId, rel);
+    if (existsSync(local)) return readFileSync(local, 'utf-8');
+  }
+  const artifacts = await listArtifacts(orgId, scanId).catch(() => []);
+  for (const rel of paths) {
+    const artifact = artifacts.find((item) => item.metadata?.relativePath === rel);
+    if (artifact) {
+      try { return (await readArtifact(artifact)).toString('utf8'); } catch {}
+    }
+  }
+  return null;
+}
+
+// Assistant and research text is rendered server-side with raw HTML escaped (share-page.mjs).
+const withHtml = (message) => ({ ...message, html: renderMarkdown(message.content) });
+const conversationSummary = (c) => ({ id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, messageCount: (c.messages || []).length });
+
+async function ownConversation(req, res) {
+  const ctx = requirePermission(req, res, 'findings.read');
+  if (!ctx) return null;
+  const conversation = await assistantConversations.get(String(req.params.id || ''));
+  if (!conversation || conversation.orgId !== ctx.org.id || conversation.userId !== ctx.user.id) {
+    res.status(404).json({ error: 'Conversation not found.' });
+    return null;
+  }
+  return { ctx, conversation };
+}
+
+app.get('/api/assistant/conversations', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.read');
+  if (!ctx) return;
+  const list = await assistantConversations.list({ orgId: ctx.org.id, userId: ctx.user.id }, { orderBy: 'updatedAt', limit: 100 });
+  res.json({ ok: true, conversations: list.map(conversationSummary) });
+});
+
+app.get('/api/assistant/conversations/:id', async (req, res) => {
+  const found = await ownConversation(req, res);
+  if (found) res.json({ ok: true, conversation: { ...found.conversation, messages: (found.conversation.messages || []).map(withHtml) } });
+});
+
+app.delete('/api/assistant/conversations/:id', async (req, res) => {
+  const found = await ownConversation(req, res);
+  if (!found) return;
+  await assistantConversations.remove(found.conversation.id);
+  res.json({ ok: true });
+});
+
+async function saveMemoryNote(ctx, rawText) {
+  const normalized = normalizeMemoryText(rawText);
+  if (!normalized.ok) return { ok: false, status: 400, error: normalized.error };
+  const existing = await assistantMemory.list({ orgId: ctx.org.id }, { limit: 500 });
+  if (existing.length >= MEMORY_MAX_NOTES) return { ok: false, status: 409, error: `Memory is full (${MEMORY_MAX_NOTES} notes). Delete one first.` };
+  const note = { id: newId('mem'), orgId: ctx.org.id, text: normalized.text, createdBy: ctx.user.id, createdAt: Date.now() };
+  await assistantMemory.save(note);
+  audit(ctx, 'assistant.memory_added', 'assistant_memory', note.id, {});
+  return { ok: true, note };
+}
+
+app.post('/api/assistant/chat', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.read');
+  if (!ctx) return;
+  if (limited(req, res, `assistant:${ctx.user.id}`, 60, 60 * 60 * 1000)) return;
+  const text = cleanUserText(req.body?.message);
+  if (!text) return res.status(400).json({ error: 'Type a message.' });
+  const requestedId = req.body?.conversationId ? String(req.body.conversationId) : '';
+  let conversation = requestedId ? await assistantConversations.get(requestedId) : null;
+  if (requestedId && (!conversation || conversation.orgId !== ctx.org.id || conversation.userId !== ctx.user.id)) {
+    return res.status(404).json({ error: 'Conversation not found.' });
+  }
+  const now = Date.now();
+  conversation ||= { id: newId('cnv'), orgId: ctx.org.id, userId: ctx.user.id, title: conversationTitle(text), messages: [], createdAt: now, updatedAt: now };
+  const history = [...(conversation.messages || []), { role: 'user', content: text, at: now }];
+
+  const remember = parseRememberCommand(text);
+  let reply;
+  if (remember !== null) {
+    if (!can(ctx.membership.role, 'findings.triage')) reply = { role: 'assistant', content: 'Your role cannot add organization memory. Ask an analyst, engineer, admin or owner.', at: Date.now(), local: true };
+    else {
+      const saved = await saveMemoryNote(ctx, remember);
+      reply = { role: 'assistant', content: saved.ok ? `Saved to organization memory: "${saved.note.text}"` : saved.error, at: Date.now(), local: true };
+    }
+  } else {
+    const apiKey = (await aiKeysForRequest(req)).claude;
+    if (!apiKey) return res.status(400).json({ error: 'Anthropic key required. An organization owner or admin can add it in Settings.' });
+    const [memory, scans] = await Promise.all([assistantMemory.list({ orgId: ctx.org.id }, { limit: MEMORY_MAX_NOTES }), listOrgScans(ctx.org.id)]);
+    const system = [
+      { type: 'text', text: ASSISTANT_INSTRUCTIONS, cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: buildOrgContext({ orgName: ctx.org.name, memory, findings: listFindings(ctx.org.id), scans }) },
+    ];
+    let result;
+    try {
+      result = await runChat({ apiKey, system, messages: toApiMessages(history) });
+    } catch (error) {
+      const described = describeAiError(error);
+      return res.status(described.status).json({ error: described.message });
+    }
+    reply = result.ok
+      ? { role: 'assistant', content: result.text || '(The assistant returned no text.)', at: Date.now(), model: result.model, truncated: result.truncated || undefined }
+      : { role: 'assistant', content: "I can't help with that request. I can help you understand, prioritize and fix findings in systems your organization owns.", at: Date.now(), model: result.model, refusal: true };
+  }
+  conversation = { ...conversation, messages: [...history, reply].slice(-CHAT_LIMITS.storedMessages), updatedAt: Date.now() };
+  await assistantConversations.save(conversation);
+  res.json({ ok: true, conversation: conversationSummary(conversation), reply: withHtml(reply) });
+});
+
+app.get('/api/assistant/memory', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.read');
+  if (!ctx) return;
+  res.json({ ok: true, notes: await assistantMemory.list({ orgId: ctx.org.id }, { limit: MEMORY_MAX_NOTES }), canEdit: can(ctx.membership.role, 'findings.triage') });
+});
+
+app.post('/api/assistant/memory', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.triage');
+  if (!ctx) return;
+  const saved = await saveMemoryNote(ctx, req.body?.text);
+  if (!saved.ok) return res.status(saved.status).json({ error: saved.error });
+  res.status(201).json({ ok: true, note: saved.note });
+});
+
+app.delete('/api/assistant/memory/:id', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.triage');
+  if (!ctx) return;
+  const note = await assistantMemory.get(String(req.params.id || ''));
+  if (!note || note.orgId !== ctx.org.id) return res.status(404).json({ error: 'Note not found.' });
+  await assistantMemory.remove(note.id);
+  audit(ctx, 'assistant.memory_deleted', 'assistant_memory', note.id, {});
+  res.json({ ok: true });
+});
+
+const RESEARCH_STALE_MS = 20 * 60 * 1000;
+const researchSummary = ({ markdown, ...rest }) => ({ ...rest, hasReport: !!markdown });
+
+async function settleStaleResearch(report) {
+  if (report?.status === 'running' && Date.now() - report.updatedAt > RESEARCH_STALE_MS) {
+    const failed = { ...report, status: 'failed', error: 'The report did not finish (the server may have restarted). Start a new one.', updatedAt: Date.now() };
+    await researchReports.save(failed);
+    return failed;
+  }
+  return report;
+}
+
+async function generateResearch(report, { apiKey, orgId }) {
+  try {
+    const findings = listFindings(orgId).filter((f) => domainMatches(f.details?.target || f.details?.url || f.details?.host || '', report.domain) || JSON.stringify(f.details || {}).toLowerCase().includes(report.domain));
+    const scans = (await listOrgScans(orgId)).filter((scan) => domainMatches(scan.target, report.domain));
+    const reports = [];
+    for (const scan of scans) {
+      if (reports.length >= 5) break;
+      const text = await readScanText(orgId, scan.id, ['purple/certification-report.md', 'report.md']);
+      if (text) reports.push({ scanId: scan.id, target: scan.target, status: scan.status, startedAt: scan.startedAt, text });
+    }
+    const result = await runResearch({ apiKey, system: RESEARCH_INSTRUCTIONS, prompt: researchMaterial({ domain: report.domain, findings, reports }) });
+    const sources = { findings: findings.length, scans: scans.length, reportsUsed: reports.map((r) => r.scanId) };
+    if (!result.ok) {
+      await researchReports.save({ ...report, status: 'failed', error: 'The model declined to write this report.', model: result.model, sources, updatedAt: Date.now() });
+      return;
+    }
+    await researchReports.save({ ...report, status: 'completed', markdown: result.truncated ? `${result.text}\n\n> Report truncated at the output limit.` : result.text, model: result.model, sources, updatedAt: Date.now() });
+  } catch (error) {
+    await researchReports.save({ ...report, status: 'failed', error: describeAiError(error).message, updatedAt: Date.now() }).catch(() => {});
+  }
+}
+
+app.post('/api/assistant/research', async (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.run');
+  if (!ctx) return;
+  const domain = registrable(hostOf(String(req.body?.domain || '')));
+  if (!domain || !domain.includes('.')) return res.status(400).json({ error: 'Enter a domain, for example example.com.' });
+  if (!isVerified(ctx.user.id, domain)) return res.status(403).json({ error: `Verify ownership of ${domain} first (Domains page).`, needsVerification: domain });
+  const running = (await researchReports.list({ orgId: ctx.org.id, status: 'running' }, { limit: 10 })).map((r) => r);
+  for (const item of running) await settleStaleResearch(item);
+  if ((await researchReports.list({ orgId: ctx.org.id, status: 'running' }, { limit: 1 })).length) return res.status(409).json({ error: 'A research report is already being written for this organization.' });
+  const apiKey = (await aiKeysForRequest(req)).claude;
+  if (!apiKey) return res.status(400).json({ error: 'Anthropic key required. An organization owner or admin can add it in Settings.' });
+  if (!(await consumeOrgQuota(ctx, res, 'agentRuns'))) return;
+  const now = Date.now();
+  const report = { id: newId('rsr'), orgId: ctx.org.id, userId: ctx.user.id, domain, status: 'running', markdown: null, model: null, error: null, sources: null, createdAt: now, updatedAt: now };
+  await researchReports.save(report);
+  audit(ctx, 'assistant.research_started', 'research_report', report.id, { domain });
+  generateResearch(report, { apiKey, orgId: ctx.org.id });
+  res.status(202).json({ ok: true, report: researchSummary(report) });
+});
+
+app.get('/api/assistant/research', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.read');
+  if (!ctx) return;
+  const list = await researchReports.list({ orgId: ctx.org.id }, { limit: 50 });
+  const settled = [];
+  for (const item of list) settled.push(await settleStaleResearch(item));
+  res.json({ ok: true, reports: settled.map(researchSummary) });
+});
+
+app.get('/api/assistant/research/:id', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.read');
+  if (!ctx) return;
+  const report = await settleStaleResearch(await researchReports.get(String(req.params.id || '')));
+  if (!report || report.orgId !== ctx.org.id) return res.status(404).json({ error: 'Report not found.' });
+  res.json({ ok: true, report: { ...report, html: report.markdown ? renderMarkdown(report.markdown) : null } });
+});
+
+app.delete('/api/assistant/research/:id', async (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.run');
+  if (!ctx) return;
+  const report = await researchReports.get(String(req.params.id || ''));
+  if (!report || report.orgId !== ctx.org.id) return res.status(404).json({ error: 'Report not found.' });
+  await researchReports.remove(report.id);
+  res.json({ ok: true });
+});
+
+// --- Developer API keys (used as Authorization: Bearer svx_... on /api/v1/*) ---
+const MAX_ACTIVE_KEYS = 20;
+const keyView = ({ secretHash, ...rest }) => rest;
+
+app.get('/api/developer/keys', async (req, res) => {
+  const ctx = requirePermission(req, res, 'settings.manage');
+  if (!ctx) return;
+  res.json({ ok: true, keys: (await apiKeys.list({ orgId: ctx.org.id }, { limit: 200 })).map(keyView), scopes: API_SCOPES });
+});
+
+app.post('/api/developer/keys', async (req, res) => {
+  const ctx = requirePermission(req, res, 'settings.manage');
+  if (!ctx) return;
+  const name = sanitizeLabel(req.body?.name || '', 80);
+  if (!name) return res.status(400).json({ error: 'Give the key a name, for example "GitHub Actions".' });
+  const active = (await apiKeys.list({ orgId: ctx.org.id }, { limit: 200 })).filter((key) => !key.revokedAt);
+  if (active.length >= MAX_ACTIVE_KEYS) return res.status(409).json({ error: `An organization can have at most ${MAX_ACTIVE_KEYS} active keys.` });
+  const generated = newApiKey();
+  const key = { id: generated.id, orgId: ctx.org.id, name, hint: generated.hint, secretHash: generated.secretHash, scopes: normalizeScopes(req.body?.scopes), createdBy: ctx.user.id, createdAt: Date.now(), lastUsedAt: null, revokedAt: null };
+  await apiKeys.save(key);
+  audit(ctx, 'developer.key_created', 'api_key', key.id, { scopes: key.scopes });
+  res.status(201).json({ ok: true, key: keyView(key), token: generated.token });
+});
+
+app.delete('/api/developer/keys/:id', async (req, res) => {
+  const ctx = requirePermission(req, res, 'settings.manage');
+  if (!ctx) return;
+  const key = await apiKeys.get(String(req.params.id || ''));
+  if (!key || key.orgId !== ctx.org.id) return res.status(404).json({ error: 'Key not found.' });
+  if (!key.revokedAt) await apiKeys.save({ ...key, revokedAt: Date.now() });
+  audit(ctx, 'developer.key_revoked', 'api_key', key.id, {});
+  res.json({ ok: true });
+});
+
+app.get('/api/v1/me', (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.read');
+  if (!ctx) return;
+  res.json({ organization: { id: ctx.org.id, name: ctx.org.name }, key: req.apiKey ? keyView(req.apiKey) : null });
+});
+
+app.get('/api/v1/findings', (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.read');
+  if (!ctx) return;
+  const status = req.query.status ? String(req.query.status) : undefined;
+  res.json({ findings: listFindings(ctx.org.id, { status }) });
+});
+
+// --- Share links: expiring, revocable, read-only public pages ---
+const shareView = ({ secretHash, ...rest }) => rest;
+
+async function shareResource(ctx, type, id) {
+  if (type === 'research') {
+    const report = await researchReports.get(id);
+    return report && report.orgId === ctx.org.id && report.status === 'completed' ? { title: `Security assessment: ${report.domain}` } : null;
+  }
+  if (type === 'conversation') {
+    const conversation = await assistantConversations.get(id);
+    return conversation && conversation.orgId === ctx.org.id && conversation.userId === ctx.user.id ? { title: conversation.title } : null;
+  }
+  if (type === 'scan-report') {
+    if (getScanOwner(id)?.orgId !== ctx.org.id) return null;
+    const html = await readScanText(ctx.org.id, id, ['purple/certification-report.html']);
+    return html ? { title: `Scan report ${id}` } : null;
+  }
+  return null;
+}
+
+app.post('/api/share-links', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.triage');
+  if (!ctx) return;
+  const type = String(req.body?.resourceType || '');
+  const resourceId = String(req.body?.resourceId || '');
+  if (!SHARE_TYPES.includes(type) || !resourceId) return res.status(400).json({ error: 'Choose what to share.' });
+  const resource = await shareResource(ctx, type, resourceId);
+  if (!resource) return res.status(404).json({ error: 'Nothing to share: it does not exist, is not finished, or is not yours.' });
+  const token = newShareToken();
+  const link = { id: token.id, orgId: ctx.org.id, resourceType: type, resourceId, title: resource.title, secretHash: token.secretHash, createdBy: ctx.user.id, createdAt: Date.now(), expiresAt: shareExpiry(req.body?.days), revokedAt: null, views: 0 };
+  await shareLinks.save(link);
+  audit(ctx, 'share.created', 'share_link', link.id, { resourceType: type, resourceId, expiresAt: link.expiresAt });
+  res.status(201).json({ ok: true, link: shareView(link), url: `${publicBaseUrl(req)}/share/${token.token}` });
+});
+
+app.get('/api/share-links', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.read');
+  if (!ctx) return;
+  const links = await shareLinks.list({ orgId: ctx.org.id }, { limit: 200 });
+  res.json({ ok: true, links: links.map((link) => ({ ...shareView(link), active: shareUsable(link) })) });
+});
+
+app.delete('/api/share-links/:id', async (req, res) => {
+  const ctx = requirePermission(req, res, 'findings.triage');
+  if (!ctx) return;
+  const link = await shareLinks.get(String(req.params.id || ''));
+  if (!link || link.orgId !== ctx.org.id) return res.status(404).json({ error: 'Link not found.' });
+  if (link.createdBy !== ctx.user.id && !can(ctx.membership.role, 'settings.manage')) return res.status(403).json({ error: 'Only the person who shared it or an admin can revoke this link.' });
+  if (!link.revokedAt) await shareLinks.save({ ...link, revokedAt: Date.now() });
+  audit(ctx, 'share.revoked', 'share_link', link.id, {});
+  res.json({ ok: true });
+});
+
+app.get('/share/:token', async (req, res) => {
+  if (limited(req, res, 'share-view', 120, 5 * 60 * 1000)) return;
+  res.setHeader('cache-control', 'no-store');
+  res.setHeader('x-robots-tag', 'noindex, nofollow');
+  res.setHeader('referrer-policy', 'no-referrer');
+  const parsed = parseShareToken(req.params.token);
+  const link = parsed ? await shareLinks.get(parsed.id).catch(() => null) : null;
+  if (!link || !secretMatches(parsed.secret, link.secretHash) || !shareUsable(link)) return res.status(404).type('html').send(renderShareGone());
+  let html = null;
+  if (link.resourceType === 'research') {
+    const report = await researchReports.get(link.resourceId);
+    if (report?.orgId === link.orgId && report.status === 'completed') html = renderSharedResearch(report, link);
+  } else if (link.resourceType === 'conversation') {
+    const conversation = await assistantConversations.get(link.resourceId);
+    if (conversation?.orgId === link.orgId) html = renderSharedConversation(conversation, link);
+  } else if (link.resourceType === 'scan-report' && getScanOwner(link.resourceId)?.orgId === link.orgId) {
+    html = await readScanText(link.orgId, link.resourceId, ['purple/certification-report.html']);
+    // Engine-generated HTML: render it sandboxed so no script can run on our origin.
+    if (html) res.setHeader('content-security-policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:");
+  }
+  if (!html) return res.status(404).type('html').send(renderShareGone());
+  shareLinks.save({ ...link, views: Number(link.views || 0) + 1 }).catch(() => {});
+  res.type('html').send(html);
+});
+
+// ===== Commerce: fixed-price scan offers, credit packs, card + manual payments =====
+// Everything answers "free during beta" until SHANNON_COMMERCE_ENABLED=1. Prices come only from
+// commerce.mjs; the client never sends an amount.
+
+function commerceCatalog() {
+  return publicCatalog(process.env, { cardReady: stripeCardReady(), plans: billingEnabled() ? [FREE_PLAN, PRO_PLAN] : [FREE_PLAN], freeLimits: FREE_LIMITS });
+}
+
+async function grantCreditsForOrder(order) {
+  const grant = creditGrantFor(order);
+  if (!grant) return null;
+  const { created } = await addCreditGrant(grant);
+  return { grantId: grant.id, created };
+}
+
+async function applyCommerceWebhook(event, object) {
+  const paidEvent = event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded';
+  if (!paidEvent) return { ignored: event.type };
+  if (object.payment_status !== 'paid') return { pending: true };
+  const order = await getCommerceOrder(String(object.metadata?.orderId || ''));
+  if (!order || order.orgId !== String(object.metadata?.orgId || '')) return { ignored: 'unknown order' };
+  const expected = Math.round(order.amount * 100);
+  if (Number(object.amount_total) !== expected || String(object.currency || '').toUpperCase() !== order.currency) {
+    console.error(`[commerce] amount mismatch for order ${order.id}: got ${object.amount_total} ${object.currency}`);
+    return { ignored: 'amount mismatch' };
+  }
+  const result = markCardPaid(order, { providerRef: object.payment_intent || object.id });
+  if (!result.ok) return { ignored: result.code };
+  if (!result.alreadyApplied) await saveCommerceOrder(result.order);
+  const grant = await grantCreditsForOrder(result.order);
+  return { orderId: order.id, applied: !result.alreadyApplied, grant };
+}
+
+function commerceClosed(res) {
+  res.status(503).json({ error: 'Securovix is free during beta, so purchases are not open yet.', code: 'COMMERCE_DISABLED' });
+}
+
+function orderView(order) {
+  const { history, ...rest } = order;
+  return { ...rest, history: (history || []).map(({ status, at }) => ({ status, at })) };
+}
+
+app.get('/api/commerce/catalog', (_req, res) => {
+  res.setHeader('cache-control', 'public, max-age=60');
+  res.json(commerceCatalog());
+});
+
+app.get('/api/commerce/account', async (req, res) => {
+  const ctx = requirePermission(req, res, 'audit.read');
+  if (!ctx) return;
+  const [orders, grants] = await Promise.all([listCommerceOrders({ orgId: ctx.org.id, limit: 50 }), listCreditGrants(ctx.org.id)]);
+  const now = Date.now();
+  res.json({
+    ok: true, catalog: commerceCatalog(), credits: creditBalance(grants, now),
+    grants: grants.filter((grant) => grant.expiresAt > now).map(({ id, orderId, remaining, expiresAt }) => ({ id, orderId, remaining, expiresAt })),
+    orders: orders.map(orderView), canPurchase: can(ctx.membership.role, 'settings.manage'),
+  });
+});
+
+app.post('/api/commerce/orders', async (req, res) => {
+  const ctx = requirePermission(req, res, 'settings.manage');
+  if (!ctx) return;
+  if (!commerceEnabled()) return commerceClosed(res);
+  if (limited(req, res, `commerce:order:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
+  const item = catalogItem(req.body?.itemId);
+  const method = String(req.body?.method || '');
+  const created = newOrder({ id: randomUUID(), orgId: ctx.org.id, userId: ctx.user.id, itemId: item?.id, method, methods: paymentMethods(process.env, { cardReady: stripeCardReady() }) });
+  if (!created.ok) return res.status(400).json({ error: created.error, code: created.code });
+  const order = created.order;
+  if (method === 'card') {
+    try {
+      const base = publicBaseUrl(req);
+      const session = await stripeRequest('checkout/sessions', {
+        mode: 'payment', customer_email: ctx.user.email, client_reference_id: ctx.org.id,
+        'line_items[0][quantity]': '1',
+        'line_items[0][price_data][currency]': order.currency.toLowerCase(),
+        'line_items[0][price_data][unit_amount]': String(Math.round(order.amount * 100)),
+        'line_items[0][price_data][product_data][name]': `Securovix — ${order.itemName}`,
+        'metadata[kind]': 'commerce', 'metadata[orderId]': order.id, 'metadata[orgId]': ctx.org.id,
+        'payment_intent_data[metadata][orderId]': order.id,
+        success_url: `${base}/?purchase=success#billing`, cancel_url: `${base}/?purchase=cancelled#billing`,
+      });
+      await saveCommerceOrder({ ...order, providerRef: session.id });
+      audit(ctx, 'commerce.order_created', 'commerce_order', order.id, { itemId: order.itemId, method });
+      return res.status(201).json({ ok: true, order: orderView(order), checkoutUrl: session.url });
+    } catch (error) {
+      return res.status(502).json({ error: `Could not start card checkout: ${error.message}` });
+    }
+  }
+  await saveCommerceOrder(order);
+  audit(ctx, 'commerce.order_created', 'commerce_order', order.id, { itemId: order.itemId, method });
+  res.status(201).json({ ok: true, order: orderView(order), instructions: paymentInstructions(order) });
+});
+
+async function ownedOrder(req, res, permission) {
+  const ctx = requirePermission(req, res, permission);
+  if (!ctx) return null;
+  const order = await getCommerceOrder(String(req.params.id || ''));
+  if (!order || order.orgId !== ctx.org.id) {
+    res.status(404).json({ error: 'Order not found.' });
+    return null;
+  }
+  return { ctx, order };
+}
+
+app.get('/api/commerce/orders/:id/instructions', async (req, res) => {
+  const found = await ownedOrder(req, res, 'settings.manage');
+  if (!found) return;
+  if (found.order.status !== 'pending_evidence') return res.status(409).json({ error: `Order is ${found.order.status}.` });
+  res.json({ ok: true, instructions: paymentInstructions(found.order) });
+});
+
+app.post('/api/commerce/orders/:id/evidence', async (req, res) => {
+  const found = await ownedOrder(req, res, 'settings.manage');
+  if (!found) return;
+  const result = submitEvidence(found.order, { reference: req.body?.reference, note: req.body?.note, userId: found.ctx.user.id });
+  if (!result.ok) return res.status(result.code === 'INVALID_STATE' ? 409 : 400).json({ error: result.error, code: result.code });
+  await saveCommerceOrder(result.order);
+  audit(found.ctx, 'commerce.evidence_submitted', 'commerce_order', result.order.id, { method: result.order.method });
+  res.json({ ok: true, order: orderView(result.order) });
+});
+
+app.post('/api/commerce/orders/:id/cancel', async (req, res) => {
+  const found = await ownedOrder(req, res, 'settings.manage');
+  if (!found) return;
+  const result = cancelOrder(found.order, { userId: found.ctx.user.id });
+  if (!result.ok) return res.status(409).json({ error: result.error, code: result.code });
+  await saveCommerceOrder(result.order);
+  audit(found.ctx, 'commerce.order_cancelled', 'commerce_order', result.order.id, {});
+  res.json({ ok: true, order: orderView(result.order) });
+});
+
+app.get('/api/platform/commerce/orders', async (req, res) => {
+  if (!requirePlatformOperator(req, res)) return;
+  const status = ['pending_review', 'pending_evidence', 'pending_payment', 'approved', 'rejected', 'cancelled'].includes(String(req.query.status)) ? String(req.query.status) : 'pending_review';
+  const orders = await listCommerceOrders({ status, limit: 200 });
+  res.json({ ok: true, status, orders: orders.map((order) => ({ ...orderView(order), orgName: getOrganization(order.orgId)?.name || null })) });
+});
+
+app.post('/api/platform/commerce/orders/:id/review', async (req, res) => {
+  const operator = requirePlatformOperator(req, res);
+  if (!operator) return;
+  const order = await getCommerceOrder(String(req.params.id || ''));
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const result = reviewOrder(order, { decision: req.body?.decision, reviewer: operator.email, reason: req.body?.reason });
+  if (!result.ok) return res.status(result.code === 'INVALID_STATE' ? 409 : 400).json({ error: result.error, code: result.code });
+  await saveCommerceOrder(result.order);
+  const grant = result.order.status === 'approved' ? await grantCreditsForOrder(result.order) : null;
+  const org = getOrganization(order.orgId);
+  if (org) audit({ org, user: operator }, `commerce.order_${result.order.status}`, 'commerce_order', order.id, { reviewer: operator.email });
+  res.json({ ok: true, order: orderView(result.order), grant });
+});
+
 app.get('/api/team/:orgId/usage', async (req, res) => {
   const ctx = orgContext(req, res, 'audit.read');
   if (!ctx) return;
   const current = await organizationPlan(ctx.org.id);
-  const usage = await listUsage(ctx.org.id);
-  res.json({ ok: true, plan: current.plan, limits: current.limits, usage, billingEnabled: billingEnabled() });
+  const [usage, grants] = await Promise.all([listUsage(ctx.org.id), listCreditGrants(ctx.org.id)]);
+  res.json({ ok: true, plan: current.plan, limits: current.limits, usage, credits: creditBalance(grants), billingEnabled: billingEnabled(), commerceEnabled: commerceEnabled() });
 });
 
 // Personal Security Shield — deterministic, read-only triage for suspicious messages and links.
@@ -3151,14 +3859,12 @@ app.post('/api/team/:orgId/artifacts/:id/url', async (req, res) => {
 });
 
 // ---- API: List scans (no workspace paths exposed) ----
-app.get('/api/scans', async (req, res) => {
-  const ctx = requirePermission(req, res, 'scans.read');
-  if (!ctx) return;
+async function listOrgScans(orgId) {
   const scans = (existsSync(WORKSPACES) ? readdirSync(WORKSPACES) : [])
     .filter((d) => {
       const p = join(WORKSPACES, d);
       const owner = getScanOwner(d);
-      return owner?.orgId === ctx.org.id && statSync(p).isDirectory() && existsSync(join(p, 'session.json'));
+      return owner?.orgId === orgId && statSync(p).isDirectory() && existsSync(join(p, 'session.json'));
     })
     .map((d) => {
       const session = JSON.parse(readFileSync(join(WORKSPACES, d, 'session.json'), 'utf-8'));
@@ -3175,7 +3881,7 @@ app.get('/api/scans', async (req, res) => {
     })
     .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
   const known = new Set(scans.map((scan) => scan.id));
-  for (const job of await listJobs(ctx.org.id, 500)) {
+  for (const job of await listJobs(orgId, 500)) {
     if (job.type !== 'scan' || !job.payload?.scanId || known.has(job.payload.scanId)) continue;
     scans.push({
       id: job.payload.scanId,
@@ -3192,11 +3898,17 @@ app.get('/api/scans', async (req, res) => {
     });
   }
   scans.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
-  res.json(scans);
+  return scans;
+}
+
+app.get(['/api/scans', '/api/v1/scans'], async (req, res) => {
+  const ctx = requirePermission(req, res, 'scans.read');
+  if (!ctx) return;
+  res.json(await listOrgScans(ctx.org.id));
 });
 
 // ---- API: Scan details ----
-app.get('/api/scans/:id', async (req, res) => {
+app.get(['/api/scans/:id', '/api/v1/scans/:id'], async (req, res) => {
   const ctx = scanContext(req, res, req.params.id);
   if (!ctx) return;
   const wsDir = join(WORKSPACES, req.params.id);
@@ -3304,7 +4016,7 @@ app.get('/api/scans/:id', async (req, res) => {
 // a merged OWASP/CWE coverage roll-up. Tool-confirmed only → these are real, not noise.
 // Automated evidence report (CVSS 3.1 + OWASP WSTG/ASVS + framework mappings + sign-off).
 // Open the HTML in a browser and Print → Save as PDF for a deliverable. ?format=md for Markdown.
-app.get('/api/scans/:id/report', async (req, res) => {
+app.get(['/api/scans/:id/report', '/api/v1/scans/:id/report'], async (req, res) => {
   const ctx = scanContext(req, res, req.params.id);
   if (!ctx) return;
   // SARIF export for CI/CD & GitHub code scanning.
@@ -3725,9 +4437,8 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
   }
   try {
     const headers = await resolveAuthHeaders(req, target);
-    const plan = await organizationPlan(ctx.org.id);
-    const quota = await consumeUsage(ctx.org.id, 'agentRuns', 1, Number(plan.limits.agentRuns || 0));
-    if (!quota.allowed) return { status: 429, error: `Daily organization limit reached for agent runs (${quota.used}/${quota.limit}).` };
+    const quota = await consumeOrgAllowance(ctx.org.id, 'agentRuns', 1);
+    if (!quota.allowed) return { status: 429, error: `Daily organization limit reached for agent runs (${quota.used}/${quota.limit}) and no prepaid credits remain.` };
     const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120, headers });
     return { target, surface, headers, ctx };
   } catch (e) {
@@ -4446,7 +5157,7 @@ function workspaceConfirmedFindings(scanId) {
   return out;
 }
 
-app.post('/api/scans', async (req, res) => {
+app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
   const ctx = requirePermission(req, res, 'scans.run');
   if (!ctx) return;
   if (limited(req, res, `scan:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
@@ -5160,8 +5871,8 @@ async function loadCisaKev() {
 
 function defenderSeverity(cls) {
   const value = String(cls || '').toLowerCase();
-  if (/(rce|command|sqli|auth-bypass|metadata)/.test(value)) return 'critical';
-  if (/(path-traversal|nosql|ssrf|ssti|authz|idor)/.test(value)) return 'high';
+  if (/(rce|command|cmd-injection|sqli|auth-bypass|metadata)/.test(value)) return 'critical';
+  if (/(path-traversal|nosql|ssrf|ssti|xxe|authz|idor)/.test(value)) return 'high';
   if (/(xss|prompt|csrf|header|graphql)/.test(value)) return 'medium';
   return 'low';
 }
@@ -5222,6 +5933,179 @@ app.post('/api/defender/sdk/rotate', (req, res) => {
   audit(ctx, 'defender.sdk_key_rotated', 'organization', ctx.org.id, { version: ctx.user.defenderKeyVersion });
   res.json({ apiKey: defenderApiKey(ctx.user.id, ctx.org.id, ctx.user.defenderKeyVersion) });
 });
+
+// ── Weekly attack summary ───────────────────────────────────────────────────────────────────────
+// An email to each organization's owners and admins every Monday: what was blocked, who was banned,
+// where it came from. A week with nothing to report sends nothing. Each person can switch it off.
+const DIGEST_ROLES = new Set(['owner', 'admin']);
+
+function defenseDigest(orgId, { from, to }) {
+  const events = listDefenseEventsSince(orgId, from - 7 * DAY);
+  const inside = events.filter((event) => Number(event.createdAt) >= from && Number(event.createdAt) < to);
+  // The store keeps the newest 2,000 events per organization. At that size the counts are a floor
+  // and the week before is incomplete, so no comparison is offered.
+  const capped = events.length >= 2000;
+  return buildDefenseDigest(inside, {
+    orgName: getOrganization(orgId)?.name || '',
+    from,
+    to,
+    previousTotal: capped ? null : events.filter((event) => Number(event.createdAt) < from && event.cls !== 'repeat-offender').length,
+    dashboardUrl: String(process.env.SHANNON_PUBLIC_URL || '').replace(/\/$/, ''),
+    capped,
+  });
+}
+
+export async function runDefenseDigests(now = Date.now()) {
+  if (process.env.SHANNON_DEFENSE_DIGEST === '0') return { sent: 0, skipped: 'disabled' };
+  if (process.env.NODE_ENV === 'production' && !process.env.RESEND_API_KEY && !process.env.SHANNON_EMAIL_WEBHOOK_URL) {
+    return { sent: 0, skipped: 'email is not configured' };
+  }
+  const week = lastCompleteWeek(now);
+  // From Monday 08:00 UTC, and never more than three days late — an old summary is noise.
+  if (now < week.to + 8 * 3_600_000 || now > week.to + 3 * DAY) return { sent: 0, skipped: 'outside the sending window' };
+  let sent = 0;
+  for (const orgId of listDefenseEventOrgIds()) {
+    const digest = defenseDigest(orgId, week);
+    if (!digest) continue;
+    for (const member of listMembers(orgId)) {
+      if (!DIGEST_ROLES.has(member.role) || !member.email) continue;
+      if (loadUsers()[member.userId]?.disabledAt) continue;
+      const settings = loadUserSettings(member.userId);
+      if (settings.defenseDigest === false) continue;
+      if (settings.defenseDigestSent?.[orgId] === week.key) continue;
+      // Marked before sending, and stored with the user's settings so it survives a restart: a
+      // failure costs one missed summary, never the same summary twice.
+      saveUserSettings(member.userId, {
+        ...settings,
+        defenseDigestSent: { ...(settings.defenseDigestSent || {}), [orgId]: week.key },
+      });
+      try {
+        await dispatchEmail(
+          { to: member.email, subject: digest.subject, text: digest.text, html: digest.html },
+          { orgId, userId: member.userId },
+        );
+        sent += 1;
+      } catch (error) {
+        console.error('[defender] weekly summary email failed:', error.message);
+      }
+    }
+  }
+  return { sent, week: week.key };
+}
+
+app.get('/api/defender/digest', (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const now = Date.now();
+  const digest = defenseDigest(ctx.org.id, { from: now - 7 * DAY, to: now });
+  res.json({
+    ok: true,
+    enabled: loadUserSettings(ctx.user.id).defenseDigest !== false,
+    eligible: DIGEST_ROLES.has(ctx.membership.role),
+    digest: digest ? { subject: digest.subject, text: digest.text, totals: digest.totals, period: digest.period } : null,
+  });
+});
+
+app.post('/api/defender/digest', (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const enabled = req.body?.enabled !== false;
+  saveUserSettings(ctx.user.id, { ...loadUserSettings(ctx.user.id), defenseDigest: enabled });
+  res.json({ ok: true, enabled });
+});
+
+app.post('/api/defender/digest/send', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  if (limited(req, res, 'defense-digest-send', 3, 60 * 60_000)) return;
+  const now = Date.now();
+  const digest = defenseDigest(ctx.org.id, { from: now - 7 * DAY, to: now });
+  if (!digest) return res.status(409).json({ error: 'No attacks were recorded in the last 7 days, so there is nothing to send.' });
+  try {
+    await dispatchEmail(
+      { to: ctx.user.email, subject: digest.subject, text: digest.text, html: digest.html },
+      { orgId: ctx.org.id, userId: ctx.user.id },
+    );
+  } catch (error) {
+    return res.status(503).json({ error: `The email could not be sent: ${String(error?.message || error).slice(0, 200)}` });
+  }
+  res.json({ ok: true, to: ctx.user.email });
+});
+
+// ---------- Guard: identity and cloud defence (Microsoft 365, Google Workspace) ----------
+const GUARD_PROVIDERS = { microsoft: createMicrosoftProvider(), google: createGoogleProvider(), simulation: createSimulationProvider() };
+const GUARD_STORE = {
+  connections: guardConnections,
+  incidents: guardIncidents,
+  actions: guardActions,
+  state: guardState,
+  settings: guardSettings,
+  listFindings: async (orgId) => listFindings(orgId),
+  listDefenseEventsSince: async (orgId, since) => listDefenseEventsSince(orgId, since),
+  listVulnerabilityMatches: (orgId) => listVulnerabilityMatches(orgId),
+};
+export const guardEngine = createGuardEngine({
+  store: GUARD_STORE,
+  providers: GUARD_PROVIDERS,
+  encrypt: encryptSecret,
+  decrypt: decryptSecret,
+  notify: (orgId, event) => queueIntegrationEvent(orgId, event),
+  loadBadIps: () => loadBadIps(),
+  publicUrl: () => String(process.env.SHANNON_PUBLIC_URL || '').replace(/\/$/, ''),
+});
+registerGuardRoutes(app, {
+  requirePermission,
+  audit,
+  limited,
+  engine: guardEngine,
+  store: GUARD_STORE,
+  providers: GUARD_PROVIDERS,
+  encrypt: encryptSecret,
+  decrypt: decryptSecret,
+  aiKeysForRequest,
+  runChat,
+  describeAiError,
+  renderMarkdown,
+  can,
+});
+
+// Guard Phase 2: endpoint agents and the malware sandbox (CAPE, operator-hosted, optional).
+export const guardEndpoints = createEndpointService({
+  store: { agents: guardAgents, commands: guardCommands, samples: guardSamples, hashes: guardHashes, endpoint: guardEndpoint },
+  engine: guardEngine,
+  cape: createCapeClient(),
+  publicUrl: () => String(process.env.SHANNON_PUBLIC_URL || '').replace(/\/$/, ''),
+});
+guardEngine.attachAgents(guardEndpoints);
+registerEndpointRoutes(app, { endpoints: guardEndpoints, engine: guardEngine, store: GUARD_STORE, requirePermission, audit, limited, can });
+
+// Every few minutes: pull each organization's connections and check Defender traffic against
+// open Shannon findings. One organization at a time, so a slow tenant cannot pile up syncs.
+let guardCycleRunning = false;
+export async function runGuardCycles() {
+  if (process.env.SHANNON_GUARD_SYNC === '0' || guardCycleRunning) return { skipped: true };
+  guardCycleRunning = true;
+  const results = {};
+  try {
+    const connections = await guardConnections.list({}, { limit: 500 });
+    const orgIds = new Set([...connections.filter((c) => c.enabled !== false).map((c) => c.orgId), ...listDefenseEventOrgIds()]);
+    for (const orgId of orgIds) {
+      try {
+        results[orgId] = await guardEngine.syncOrg(orgId);
+      } catch (error) {
+        console.error('[guard] sync failed:', error.message);
+      }
+    }
+    try {
+      results.endpoints = await guardEndpoints.cycle();
+    } catch (error) {
+      console.error('[guard] endpoint cycle failed:', error.message);
+    }
+  } finally {
+    guardCycleRunning = false;
+  }
+  return results;
+}
 
 app.get('/api/defender/events', (req, res) => {
   const ctx = requirePermission(req, res, 'defender.manage');
@@ -5774,6 +6658,14 @@ export async function startDashboard({ port = PORT, scheduleMonitors = true } = 
     // Continuous monitoring: check for due monitors shortly after boot, then every 10 minutes.
     setTimeout(runDueMonitors, 30_000).unref?.();
     setInterval(runDueMonitors, 10 * 60 * 1000).unref?.();
+    // Weekly attack summary: checked hourly, sends once per person per week (see runDefenseDigests).
+    const digests = () => runDefenseDigests().catch((error) => console.error('[defender] weekly summary failed:', error.message));
+    setTimeout(digests, 60_000).unref?.();
+    setInterval(digests, 60 * 60 * 1000).unref?.();
+    // Guard: identity and cloud sync, every 2 minutes by default.
+    const guardCycle = () => runGuardCycles().catch((error) => console.error('[guard] cycle failed:', error.message));
+    setTimeout(guardCycle, 45_000).unref?.();
+    setInterval(guardCycle, Math.max(60_000, Number(process.env.SHANNON_GUARD_INTERVAL_MS) || 120_000)).unref?.();
   }
   return server;
 }

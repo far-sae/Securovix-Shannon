@@ -277,7 +277,7 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
 
       if (blocked) {
         res.writeHead(403, { 'content-type': 'text/plain' });
-        res.end('Blocked by Shannon Defender');
+        res.end('Blocked by Securovix Defender');
         return;
       }
 
@@ -302,7 +302,7 @@ if (isDirectExecution()) {
   t1.unref?.();
   t2.unref?.();
   createEdgeServer().listen(PORT, HOST, () => {
-    console.log(`[edge] Shannon Defender edge listening on ${HOST}:${PORT} — ${routes.size} route(s)`);
+    console.log(`[edge] Securovix Defender edge listening on ${HOST}:${PORT} — ${routes.size} route(s)`);
     if (!DASHBOARD || !EDGE_TOKEN) {
       console.warn(
         '[edge] SHANNON_DASHBOARD_URL / SHANNON_EDGE_PLATFORM_TOKEN unset — routes come from SHANNON_EDGE_ROUTES only, and detections are not reported',

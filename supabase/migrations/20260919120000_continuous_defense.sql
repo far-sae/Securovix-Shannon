@@ -36,7 +36,7 @@ create table if not exists public.shannon_defense_cycles (
   org_id text not null references public.shannon_organizations(id) on delete cascade,
   job_id text references public.shannon_jobs(id) on delete set null,
   status text not null check (status in ('running','completed','failed')),
-  window jsonb not null default '{}'::jsonb,
+  "window" jsonb not null default '{}'::jsonb, -- quoted: WINDOW is a reserved word in Postgres
   snapshot jsonb not null default '{}'::jsonb,
   learning jsonb not null default '{}'::jsonb,
   actions jsonb not null default '{}'::jsonb,

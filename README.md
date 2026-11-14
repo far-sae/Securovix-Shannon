@@ -305,4 +305,9 @@ responsible for how you use it.
 
 ## License
 
-MIT
+Licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
+
+The legacy `packages/cli` orchestration layer is derived from Keygraph's
+[Shannon](https://github.com/KeygraphHQ/shannon), which is also licensed under AGPL-3.0.
+Because this is the AGPL, anyone who offers a modified version of this software to users over
+a network must make the corresponding source code available to those users.

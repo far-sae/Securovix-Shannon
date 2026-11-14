@@ -146,7 +146,7 @@ export function httpProxyConnector({ origin, port = 0, host = '127.0.0.1', onEve
 
       if (block) {
         res.writeHead(403, { 'content-type': 'text/plain' });
-        res.end('Blocked by Shannon Defender');
+        res.end('Blocked by Securovix Defender');
         return;
       }
 

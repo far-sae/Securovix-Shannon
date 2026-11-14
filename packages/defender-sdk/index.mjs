@@ -10,7 +10,7 @@
 // Detection is local and synchronous (regex over URL + body, no network call on the hot path).
 // Reporting is fire-and-forget: queued, flushed on a timer, dropped on failure. A request is never
 // delayed, and never fails, because of us.
-import { inspect } from './signatures.mjs';
+import { HONEYPOT_PATHS, SCANNER_AGENTS, inspectRequest, listOption } from './signatures.mjs';
 
 const DEFAULTS = {
   mode: 'monitor',
@@ -20,6 +20,8 @@ const DEFAULTS = {
   maxQueue: 200,
   maxBody: 1024 * 1024, // inspect the first 1MB; past that, forward unexamined
   skip: [],
+  honeypot: false,
+  scanners: false,
 };
 
 /**
@@ -33,13 +35,29 @@ const DEFAULTS = {
  * @param {string} [opts.endpoint] Base URL to report to.
  * @param {string} [opts.assetId]  Asset ID from Defender inventory. Enables live-coverage heartbeats.
  * @param {RegExp[]} [opts.skip]   Paths to leave uninspected (internal tooling that carries payloads).
+ * @param {boolean|RegExp} [opts.honeypot] Treat scanner-bait paths (/.env, /.git/config,
+ *                                           /wp-login.php …) as attacks. Off by default because a
+ *                                           site that really serves one of them would trip it; pass
+ *                                           true for the built-in list or a RegExp of your own.
+ * @param {boolean|RegExp} [opts.scanners] Treat requests from attack tools that name themselves in the
+ *                                           User-Agent (sqlmap, nikto, nuclei …) as attacks. Off by
+ *                                           default because your own security team may run one on
+ *                                           purpose; pass true for the built-in list or a RegExp.
  * @param {(d:object)=>void} [opts.onDetection] Local hook, called for every detection.
  */
 export function shannonDefender(opts = {}) {
   const cfg = { ...DEFAULTS, ...opts };
   let mode = cfg.mode === 'enforce' ? 'enforce' : 'monitor';
   const queue = [];
-  const stats = { requests: 0, detections: 0, blocked: 0, reported: 0, dropped: 0, heartbeats: 0, heartbeatFailures: 0 };
+  const stats = {
+    requests: 0,
+    detections: 0,
+    blocked: 0,
+    reported: 0,
+    dropped: 0,
+    heartbeats: 0,
+    heartbeatFailures: 0,
+  };
 
   const flush = async () => {
     if (!queue.length || !cfg.apiKey) return;
@@ -102,7 +120,14 @@ export function shannonDefender(opts = {}) {
       if (body.length > cfg.maxBody) body = body.slice(0, cfg.maxBody);
 
       const url = req.originalUrl || req.url || '';
-      const verdict = inspect(url, body);
+      const verdict = inspectRequest({
+        url,
+        path,
+        body,
+        userAgent: req.headers?.['user-agent'],
+        honeypot: listOption(cfg.honeypot, HONEYPOT_PATHS),
+        scanners: listOption(cfg.scanners, SCANNER_AGENTS),
+      });
 
       if (verdict.attack) {
         stats.detections++;
@@ -127,7 +152,9 @@ export function shannonDefender(opts = {}) {
         } catch {}
 
         if (enforced) {
-          res.status(403).json({ error: 'Blocked by Shannon Defender' });
+          // A honeypot hit gets a plain 404, so the scanner learns nothing.
+          if (verdict.cls === 'honeypot') res.status(404).json({ error: 'Not found' });
+          else res.status(403).json({ error: 'Blocked by Securovix Defender' });
           return;
         }
       }
@@ -152,4 +179,14 @@ export function shannonDefender(opts = {}) {
   return middleware;
 }
 
-export { inspect, ENFORCE_CLASSES, DETECT_SIGNATURES, ENFORCE_SIGNATURES } from './signatures.mjs';
+export {
+  inspect,
+  inspectRequest,
+  matchHoneypot,
+  matchScannerAgent,
+  ENFORCE_CLASSES,
+  DETECT_SIGNATURES,
+  ENFORCE_SIGNATURES,
+  HONEYPOT_PATHS,
+  SCANNER_AGENTS,
+} from './signatures.mjs';

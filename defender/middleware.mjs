@@ -18,6 +18,12 @@
 //                    it would do before it does it. Keyed strictly on the enforceable classes: the
 //                    detect-only signatures fire on apostrophes and HTML tags and must never ban.
 import { makeBlackboard } from '../packages/dashboard/agent-team.mjs';
+import {
+  HONEYPOT_PATHS,
+  SCANNER_AGENTS,
+  matchHoneypot,
+  matchScannerAgent,
+} from '../packages/defender-sdk/signatures.mjs';
 import { defenderAgent } from './agent.mjs';
 import { makeRateLimiter } from './respond.mjs';
 
@@ -31,6 +37,14 @@ export const SELF_SKIP = [
   /^\/api\/defender\//,
   /^\/api\/code-scan\//,
   /^\/api\/personal-shield\//,
+  // The security assistant and finding evidence carry attack text by design: people paste payloads
+  // to ask how to fix them, and scan evidence quotes the payload that proved a finding.
+  /^\/api\/assistant\//,
+  /^\/api\/team\/[^/]+\/findings/,
+  /^\/api\/v1\/scans/,
+  // The Guard endpoint agent uploads the command lines it saw on a machine (vssadmin delete
+  // shadows, mimikatz, encoded PowerShell): evidence, not an attack on the dashboard.
+  /^\/api\/endpoint-agent\//,
 ];
 
 const MAX_RECENT = 50;
@@ -45,6 +59,16 @@ export const BAN_DEFAULTS = {
 
 export function createSelfDefense({
   mode = 'monitor',
+  // Scanner-bait paths (/.env, /.git/config, /wp-login.php …). A hit counts as a full ban threshold
+  // at once and, in enforce mode, gets a bare 404. Pass false to disable, or a RegExp to replace.
+  honeypot = HONEYPOT_PATHS,
+  // Attack tools that name themselves in the User-Agent (sqlmap, nikto, nuclei …). Handled like a
+  // honeypot hit — an instant ban — but answered with a 403. Pass false to disable, or a RegExp.
+  scanners = SCANNER_AGENTS,
+  // Optional persistence so bans survive restarts and are shared between instances:
+  // { load(): Promise<{ip, until}[]>, save({ip, until, reason}): Promise, remove(ip): Promise }.
+  banStore = null,
+  banSyncMs = 60_000,
   deps = {},
   skip = SELF_SKIP,
   maxRecent = MAX_RECENT,
@@ -87,19 +111,47 @@ export function createSelfDefense({
     return true;
   };
 
-  const recordOffence = (ip) => {
+  const persist = (fn) => {
+    if (!banStore) return;
+    try {
+      Promise.resolve(fn()).catch(() => {});
+    } catch {
+      // storage trouble must never affect request handling
+    }
+  };
+
+  // weight > 1 lets one unmistakable signal (a honeypot hit) count as several ordinary offences.
+  const recordOffence = (ip, weight = 1, reason = 'repeat-offender') => {
     if (!policy.enabled || !ip) return;
     const t = nowMs();
     const list = (offences.get(ip) || []).filter((x) => t - x <= policy.windowMs);
-    list.push(t);
+    for (let i = 0; i < weight; i++) list.push(t);
     offences.set(ip, list);
     if (list.length >= policy.threshold && !isBanned(ip)) {
       const until = t + policy.ttlMs;
       banned.set(ip, until);
       offences.delete(ip);
-      emit({ type: 'ban', at: now(), ip, until, count: list.length, enforce: policy.enforce });
+      emit({ type: 'ban', at: now(), ip, until, count: list.length, enforce: policy.enforce, reason });
+      persist(() => banStore.save({ ip, until, reason }));
     }
   };
+
+  // Merge stored bans (from earlier runs or other instances). Expired ones are dropped.
+  const syncBans = async () => {
+    if (!banStore) return;
+    try {
+      const t = nowMs();
+      for (const item of (await banStore.load()) || []) {
+        if (!item?.ip || !(item.until > t)) continue;
+        if ((banned.get(item.ip) || 0) < item.until) banned.set(item.ip, item.until);
+      }
+    } catch {
+      // a store that cannot be read leaves the in-memory bans as they are
+    }
+  };
+  const ready = syncBans();
+  const syncTimer = banStore && banSyncMs > 0 ? setInterval(syncBans, banSyncMs) : null;
+  if (typeof syncTimer?.unref === 'function') syncTimer.unref();
 
   bb.subscribe('defense', (e) => {
     const { event, verdict, result } = e.data;
@@ -131,8 +183,55 @@ export function createSelfDefense({
       const ip = req.ip || req.socket?.remoteAddress || null;
       if (policy.enabled && policy.enforce && ip && isBanned(ip)) {
         counters.banned++;
-        res.status(403).json({ error: 'Blocked by Shannon Defender (repeat offender)' });
+        res.status(403).json({ error: 'Blocked by Securovix Defender (repeat offender)' });
         return;
+      }
+
+      // Two signals that need no payload inspection and are never ordinary traffic. Each counts as a
+      // full ban threshold at once.
+      const userAgent = req.headers?.['user-agent'];
+      const instant =
+        scanners && matchScannerAgent(userAgent, scanners)
+          ? {
+              cls: 'scanner-tool',
+              signal: 'request sent by a known attack tool',
+              status: 403,
+              error: 'Blocked by Securovix Defender',
+            }
+          : honeypot && matchHoneypot(path, honeypot)
+            ? // A plain 404: tell the scanner nothing, not even that it was noticed.
+              {
+                cls: 'honeypot',
+                signal: 'request for a path only vulnerability scanners ask for',
+                status: 404,
+                error: 'Not found',
+              }
+            : null;
+      if (instant) {
+        counters.events++;
+        counters.defenses++;
+        const enforced = current === 'enforce';
+        const row = {
+          type: 'detection',
+          at: now(),
+          method: req.method,
+          url: req.originalUrl || req.url || '',
+          srcIp: ip,
+          cls: instant.cls,
+          signal: instant.signal,
+          recommendedAction: 'block-inline',
+          action: enforced ? 'block-inline' : 'alert',
+          enforced,
+        };
+        recent.unshift(row);
+        if (recent.length > maxRecent) recent.length = maxRecent;
+        emit(row);
+        recordOffence(ip, policy.threshold, instant.cls);
+        if (enforced) {
+          res.status(instant.status).json({ error: instant.error });
+          return;
+        }
+        return next();
       }
 
       // Mounted after express.json(), so a JSON body is already parsed; serialise it back for
@@ -162,7 +261,7 @@ export function createSelfDefense({
       };
 
       if (handle(event).block) {
-        res.status(403).json({ error: 'Blocked by Shannon Defender' });
+        res.status(403).json({ error: 'Blocked by Securovix Defender' });
         return;
       }
     } catch {
@@ -192,7 +291,13 @@ export function createSelfDefense({
       const had = banned.delete(ip);
       offences.delete(ip);
       if (had) emit({ type: 'unban', at: now(), ip });
+      persist(() => banStore.remove(ip));
       return had;
+    },
+    ready,
+    syncBans,
+    stop: () => {
+      if (syncTimer) clearInterval(syncTimer);
     },
   };
 }

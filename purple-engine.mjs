@@ -24,6 +24,9 @@ import { LLM_COMPLIANCE } from './llm-compliance.mjs';
 import { probeDirect, probeIndirect } from './llm-inject.mjs';
 import { proveSystemPromptLeak } from './llm-impact.mjs';
 import { candidateParams } from './llm-surface.mjs';
+// Linear-time equivalents of /\{\{.*\}\}/, /<[a-z][^>]*>/ and /union.*select/. The regex forms are
+// quadratic on hostile input, and these filters also run on live traffic inside the Defender.
+import { hasHtmlTag, hasLooseSqli, hasTemplateMarkers, sameLine } from './packages/defender-sdk/signatures.mjs';
 
 function loadEnv() {
   try {
@@ -445,7 +448,7 @@ async function startOOB(token) {
 const PROBERS = {
   'rce-ssti': {
     blockable: true,
-    filter: (u, b) => /\{\{.*\}\}|\$\{.*\}|#\{.*\}|<%.*%>|\*\{.*\}/.test(dec(u) + (b || '')),
+    filter: (u, b) => hasTemplateMarkers(dec(u) + (b || '')),
     async probe(target) {
       const A = 9931;
       const B = 9817;
@@ -466,7 +469,7 @@ const PROBERS = {
   },
   xss: {
     blockable: true,
-    filter: (u, b) => /<[a-z/!][^>]*>|<\/[a-z]/i.test(dec(u) + dec(b || '')),
+    filter: (u, b) => hasHtmlTag(dec(u) + dec(b || '')),
     async probe(target) {
       const { url, opts } = injReq(target, XSS_PAYLOAD);
       const { body, headers } = await fetchT(url, opts);
@@ -486,10 +489,7 @@ const PROBERS = {
   },
   sqli: {
     blockable: true,
-    filter: (u, b) =>
-      /%27|'|(--\s)|(\bunion\b.*\bselect\b)|\b(sleep|pg_sleep|benchmark)\s*\(|waitfor\s+delay/i.test(
-        dec(u) + dec(b || ''),
-      ),
+    filter: (u, b) => hasLooseSqli(dec(u) + dec(b || '')),
     async probe(target) {
       const fetchInj = (payload, timeoutMs) => {
         const x = injReq(target, payload);
@@ -753,10 +753,13 @@ const PROBERS = {
   // docs/research/llm-attack-surface.md for the method and prior art.
   'llm-prompt-injection': {
     blockable: true,
-    filter: (u, b) =>
-      /ignore\b[^.]{0,40}\binstructions\b|reveal.*(system\s+)?prompt|reversed:\s*sxpi|result of \d{3,}\s*[*+]\s*\d{3,}/i.test(
-        dec(u) + dec(b || ''),
-      ),
+    filter: (u, b) => {
+      const s = dec(u) + dec(b || '');
+      return (
+        /ignore\b[^.]{0,40}\binstructions\b|reversed:\s*sxpi|result of \d{3,}\s*[*+]\s*\d{3,}/i.test(s) ||
+        sameLine(s, /reveal/i, /prompt/i)
+      );
+    },
     async probe(target) {
       const fs = await probeDirect({ target, fetchT });
       // Benign, read-only impact chain: once injection is proven, try to prove system-prompt /
@@ -1357,7 +1360,7 @@ function startProxy(origin, filter, onBlock) {
       if (filter(req.url, body)) {
         onBlock();
         res.writeHead(403, { 'content-type': 'text/plain' });
-        res.end('Blocked by Shannon WAF rule');
+        res.end('Blocked by Securovix WAF rule');
         return;
       }
       const fwd = agent.request(
@@ -1739,7 +1742,7 @@ export async function runExploitDefend({ target, classes, label, workspaceDir })
 
 export const ALL_CLASSES = Object.keys(PROBERS);
 // Exported for unit tests (pure helpers).
-export { buildCompositeFilter, detectionRule, fetchT, injectParam, injReq, mergeCookies, PROBERS, setParam, targetUrlOf };
+export { buildCompositeFilter, COMPLIANCE, detectionRule, fetchT, injectParam, injReq, mergeCookies, PROBERS, setParam, targetUrlOf };
 
 // WHOLE-APP: crawl the target to discover pages/params/forms/APIs, then run every prober
 // across the discovered surface (auth headers applied to all requests), aggregate, defend, report.

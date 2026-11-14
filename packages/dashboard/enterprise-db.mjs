@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
+import { consumeFromGrants } from './commerce.mjs';
 
 // Keep CLI, web, and worker startup behavior identical. Railway provides these
 // values directly; local development may keep them in the repository .env.
@@ -35,6 +36,24 @@ let local = {
   defenseCycles: [],
   softwareComponents: [],
   vulnerabilityMatches: [],
+  commerceOrders: [],
+  creditGrants: [],
+  assistantConversations: [],
+  assistantMemory: [],
+  researchReports: [],
+  apiKeys: [],
+  shareLinks: [],
+  defenderBans: [],
+  guardConnections: [],
+  guardIncidents: [],
+  guardActions: [],
+  guardState: [],
+  guardSettings: [],
+  guardAgents: [],
+  guardCommands: [],
+  guardSamples: [],
+  guardHashes: [],
+  guardEndpoint: [],
 };
 
 try {
@@ -443,6 +462,194 @@ export async function listUsage(orgId, day = new Date().toISOString().slice(0, 1
   const rows = await rest(`/shannon_usage_daily?org_id=eq.${encodeURIComponent(orgId)}&day=eq.${encodeURIComponent(day)}&order=metric.asc`);
   return (rows || []).map((row) => ({ orgId: row.org_id, day: row.day, metric: row.metric, quantity: Number(row.quantity), updatedAt: Number(row.updated_at) }));
 }
+
+// ----- Commerce: orders and prepaid credit grants -----
+
+function orderFromRow(row) {
+  return row && {
+    id: row.id, orgId: row.org_id, userId: row.user_id, itemId: row.item_id, itemName: row.item_name, kind: row.kind,
+    method: row.method, amount: Number(row.amount), currency: row.currency, grants: row.grants || {}, reference: row.reference,
+    status: row.status, evidence: row.evidence || null, review: row.review || null, providerRef: row.provider_ref || null,
+    createdAt: Number(row.created_at), updatedAt: Number(row.updated_at), history: row.history || [],
+  };
+}
+
+function grantFromRow(row) {
+  return row && { id: row.id, orgId: row.org_id, orderId: row.order_id, grants: row.grants || {}, remaining: row.remaining || {}, expiresAt: Number(row.expires_at), createdAt: Number(row.created_at) };
+}
+
+export async function saveCommerceOrder(order) {
+  if (!USE_SUPABASE) {
+    const index = local.commerceOrders.findIndex((item) => item.id === order.id);
+    if (index >= 0) local.commerceOrders[index] = order; else local.commerceOrders.push(order);
+    persist();
+    return order;
+  }
+  const rows = await rest('/shannon_commerce_orders', {
+    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([{ id: order.id, org_id: order.orgId, user_id: order.userId, item_id: order.itemId, item_name: order.itemName, kind: order.kind, method: order.method, amount: order.amount, currency: order.currency, grants: order.grants, reference: order.reference, status: order.status, evidence: order.evidence, review: order.review, provider_ref: order.providerRef, created_at: order.createdAt, updated_at: order.updatedAt, history: order.history }]),
+  });
+  return orderFromRow(rows?.[0]);
+}
+
+export async function getCommerceOrder(id) {
+  if (!USE_SUPABASE) return local.commerceOrders.find((item) => item.id === id) || null;
+  const rows = await rest(`/shannon_commerce_orders?id=eq.${encodeURIComponent(id)}&limit=1`);
+  return orderFromRow(rows?.[0]);
+}
+
+export async function listCommerceOrders({ orgId, status, limit = 100 } = {}) {
+  const cap = Math.max(1, Math.min(500, Number(limit) || 100));
+  if (!USE_SUPABASE) {
+    return local.commerceOrders
+      .filter((item) => (!orgId || item.orgId === orgId) && (!status || item.status === status))
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, cap);
+  }
+  const filters = [orgId ? `org_id=eq.${encodeURIComponent(orgId)}` : '', status ? `status=eq.${encodeURIComponent(status)}` : ''].filter(Boolean).join('&');
+  const rows = await rest(`/shannon_commerce_orders?${filters ? `${filters}&` : ''}order=created_at.desc&limit=${cap}`);
+  return (rows || []).map(orderFromRow);
+}
+
+// Idempotent per grant id (one grant per order), so a replayed approval never double-credits.
+export async function addCreditGrant(grant) {
+  if (!USE_SUPABASE) {
+    const existing = local.creditGrants.find((item) => item.id === grant.id);
+    if (existing) return { grant: existing, created: false };
+    local.creditGrants.push(grant);
+    persist();
+    return { grant, created: true };
+  }
+  const rows = await rest('/shannon_credit_grants?on_conflict=id', {
+    method: 'POST', headers: { prefer: 'resolution=ignore-duplicates,return=representation' },
+    body: JSON.stringify([{ id: grant.id, org_id: grant.orgId, order_id: grant.orderId, grants: grant.grants, remaining: grant.remaining, expires_at: grant.expiresAt, created_at: grant.createdAt }]),
+  });
+  return rows?.length ? { grant: grantFromRow(rows[0]), created: true } : { grant, created: false };
+}
+
+export async function listCreditGrants(orgId) {
+  if (!USE_SUPABASE) return local.creditGrants.filter((item) => item.orgId === orgId);
+  const rows = await rest(`/shannon_credit_grants?org_id=eq.${encodeURIComponent(orgId)}&order=expires_at.asc`);
+  return (rows || []).map(grantFromRow);
+}
+
+export async function consumeCredits(orgId, metric, amount = 1, now = Date.now()) {
+  if (!USE_SUPABASE) {
+    const mine = local.creditGrants.filter((item) => item.orgId === orgId);
+    const result = consumeFromGrants(mine, metric, amount, now);
+    if (!result.allowed) return { allowed: false, remaining: result.remaining };
+    const byId = new Map(result.grants.map((grant) => [grant.id, grant]));
+    local.creditGrants = local.creditGrants.map((grant) => byId.get(grant.id) || grant);
+    persist();
+    return { allowed: true, remaining: result.remaining };
+  }
+  const remaining = await rest('/rpc/shannon_consume_credit', { method: 'POST', body: JSON.stringify({ p_org_id: orgId, p_metric: metric, p_amount: Math.max(1, Number(amount) || 1), p_now: now }) });
+  const value = Number(remaining);
+  return value >= 0 ? { allowed: true, remaining: value } : { allowed: false, remaining: 0 };
+}
+
+// ----- Assistant, research, developer API keys, share links -----
+// One field map per record type drives both backends: camelCase in JS, snake_case in Postgres.
+
+function makeCollection(localKey, table, fields) {
+  const entries = Object.entries(fields);
+  const toRow = (record) => Object.fromEntries(entries.map(([camel, snake]) => [snake, record[camel] ?? null]));
+  const fromRow = (row) => row && Object.fromEntries(entries.map(([camel, snake]) => [camel, row[snake] ?? null]));
+  const matches = (record, filter) => Object.entries(filter).every(([field, value]) => value === undefined || record[field] === value);
+  return {
+    async save(record) {
+      if (!USE_SUPABASE) {
+        const index = local[localKey].findIndex((item) => item.id === record.id);
+        if (index >= 0) local[localKey][index] = record; else local[localKey].push(record);
+        persist();
+        return record;
+      }
+      const rows = await rest(`/${table}`, { method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([toRow(record)]) });
+      return fromRow(rows?.[0]);
+    },
+    async get(id) {
+      if (!USE_SUPABASE) return local[localKey].find((item) => item.id === id) || null;
+      const rows = await rest(`/${table}?id=eq.${encodeURIComponent(id)}&limit=1`);
+      return fromRow(rows?.[0]);
+    },
+    async list(filter = {}, { orderBy = 'createdAt', limit = 100 } = {}) {
+      const cap = Math.max(1, Math.min(500, Number(limit) || 100));
+      if (!USE_SUPABASE) {
+        return local[localKey].filter((item) => matches(item, filter)).sort((a, b) => (b[orderBy] || 0) - (a[orderBy] || 0)).slice(0, cap);
+      }
+      const where = Object.entries(filter).filter(([, value]) => value !== undefined).map(([field, value]) => `${fields[field]}=eq.${encodeURIComponent(value)}`);
+      const rows = await rest(`/${table}?${[...where, `order=${fields[orderBy]}.desc`, `limit=${cap}`].join('&')}`);
+      return (rows || []).map(fromRow);
+    },
+    async remove(id) {
+      if (!USE_SUPABASE) {
+        const before = local[localKey].length;
+        local[localKey] = local[localKey].filter((item) => item.id !== id);
+        persist();
+        return local[localKey].length < before;
+      }
+      await rest(`/${table}?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+      return true;
+    },
+  };
+}
+
+export const assistantConversations = makeCollection('assistantConversations', 'shannon_assistant_conversations', {
+  id: 'id', orgId: 'org_id', userId: 'user_id', title: 'title', messages: 'messages', createdAt: 'created_at', updatedAt: 'updated_at',
+});
+export const assistantMemory = makeCollection('assistantMemory', 'shannon_assistant_memory', {
+  id: 'id', orgId: 'org_id', text: 'text', createdBy: 'created_by', createdAt: 'created_at',
+});
+export const researchReports = makeCollection('researchReports', 'shannon_research_reports', {
+  id: 'id', orgId: 'org_id', userId: 'user_id', domain: 'domain', status: 'status', markdown: 'markdown', model: 'model', error: 'error', sources: 'sources', createdAt: 'created_at', updatedAt: 'updated_at',
+});
+export const apiKeys = makeCollection('apiKeys', 'shannon_api_keys', {
+  id: 'id', orgId: 'org_id', name: 'name', hint: 'hint', secretHash: 'secret_hash', scopes: 'scopes', createdBy: 'created_by', createdAt: 'created_at', lastUsedAt: 'last_used_at', revokedAt: 'revoked_at',
+});
+export const shareLinks = makeCollection('shareLinks', 'shannon_share_links', {
+  id: 'id', orgId: 'org_id', resourceType: 'resource_type', resourceId: 'resource_id', title: 'title', secretHash: 'secret_hash', createdBy: 'created_by', createdAt: 'created_at', expiresAt: 'expires_at', revokedAt: 'revoked_at', views: 'views',
+});
+
+// Platform self-defense bans (keyed by IP) so a redeploy or a second instance keeps them.
+export const defenderBans = makeCollection('defenderBans', 'shannon_defender_bans', {
+  id: 'id', ip: 'ip', until: 'until_at', reason: 'reason', createdAt: 'created_at',
+});
+
+// Guard (identity and cloud defence). Raw provider events are not stored: only alerts (with a
+// trimmed evidence snapshot), incidents, actions, and per-person baselines.
+export const guardConnections = makeCollection('guardConnections', 'shannon_guard_connections', {
+  id: 'id', orgId: 'org_id', provider: 'provider', name: 'name', config: 'config', secretEnc: 'secret_enc', state: 'state', enabled: 'enabled', status: 'status', lastSyncAt: 'last_sync_at', lastError: 'last_error', lastEventCount: 'last_event_count', totalEvents: 'total_events', createdBy: 'created_by', createdAt: 'created_at', updatedAt: 'updated_at',
+});
+export const guardIncidents = makeCollection('guardIncidents', 'shannon_guard_incidents', {
+  id: 'id', orgId: 'org_id', key: 'key', status: 'status', severity: 'severity', title: 'title', summary: 'summary', aiSummary: 'ai_summary', mitre: 'mitre', kinds: 'kinds', alerts: 'alerts', alertCount: 'alert_count', actions: 'actions', actionsTaken: 'actions_taken', reopened: 'reopened', firstSeenAt: 'first_seen_at', lastSeenAt: 'last_seen_at', detectedAt: 'detected_at', containedAt: 'contained_at', closedAt: 'closed_at', closedBy: 'closed_by', closeNote: 'close_note', forcedClose: 'forced_close', createdAt: 'created_at', updatedAt: 'updated_at',
+});
+export const guardActions = makeCollection('guardActions', 'shannon_guard_actions', {
+  id: 'id', orgId: 'org_id', incidentId: 'incident_id', connectionId: 'connection_id', type: 'type', params: 'params', status: 'status', error: 'error', detail: 'detail', undo: 'undo', actor: 'actor', mode: 'mode', createdAt: 'created_at', undoneAt: 'undone_at', undoneBy: 'undone_by', undoDetail: 'undo_detail',
+});
+export const guardState = makeCollection('guardState', 'shannon_guard_state', {
+  id: 'id', orgId: 'org_id', baselines: 'baselines', orgState: 'org_state', exploitSince: 'exploit_since', updatedAt: 'updated_at',
+});
+export const guardSettings = makeCollection('guardSettings', 'shannon_guard_settings', {
+  id: 'id', orgId: 'org_id', domains: 'domains', trustedApps: 'trusted_apps', blocklist: 'blocklist', autopilot: 'autopilot', createdAt: 'created_at', updatedAt: 'updated_at',
+});
+
+// Guard Phase 2: endpoint agents, their commands, sandbox samples, the cross-customer malicious
+// hash list (hash, verdict and family only), and per-organization endpoint policy/state.
+export const guardAgents = makeCollection('guardAgents', 'shannon_guard_agents', {
+  id: 'id', orgId: 'org_id', hostname: 'hostname', os: 'os', osVersion: 'os_version', arch: 'arch', version: 'version', machineId: 'machine_id', secretHash: 'secret_hash', status: 'status', isolated: 'isolated', lastSeenAt: 'last_seen_at', lastIp: 'last_ip', enrolledAt: 'enrolled_at', stats: 'stats', tamperAlertedAt: 'tamper_alerted_at', updatedAt: 'updated_at',
+});
+export const guardCommands = makeCollection('guardCommands', 'shannon_guard_commands', {
+  id: 'id', orgId: 'org_id', agentId: 'agent_id', type: 'type', params: 'params', undoData: 'undo_data', actionId: 'action_id', status: 'status', detail: 'detail', result: 'result', actor: 'actor', createdAt: 'created_at', sentAt: 'sent_at', completedAt: 'completed_at',
+});
+export const guardSamples = makeCollection('guardSamples', 'shannon_guard_samples', {
+  id: 'id', orgId: 'org_id', agentId: 'agent_id', hostname: 'hostname', sha256: 'sha256', filename: 'filename', size: 'size', commandId: 'command_id', taskId: 'task_id', status: 'status', verdict: 'verdict', score: 'score', family: 'family', reasons: 'reasons', signatures: 'signatures', error: 'error', createdAt: 'created_at', updatedAt: 'updated_at',
+});
+export const guardHashes = makeCollection('guardHashes', 'shannon_guard_hashes', {
+  id: 'id', verdict: 'verdict', score: 'score', family: 'family', source: 'source', addedAt: 'added_at',
+});
+export const guardEndpoint = makeCollection('guardEndpoint', 'shannon_guard_endpoint', {
+  id: 'id', orgId: 'org_id', enrollHash: 'enroll_hash', enrollHint: 'enroll_hint', enrollCreatedAt: 'enroll_created_at', policy: 'policy', hosts: 'hosts', org: 'org_state', updatedAt: 'updated_at',
+});
 
 export async function enqueueJob(job) {
   const normalized = {

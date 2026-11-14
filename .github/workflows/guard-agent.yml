@@ -1,0 +1,76 @@
+# Builds and tests the Securovix Guard endpoint agent for Windows, Linux and macOS.
+# Runs on changes to packages/guard-agent and on demand; a tag guard-agent-v* also publishes a
+# GitHub release with the binaries and their SHA-256 sums.
+name: guard-agent
+
+on:
+  push:
+    paths: ['packages/guard-agent/**']
+    tags: ['guard-agent-v*']
+  pull_request:
+    paths: ['packages/guard-agent/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-windows:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/guard-agent
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - run: rustup target add x86_64-pc-windows-gnu
+      - run: cargo test --release
+      - run: cargo build --release
+      - run: cargo build --release --target x86_64-pc-windows-gnu
+      - run: |
+          mkdir -p dist
+          cp target/release/securovix-guard dist/securovix-guard-linux-x86_64
+          cp target/x86_64-pc-windows-gnu/release/securovix-guard.exe dist/securovix-guard-windows-x86_64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guard-agent-linux-windows
+          path: packages/guard-agent/dist/*
+
+  macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: packages/guard-agent
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - run: cargo test --release
+      - run: cargo build --release --target aarch64-apple-darwin
+      - run: cargo build --release --target x86_64-apple-darwin
+      - run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/securovix-guard dist/securovix-guard-macos-arm64
+          cp target/x86_64-apple-darwin/release/securovix-guard dist/securovix-guard-macos-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guard-agent-macos
+          path: packages/guard-agent/dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/guard-agent-v')
+    needs: [linux-windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cd dist && sha256sum securovix-guard-* > SHA256SUMS
+      - run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Securovix Guard agent ${GITHUB_REF_NAME#guard-agent-v}" \
+            --notes "Endpoint agent binaries. Unsigned: sign the Windows and macOS builds before giving them to customers."
+        env:
+          GH_TOKEN: ${{ github.token }}
