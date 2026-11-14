@@ -170,12 +170,10 @@ export function registerEndpointRoutes(app, deps) {
       process.env.SHANNON_GUARD_AGENT_DIR || fileURLToPath(new URL('../../guard-agent/dist/', import.meta.url));
     const file = join(dir, name);
     if (!existsSync(file))
-      return res
-        .status(404)
-        .json({
-          error:
-            'The agent has not been built on this server. Run packages/guard-agent/build/build.sh, or set SHANNON_GUARD_AGENT_DIR to where the release binaries are.',
-        });
+      return res.status(404).json({
+        error:
+          'The agent has not been built on this server. Run packages/guard-agent/build/build.sh, or set SHANNON_GUARD_AGENT_DIR to where the release binaries are.',
+      });
     res.download(file, req.params.platform === 'windows' ? 'securovix-guard.exe' : 'securovix-guard');
   });
 

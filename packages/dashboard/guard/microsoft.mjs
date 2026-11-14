@@ -12,7 +12,7 @@
 //     DelegatedPermissionGrant.ReadWrite.All, AppRoleAssignment.ReadWrite.All
 //   Office 365 Management APIs: ActivityFeed.Read
 // Sign-in logs need Entra ID P1 or P2 (included in Microsoft 365 Business Premium).
-import { emailsIn, ProviderError, requestJson, stripPort } from './http.mjs';
+import { ProviderError, emailsIn, requestJson, stripPort } from './http.mjs';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 const MANAGE = 'https://manage.office.com';

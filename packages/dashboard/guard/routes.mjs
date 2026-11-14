@@ -5,7 +5,7 @@ import { ACTIONS, PROVIDERS, RULES } from './catalog.mjs';
 import { AUTOPILOT_ACTIONS, publicConnection } from './engine.mjs';
 import { publicIncident } from './incidents.mjs';
 import { intelStatus } from './intel.mjs';
-import { queueScenario, SCENARIOS } from './simulate.mjs';
+import { SCENARIOS, queueScenario } from './simulate.mjs';
 import { blocklistRules, wafRulesForFinding } from './waf.mjs';
 
 const GUARD_ANALYST = `You are the incident analyst inside Securovix Guard, explaining a security incident to a small business owner who has no security team.

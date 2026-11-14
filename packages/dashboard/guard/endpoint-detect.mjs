@@ -8,7 +8,7 @@
 //
 // Pure: state in, state out. Every pattern is linear (no nested or adjacent unbounded repeats).
 import { createHash } from 'node:crypto';
-import { mitreFor, MITRE, RULES } from './catalog.mjs';
+import { MITRE, RULES, mitreFor } from './catalog.mjs';
 
 const MIN = 60_000;
 export const ENDPOINT_DEFAULTS = Object.freeze({

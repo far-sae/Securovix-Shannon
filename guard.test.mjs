@@ -1,6 +1,6 @@
 // Guard: detection rules, provider normalizers, incidents, score, WAF rules. Pure, no server.
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, createVerify } from 'node:crypto';
+import { createVerify, generateKeyPairSync } from 'node:crypto';
 import { test } from 'node:test';
 
 const { detect, judgeInboxRule, exploitAttempts, emptyBaseline } = await import(

@@ -1,6 +1,6 @@
 // Alerts -> incidents, the plain-English summary, and the security score. Pure.
 import { createHash } from 'node:crypto';
-import { ACTIONS, maxSeverity, RULES, SEVERITY_RANK } from './catalog.mjs';
+import { ACTIONS, RULES, SEVERITY_RANK, maxSeverity } from './catalog.mjs';
 
 const HOUR = 3_600_000;
 export const INCIDENT_WINDOW = 24 * HOUR;

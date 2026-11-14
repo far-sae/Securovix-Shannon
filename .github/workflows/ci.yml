@@ -24,6 +24,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # The dashboard ships as its own image with its own lockfile, outside the pnpm workspace.
+      - name: Install dashboard dependencies
+        run: npm ci --prefix packages/dashboard
+
       - name: Typecheck (worker + tool-broker + cli)
         run: pnpm typecheck
 

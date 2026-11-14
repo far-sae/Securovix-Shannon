@@ -12,12 +12,12 @@ import { createHash } from 'node:crypto';
 import {
   HIDING_FOLDERS,
   LURE_WORDS,
-  maxSeverity,
-  mitreFor,
   PERSONAL_MAIL_DOMAINS,
   PRIVILEGED_ROLES,
   RISKY_SCOPES,
   RULES,
+  maxSeverity,
+  mitreFor,
 } from './catalog.mjs';
 
 const MIN = 60_000;

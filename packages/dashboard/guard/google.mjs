@@ -11,7 +11,7 @@
 // Google's login records carry an IP address but no location, so impossible travel and
 // new-country checks only run on Microsoft 365. Drive audit needs Business Standard or higher.
 import { createSign } from 'node:crypto';
-import { emailsIn, ProviderError, requestJson } from './http.mjs';
+import { ProviderError, emailsIn, requestJson } from './http.mjs';
 
 const REPORTS = 'https://admin.googleapis.com/admin/reports/v1/activity/users/all/applications';
 const DIRECTORY = 'https://admin.googleapis.com/admin/directory/v1';
