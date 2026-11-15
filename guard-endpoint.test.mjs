@@ -816,3 +816,24 @@ test('extra folders to watch are saved for servers, trimmed and capped', async (
     403,
   );
 });
+
+// ---------- the store refuses what Supabase would refuse ----------
+
+test('record stores sort by a column the table has and reject unknown fields before Supabase does', async () => {
+  const edb = await import('./packages/dashboard/enterprise-db.mjs');
+  // Agents have enrolledAt, not createdAt. Sorting them by the old default failed on Supabase
+  // ("column shannon_guard_agents.undefined does not exist") and broke every agent install.
+  const agents = await edb.guardAgents.list({ orgId: owner.orgId }, { limit: 500 });
+  assert.ok(agents.length >= 1);
+  for (const store of [edb.guardState, edb.guardHashes, edb.guardEndpoint, edb.guardAgents])
+    assert.ok(Array.isArray(await store.list({}, { limit: 5 })), 'tables without createdAt still list');
+  await assert.rejects(edb.guardAgents.list({}, { orderBy: 'createdAt' }), /not a field of this record type \(sort\)/);
+  await assert.rejects(edb.guardAgents.list({ hostName: 'x' }), /not a field of this record type \(filter\)/);
+  await assert.rejects(
+    edb.guardAgents.save({ ...agents[0], notAColumn: 1 }),
+    /no column for notAColumn/,
+    'under test, a value Supabase would silently drop is an error',
+  );
+  const saved = await edb.guardAgents.save({ ...agents[0], notAColumn: undefined });
+  assert.equal(Object.hasOwn(saved, 'notAColumn'), false, 'only mapped fields are stored');
+});
