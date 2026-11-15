@@ -202,6 +202,10 @@ pub fn linux_isolation_plan(ips: &[IpAddr], port: u16) -> Vec<Vec<String>> {
         vec!["add".into(), "table".into(), "inet".into(), t.into()],
         vec!["add".into(), "chain".into(), "inet".into(), t.into(), "input".into(), "{ type filter hook input priority -10 ; policy drop ; }".into()],
         vec!["add".into(), "chain".into(), "inet".into(), t.into(), "output".into(), "{ type filter hook output priority -10 ; policy drop ; }".into()],
+        // Containers and virtual machines reach the network through the host's forward path, never
+        // its input/output chains. Without this, an isolated Docker host keeps its published ports
+        // open and its containers online.
+        vec!["add".into(), "chain".into(), "inet".into(), t.into(), "forward".into(), "{ type filter hook forward priority -10 ; policy drop ; }".into()],
         vec!["add".into(), "rule".into(), "inet".into(), t.into(), "input".into(), "iif".into(), "lo".into(), "accept".into()],
         vec!["add".into(), "rule".into(), "inet".into(), t.into(), "output".into(), "oif".into(), "lo".into(), "accept".into()],
     ];
@@ -297,6 +301,10 @@ mod tests {
         let nft = linux_isolation_plan(&ips, 8443);
         let flat: Vec<String> = nft.iter().map(|s| s.join(" ")).collect();
         assert!(flat.iter().any(|l| l.contains("policy drop")));
+        for hook in ["input", "output", "forward"] {
+            assert!(flat.iter().any(|l| l.contains(&format!("hook {hook} priority -10 ; policy drop"))), "{hook} is closed");
+        }
+        assert!(!flat.iter().any(|l| l.contains(" forward ") && l.contains("accept")), "nothing is forwarded while isolated: containers are cut off too");
         assert!(flat.iter().any(|l| l.contains("ip daddr { 203.0.113.10 } tcp dport 8443 accept")));
         assert!(flat.iter().any(|l| l.contains("ip6 daddr { 2001:db8::10 } tcp dport 8443 accept")));
     }

@@ -1,7 +1,8 @@
 // Routes for Guard Phase 2.
 //   /api/endpoint-agent/v1/*  the Guard agent (Authorization: Bearer svxa_...), no cookies
 //   /api/guard/endpoints/*    the dashboard (signed-in users, role-checked)
-import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -10,6 +11,55 @@ import { MAX_SAMPLE_BYTES } from './endpoint.mjs';
 
 const AGENT = '/api/endpoint-agent/v1';
 const MACHINE_ACTIONS = new Set(['isolate-host', 'kill-process', 'quarantine-file', 'collect-file']);
+
+// The agent binaries this server hands out. The production image builds them (Dockerfile.dashboard,
+// stage 1); locally they come from packages/guard-agent/build/build.sh or SHANNON_GUARD_AGENT_DIR.
+const AGENT_BUILDS = {
+  windows: { file: 'securovix-guard-windows-x86_64.exe', saveAs: 'securovix-guard.exe' },
+  linux: { file: 'securovix-guard-linux-x86_64', saveAs: 'securovix-guard' },
+};
+const agentDir = () =>
+  process.env.SHANNON_GUARD_AGENT_DIR || fileURLToPath(new URL('../../guard-agent/dist/', import.meta.url));
+const buildCache = new Map();
+
+/** Size and SHA-256 of the agent build for a platform, or null when this server has none. */
+export function agentBuild(platform) {
+  const spec = Object.hasOwn(AGENT_BUILDS, platform) ? AGENT_BUILDS[platform] : null;
+  if (!spec) return null;
+  const file = join(agentDir(), spec.file);
+  let stat;
+  try {
+    stat = statSync(file);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile() || !stat.size) return null;
+  const cached = buildCache.get(file);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached;
+  const build = {
+    file,
+    saveAs: spec.saveAs,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    sha256: createHash('sha256').update(readFileSync(file)).digest('hex'),
+  };
+  buildCache.set(file, build);
+  return build;
+}
+
+function sendAgentBuild(req, res) {
+  if (!Object.hasOwn(AGENT_BUILDS, req.params.platform))
+    return res.status(404).json({ error: 'Builds exist for windows and linux.' });
+  const build = agentBuild(req.params.platform);
+  if (!build)
+    return res.status(404).json({
+      error:
+        'This server has no agent build yet. The production image builds it; locally run packages/guard-agent/build/build.sh, or set SHANNON_GUARD_AGENT_DIR to where the binaries are.',
+    });
+  res.setHeader('x-checksum-sha256', build.sha256);
+  res.setHeader('cache-control', 'no-store');
+  res.download(build.file, build.saveAs);
+}
 
 export function registerEndpointRoutes(app, deps) {
   const { endpoints, engine, requirePermission, audit, limited, can } = deps;
@@ -78,15 +128,30 @@ export function registerEndpointRoutes(app, deps) {
     },
   );
 
+  // The agent itself. No sign-in: a server with no browser fetches it with curl, the program is
+  // open source, and it does nothing until it is enrolled with an organization's token.
+  app.get(`${AGENT}/download/:platform`, (req, res) => {
+    if (limited(req, res, 'endpoint-download', 120, 60 * 60 * 1000)) return;
+    sendAgentBuild(req, res);
+  });
+
   // ----- the dashboard -----
 
   app.get('/api/guard/endpoints', async (req, res) => {
     const ctx = requirePermission(req, res, 'findings.read');
     if (!ctx) return;
     try {
+      const downloads = {};
+      for (const platform of Object.keys(AGENT_BUILDS)) {
+        const build = agentBuild(platform);
+        downloads[platform] = build
+          ? { available: true, sha256: build.sha256, size: build.size }
+          : { available: false };
+      }
       res.json({
         ok: true,
         ...(await endpoints.overview(ctx.org.id)),
+        downloads,
         canManage: can(ctx.membership.role, 'integrations.manage'),
         canRespond: can(ctx.membership.role, 'defender.manage'),
       });
@@ -116,7 +181,7 @@ export function registerEndpointRoutes(app, deps) {
     }
     if (Array.isArray(b.extraWatch))
       patch.extraWatch = b.extraWatch
-        .map((p) => String(p).slice(0, 260))
+        .map((p) => String(p).trim().slice(0, 260))
         .filter(Boolean)
         .slice(0, 20);
     if (Array.isArray(b.allow))
@@ -158,23 +223,11 @@ export function registerEndpointRoutes(app, deps) {
     }
   });
 
-  // Agent downloads, served from the build output (or SHANNON_GUARD_AGENT_DIR) when present.
+  // The same file for someone signed in to the dashboard (a browser download link).
   app.get('/api/guard/endpoints/download/:platform', (req, res) => {
     const ctx = requirePermission(req, res, 'findings.read');
     if (!ctx) return;
-    const name = { windows: 'securovix-guard-windows-x86_64.exe', linux: 'securovix-guard-linux-x86_64' }[
-      req.params.platform
-    ];
-    if (!name) return res.status(404).json({ error: 'Builds exist for windows and linux.' });
-    const dir =
-      process.env.SHANNON_GUARD_AGENT_DIR || fileURLToPath(new URL('../../guard-agent/dist/', import.meta.url));
-    const file = join(dir, name);
-    if (!existsSync(file))
-      return res.status(404).json({
-        error:
-          'The agent has not been built on this server. Run packages/guard-agent/build/build.sh, or set SHANNON_GUARD_AGENT_DIR to where the release binaries are.',
-      });
-    res.download(file, req.params.platform === 'windows' ? 'securovix-guard.exe' : 'securovix-guard');
+    sendAgentBuild(req, res);
   });
 
   app.delete('/api/guard/endpoints/:agentId', async (req, res) => {

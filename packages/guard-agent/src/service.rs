@@ -129,7 +129,9 @@ pub fn uninstall() -> Result<String, String> {
         let _ = std::fs::remove_file("/etc/systemd/system/securovix-guard.service");
         run("systemctl", &["daemon-reload"]);
     }
-    for dir in crate::filemon::watch_dirs(true, &[]) {
+    // Decoys in the policy's extra folders are removed too, not only those in document folders.
+    let extra = Config::load().map(|c| c.policy.extra_watch).unwrap_or_default();
+    for dir in crate::filemon::watch_dirs(true, &extra) {
         for name in crate::filemon::CANARY_NAMES {
             let _ = std::fs::remove_file(dir.join(name));
         }

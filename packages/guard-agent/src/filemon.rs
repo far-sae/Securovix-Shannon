@@ -157,7 +157,7 @@ fn respond(shared: &Arc<Shared>, sys: &mut System, verdict: Verdict, kind: &str,
 
 pub fn run(shared: Arc<Shared>) {
     let policy = shared.policy();
-    let dirs = watch_dirs(policy.watch_user_folders, &policy.extra_watch);
+    let mut dirs = watch_dirs(policy.watch_user_folders, &policy.extra_watch);
     if policy.canaries {
         let planted = plant_canaries(&dirs);
         shared.canaries.lock().unwrap().extend(planted);
@@ -196,6 +196,19 @@ pub fn run(shared: Arc<Shared>) {
                 if p.version != last_policy {
                     detector.set_policy(p.ransomware.clone());
                     last_policy = p.version;
+                    // Folders added in the dashboard are watched from now on, without a restart.
+                    // Folders removed there stay watched until the agent restarts: dropping
+                    // protection is never the silent default.
+                    for dir in watch_dirs(p.watch_user_folders, &p.extra_watch) {
+                        if !dirs.contains(&dir) && watcher.watch(&dir, RecursiveMode::Recursive).is_ok() {
+                            if p.canaries {
+                                let planted = plant_canaries(std::slice::from_ref(&dir));
+                                shared.canaries.lock().unwrap().extend(planted);
+                            }
+                            dirs.push(dir);
+                            *shared.watched.lock().unwrap() += 1;
+                        }
+                    }
                 }
                 continue;
             }

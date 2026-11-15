@@ -543,6 +543,74 @@ export function createGuardEngine({
     return publicIncident(saved);
   }
 
+  // Disconnects a tenant. With `purge` it also removes everything that connection produced: its
+  // incidents, the actions taken on them, the blocklist entries those actions added, and the
+  // per-person baselines learned for its domains. An incident that also holds alerts from another
+  // source (a second tenant, an endpoint agent, Shannon) is kept. The demo tenant is always
+  // purged, so removing it leaves no simulated data behind; a real tenant keeps its incident
+  // history unless the caller asks otherwise.
+  async function removeConnection(orgId, connectionId, { purge = false } = {}) {
+    const connection = await store.connections.get(connectionId);
+    if (!connection || connection.orgId !== orgId)
+      throw Object.assign(new Error('Connection not found.'), { status: 404 });
+    // A sync already in flight would write this connection's baselines straight back.
+    if (running.has(orgId)) await running.get(orgId).catch(() => {});
+    return withLock(orgId, async () => {
+      await store.connections.remove(connectionId);
+      const removed = { incidents: 0, actions: 0, baselines: 0, blocklist: 0 };
+      if (!purge) return removed;
+      const gone = new Set();
+      // The store returns at most 500 rows a call, so repeat until a pass finds nothing more.
+      for (let pass = 0; pass < 20; pass += 1) {
+        const mine = (await store.incidents.list({ orgId }, { orderBy: 'lastSeenAt', limit: 500 })).filter(
+          (i) => (i.alerts || []).length && i.alerts.every((a) => a.connectionId === connectionId),
+        );
+        if (!mine.length) break;
+        for (const incident of mine) {
+          await store.incidents.remove(incident.id);
+          gone.add(incident.id);
+        }
+      }
+      removed.incidents = gone.size;
+      const unblock = new Set();
+      for (let pass = 0; pass < 20; pass += 1) {
+        const mine = (await store.actions.list({ orgId }, { limit: 500 })).filter(
+          (a) => a.connectionId === connectionId || (a.incidentId && gone.has(a.incidentId)),
+        );
+        if (!mine.length) break;
+        for (const action of mine) {
+          if (action.type === 'block-ip' && action.status === 'done' && !action.undoneAt && action.params?.ip)
+            unblock.add(action.params.ip);
+          await store.actions.remove(action.id);
+          removed.actions += 1;
+        }
+      }
+      if (unblock.size) {
+        const settings = await getSettings(orgId);
+        const blocklist = (settings.blocklist || []).filter((b) => !unblock.has(b.ip));
+        removed.blocklist = (settings.blocklist || []).length - blocklist.length;
+        if (removed.blocklist) await saveSettings(orgId, { blocklist });
+      }
+      const remaining = await listConnections(orgId);
+      const lower = (d) => String(d).toLowerCase();
+      const stillUsed = new Set(remaining.flatMap((c) => c.config?.domains || []).map(lower));
+      const domains = new Set((connection.config?.domains || []).map(lower).filter((d) => !stillUsed.has(d)));
+      const state = await loadState(orgId);
+      for (const key of Object.keys(state.baselines)) {
+        const domain = String(key).split('@')[1];
+        if (domain && domains.has(lower(domain))) {
+          delete state.baselines[key];
+          removed.baselines += 1;
+        }
+      }
+      // With nothing left connected there is no sign-in history worth keeping either.
+      if (!remaining.length) state.orgState = emptyOrgState();
+      state.updatedAt = now();
+      await store.state.save(state);
+      return removed;
+    });
+  }
+
   async function overview(orgId) {
     const [connections, incidents, findings, kevMatches, settings] = await Promise.all([
       listConnections(orgId),
@@ -585,6 +653,7 @@ export function createGuardEngine({
     closeIncident,
     overview,
     listConnections,
+    removeConnection,
     actionsFor,
     refreshContainment,
     encrypt,

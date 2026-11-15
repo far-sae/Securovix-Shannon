@@ -22,5 +22,8 @@ workspaces
 # Build / cache junk
 .turbo
 dist
+# Rust build output of the Guard agent (gigabytes locally; the image builds its own copy)
+packages/guard-agent/target
+packages/guard-agent/dist
 *.log
 .DS_Store

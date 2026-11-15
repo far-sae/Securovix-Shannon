@@ -5,6 +5,27 @@
 # This keeps node_modules flat and predictable so Node's ESM resolver finds
 # `express` etc. without any workspace gymnastics.
 
+# ---- Stage 1: the Guard endpoint agent -------------------------------------------------
+# The dashboard hands this binary to the machines it protects ("Add a machine" on the Guard
+# page), so it is built here and always matches the server it talks to. Linux is fully static
+# (musl): one file that runs on any distribution. Windows is cross-compiled with MinGW.
+# Only packages/guard-agent is copied in, so this stage is rebuilt only when the agent changes.
+FROM rust:1-bookworm AS guard-agent
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 musl-tools \
+ && rm -rf /var/lib/apt/lists/* \
+ && rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-musl
+WORKDIR /src
+COPY packages/guard-agent/Cargo.toml packages/guard-agent/Cargo.lock ./
+COPY packages/guard-agent/src ./src
+RUN cargo build --release --locked --target x86_64-unknown-linux-musl \
+ && cargo build --release --locked --target x86_64-pc-windows-gnu \
+ && mkdir /out \
+ && cp target/x86_64-unknown-linux-musl/release/securovix-guard /out/securovix-guard-linux-x86_64 \
+ && cp target/x86_64-pc-windows-gnu/release/securovix-guard.exe /out/securovix-guard-windows-x86_64.exe \
+ && cd /out && sha256sum securovix-guard-* > SHA256SUMS
+
+# ---- Stage 2: the dashboard --------------------------------------------------------------
 FROM node:20-bookworm-slim
 WORKDIR /app
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -32,6 +53,9 @@ RUN npm install --omit=dev --no-package-lock \
 # 3) Copy the rest of the workspace AFTER install. The .dockerignore prevents
 #    any local node_modules from clobbering the freshly installed ones.
 COPY . .
+
+# 4) The Guard agent binaries from stage 1, where the download route looks for them.
+COPY --from=guard-agent /out/ /app/packages/guard-agent/dist/
 
 ENV NODE_ENV=production
 ENV PORT=3000

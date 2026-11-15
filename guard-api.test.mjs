@@ -410,3 +410,146 @@ test('Microsoft connector: reads Graph and the audit feed, removes a rule with a
   assert.equal(removed.undo.rules[0].displayName, 'x');
   assert.ok(calls.some((c) => c.startsWith('DELETE') && c.endsWith('/messageRules/r1')));
 });
+
+// ---------- real data only ----------
+
+test('removing the demo tenant deletes everything it simulated and keeps what is real', async () => {
+  const demoOnly = (i) => (i.alerts || []).length > 0 && i.alerts.every((a) => a.connectionId === demo.id);
+  const before = await edb.guardIncidents.list({ orgId: owner.orgId }, { limit: 500 });
+  const real = before
+    .filter((i) => !demoOnly(i))
+    .map((i) => i.id)
+    .sort();
+  assert.ok(before.some(demoOnly), 'the earlier tests left simulated incidents');
+  assert.ok(real.length >= 1, 'and one incident that came from Shannon, not the demo');
+  const stateBefore = await edb.guardState.get(owner.orgId);
+  assert.ok(Object.keys(stateBefore.baselines).some((k) => k.endsWith('@demo-company.example')));
+  assert.ok((await request('/api/guard/overview', as(owner))).json.blocklist.some((b) => b.ip === '203.0.113.99'));
+
+  assert.equal(
+    (await request(`/api/guard/connections/${demo.id}`, { method: 'DELETE', ...as(viewer) })).status,
+    403,
+    'viewers cannot remove connections',
+  );
+  assert.equal(
+    (await request(`/api/guard/connections/${demo.id}`, { method: 'DELETE', ...as(other, other.orgId) })).status,
+    404,
+    'another organization cannot remove it',
+  );
+  const gone = await request(`/api/guard/connections/${demo.id}`, { method: 'DELETE', ...as(owner) });
+  assert.equal(gone.status, 200, JSON.stringify(gone.json));
+  assert.ok(gone.json.removed.incidents >= 1);
+  assert.ok(gone.json.removed.actions >= 1);
+  assert.ok(gone.json.removed.baselines >= 3, 'at least the three demo users');
+
+  const after = await edb.guardIncidents.list({ orgId: owner.orgId }, { limit: 500 });
+  assert.deepEqual(after.map((i) => i.id).sort(), real, 'only the simulated incidents went');
+  const actions = await edb.guardActions.list({ orgId: owner.orgId }, { limit: 500 });
+  assert.ok(!actions.some((a) => a.connectionId === demo.id), 'no action taken on the demo tenant is left');
+  const stateAfter = await edb.guardState.get(owner.orgId);
+  assert.ok(!Object.keys(stateAfter.baselines).some((k) => k.endsWith('@demo-company.example')));
+  const overview = await request('/api/guard/overview', as(owner));
+  assert.equal(overview.json.connections.length, 0);
+  assert.ok(!overview.json.blocklist.some((b) => b.ip === '203.0.113.99'), 'the demo attacker left the blocklist');
+});
+
+test('a real tenant keeps its incident history when it is disconnected, unless a purge is asked for', async () => {
+  const now = Date.now();
+  const connection = (id) => ({
+    id,
+    orgId: owner.orgId,
+    provider: 'microsoft',
+    name: 'Microsoft 365',
+    config: { tenantId: 'acme.example', domains: ['acme.example'] },
+    secretEnc: null,
+    state: {},
+    enabled: false,
+    status: 'active',
+    createdBy: owner.userId,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const incidentFor = (id, connectionId) => ({
+    id,
+    orgId: owner.orgId,
+    key: `user:amy@acme.example:${id}`,
+    status: 'open',
+    severity: 'high',
+    title: 'Amy signed in from a new country',
+    summary: 'Test incident.',
+    mitre: [],
+    kinds: ['new-country'],
+    alerts: [
+      {
+        id: `${id}-a`,
+        rule: 'new-country',
+        severity: 'high',
+        at: now,
+        connectionId,
+        user: { email: 'amy@acme.example' },
+      },
+    ],
+    alertCount: 1,
+    actions: [],
+    actionsTaken: [],
+    firstSeenAt: now,
+    lastSeenAt: now,
+    detectedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await edb.guardConnections.save(connection('gcn_keephistory'));
+  await edb.guardConnections.save(connection('gcn_purgehistory'));
+  await edb.guardIncidents.save(incidentFor('ginc_keep', 'gcn_keephistory'));
+  await edb.guardIncidents.save(incidentFor('ginc_purge', 'gcn_purgehistory'));
+
+  const kept = await request('/api/guard/connections/gcn_keephistory', { method: 'DELETE', ...as(owner) });
+  assert.equal(kept.status, 200, JSON.stringify(kept.json));
+  assert.equal(kept.json.removed.incidents, 0);
+  assert.ok(await edb.guardIncidents.get('ginc_keep'), 'history stays by default');
+
+  const purged = await request('/api/guard/connections/gcn_purgehistory?purge=1', {
+    method: 'DELETE',
+    ...as(owner),
+  });
+  assert.equal(purged.json.removed.incidents, 1);
+  assert.equal(await edb.guardIncidents.get('ginc_purge'), null);
+  assert.ok(await edb.guardIncidents.get('ginc_keep'), 'purging one connection never touches another');
+  await edb.guardIncidents.remove('ginc_keep');
+});
+
+test('a production server shows only real data: the demo is off unless the operator turns it on', async () => {
+  const demoRequest = () =>
+    request('/api/guard/connections', { method: 'POST', ...as(owner), body: { provider: 'simulation' } });
+  process.env.NODE_ENV = 'production';
+  try {
+    const refused = await demoRequest();
+    assert.equal(refused.status, 403, JSON.stringify(refused.json));
+    assert.match(refused.json.error, /only real data/);
+    const off = await request('/api/guard/overview', as(owner));
+    assert.equal(off.json.demoAllowed, false);
+    assert.deepEqual(off.json.scenarios, {});
+    assert.ok(!off.json.providers.some((p) => p.id === 'simulation'));
+    assert.equal(off.json.connections.length, 0, 'the refused request created nothing');
+
+    process.env.SHANNON_GUARD_DEMO = '1';
+    const allowed = await demoRequest();
+    assert.equal(allowed.status, 201, JSON.stringify(allowed.json));
+    assert.equal((await request('/api/guard/overview', as(owner))).json.demoAllowed, true);
+
+    // Switched off again: no new simulated attacks, but the tenant can still be cleared out.
+    Reflect.deleteProperty(process.env, 'SHANNON_GUARD_DEMO');
+    const id = allowed.json.connection.id;
+    const scenario = await request(`/api/guard/connections/${id}/simulate`, {
+      method: 'POST',
+      ...as(owner),
+      body: { scenario: 'account-takeover' },
+    });
+    assert.equal(scenario.status, 403);
+    assert.equal((await request(`/api/guard/connections/${id}`, { method: 'DELETE', ...as(owner) })).status, 200);
+    assert.equal((await request('/api/guard/overview', as(owner))).json.connections.length, 0);
+  } finally {
+    process.env.NODE_ENV = 'test';
+    Reflect.deleteProperty(process.env, 'SHANNON_GUARD_DEMO');
+  }
+});

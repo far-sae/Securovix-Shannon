@@ -22,14 +22,15 @@ jobs:
         working-directory: packages/guard-agent
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
-      - run: rustup target add x86_64-pc-windows-gnu
+      - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 musl-tools
+      - run: rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-musl
       - run: cargo test --release
-      - run: cargo build --release
-      - run: cargo build --release --target x86_64-pc-windows-gnu
+      # Static Linux binary: one file for every distribution, the same target the dashboard image builds.
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - run: cargo build --release --locked --target x86_64-pc-windows-gnu
       - run: |
           mkdir -p dist
-          cp target/release/securovix-guard dist/securovix-guard-linux-x86_64
+          cp target/x86_64-unknown-linux-musl/release/securovix-guard dist/securovix-guard-linux-x86_64
           cp target/x86_64-pc-windows-gnu/release/securovix-guard.exe dist/securovix-guard-windows-x86_64.exe
       - uses: actions/upload-artifact@v4
         with:

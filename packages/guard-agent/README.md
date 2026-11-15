@@ -18,21 +18,39 @@ builds on a Mac or in CI (`.github/workflows/guard-agent.yml`).
 
 Isolation saves the exact firewall state and restores exactly that: on Windows
 `netsh advfirewall export` / `import`; on Linux a separate nftables table that release simply
-deletes. macOS isolation is not implemented yet and reports a failure rather than pretending.
+deletes. The Linux table closes the input, output and forward paths, so containers and virtual
+machines on the host are cut off too and published ports stop answering; Docker's own rules are
+never edited. Isolation needs `nft` (the `nftables` package). macOS isolation is not implemented
+yet and reports a failure rather than pretending.
 
 ## Install
 
-On the Guard page, **Add a machine** shows the command with a one-time enrollment token:
+On the Guard page, **Add a machine** shows one command per platform, already filled in with the
+server address, the checksum of that server's build and an enrollment token:
+
+```sh
+# Linux (any distribution; the binary is static), as a user who can sudo
+curl -fsSL https://YOUR-DASHBOARD/api/endpoint-agent/v1/download/linux -o securovix-guard \
+  && echo "<sha256>  securovix-guard" | sha256sum -c - \
+  && chmod +x securovix-guard \
+  && sudo ./securovix-guard install --server https://YOUR-DASHBOARD --token svxe_...
+```
 
 ```powershell
 # Windows, PowerShell as administrator
+Invoke-WebRequest https://YOUR-DASHBOARD/api/endpoint-agent/v1/download/windows -OutFile securovix-guard.exe -UseBasicParsing
+if ((Get-FileHash securovix-guard.exe -Algorithm SHA256).Hash -ne '<SHA256>') { throw 'The download does not match the build on this server.' }
 .\securovix-guard.exe install --server https://YOUR-DASHBOARD --token svxe_...
 ```
 
-```sh
-# Linux
-sudo ./securovix-guard install --server https://YOUR-DASHBOARD --token svxe_...
-```
+It installs to `/usr/local/bin/securovix-guard` with a systemd unit (`securovix-guard.service`),
+or to `C:\Program Files\Securovix Guard` as the `SecurovixGuard` service, and starts with the
+machine.
+
+**Servers and Docker hosts.** A server has no Documents folder, so add its data folders on the
+Guard page under **Protection settings → Extra folders to watch** (on a Docker host, the folders
+you mount into containers). Machines pick up a new folder at their next check-in, no restart. The
+agent sees container processes as ordinary processes of the host.
 
 `securovix-guard uninstall` removes it (and lifts isolation). `securovix-guard status` shows the
 enrollment. The credential is stored under `C:\ProgramData\Securovix\Guard` or
@@ -53,6 +71,10 @@ should stop it well before 50 files (23 in our test on Windows 11).
 ```sh
 sh packages/guard-agent/build/build.sh     # Docker: tests, then Linux + Windows binaries in dist/
 ```
+
+The production dashboard image builds the same two binaries itself (`Dockerfile.dashboard`, first
+stage), so nothing has to be built or uploaded by hand for a deployment. The Linux binary targets
+`x86_64-unknown-linux-musl`: fully static, no glibc version to match.
 
 ## Measured (Windows 11, this repo's live test)
 
