@@ -3,7 +3,7 @@
 // sandbox loop (upload -> fake CAPE -> malicious -> hash shared with another customer).
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -723,4 +723,96 @@ test('CAPE client speaks the v2 API', async () => {
     'GET https://cape.example.test/apiv2/tasks/status/7/',
   ]);
   assert.equal(createCapeClient({ config: null }).configured(), false);
+});
+
+// ---------- getting the agent onto a machine ----------
+
+test('the agent downloads with one unauthenticated command and carries the checksum of the build', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'shannon-agent-builds-'));
+  process.env.SHANNON_GUARD_AGENT_DIR = dir;
+  try {
+    // No build on this server: a clear answer, and the dashboard knows not to offer a command.
+    const none = await fetch(`${base}/api/endpoint-agent/v1/download/linux`);
+    assert.equal(none.status, 404);
+    assert.match((await none.json()).error, /no agent build/);
+    assert.deepEqual((await call('/api/guard/endpoints', { cookie: owner.cookie })).json.downloads, {
+      windows: { available: false },
+      linux: { available: false },
+    });
+
+    const linux = Buffer.from('\x7fELF pretend linux agent');
+    const windows = Buffer.from('MZ pretend windows agent');
+    writeFileSync(join(dir, 'securovix-guard-linux-x86_64'), linux);
+    writeFileSync(join(dir, 'securovix-guard-windows-x86_64.exe'), windows);
+    const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+    // A server with no browser: plain GET, no cookie, no token, through the enforcing Defender.
+    const got = await fetch(`${base}/api/endpoint-agent/v1/download/linux`);
+    assert.equal(got.status, 200);
+    assert.deepEqual(Buffer.from(await got.arrayBuffer()), linux);
+    assert.equal(got.headers.get('x-checksum-sha256'), sha(linux));
+    assert.match(got.headers.get('content-disposition'), /filename="securovix-guard"/);
+    const exe = await fetch(`${base}/api/endpoint-agent/v1/download/windows`);
+    assert.match(exe.headers.get('content-disposition'), /filename="securovix-guard\.exe"/);
+    assert.deepEqual(Buffer.from(await exe.arrayBuffer()), windows);
+
+    // The dashboard shows the same checksum, so the one-line command can verify the file.
+    const listed = (await call('/api/guard/endpoints', { cookie: owner.cookie })).json.downloads;
+    assert.deepEqual(listed.linux, { available: true, sha256: sha(linux), size: linux.length });
+    assert.deepEqual(listed.windows, { available: true, sha256: sha(windows), size: windows.length });
+
+    // A new build replaces the old checksum (no stale cache).
+    const rebuilt = Buffer.from('\x7fELF a newer, longer pretend linux agent');
+    writeFileSync(join(dir, 'securovix-guard-linux-x86_64'), rebuilt);
+    assert.equal(
+      (await fetch(`${base}/api/endpoint-agent/v1/download/linux`)).headers.get('x-checksum-sha256'),
+      sha(rebuilt),
+    );
+
+    // Only the two known files are ever served.
+    for (const platform of ['macos', '..%2F..%2Fpackage.json', 'linux%2F..%2Fserver.mjs', '__proto__', 'constructor'])
+      assert.equal((await fetch(`${base}/api/endpoint-agent/v1/download/${platform}`)).status, 404, platform);
+
+    // The signed-in link serves the same file; signed out it asks for a sign-in.
+    assert.equal((await fetch(`${base}/api/guard/endpoints/download/linux`)).status, 401);
+    const signedIn = await fetch(`${base}/api/guard/endpoints/download/linux`, {
+      headers: { cookie: owner.cookie },
+    });
+    assert.equal(signedIn.headers.get('x-checksum-sha256'), sha(rebuilt));
+  } finally {
+    Reflect.deleteProperty(process.env, 'SHANNON_GUARD_AGENT_DIR');
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('extra folders to watch are saved for servers, trimmed and capped', async () => {
+  const saved = await call('/api/guard/endpoints/policy', {
+    method: 'POST',
+    cookie: owner.cookie,
+    body: {
+      extraWatch: ['/srv/data', '  /var/www  ', 'D:\\Shared', '', ...Array.from({ length: 40 }, (_, i) => `/x/${i}`)],
+    },
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  assert.deepEqual(saved.json.policy.extraWatch.slice(0, 3), ['/srv/data', '/var/www', 'D:\\Shared']);
+  assert.equal(saved.json.policy.extraWatch.length, 20);
+  const before = saved.json.policy.version;
+  const cleared = await call('/api/guard/endpoints/policy', {
+    method: 'POST',
+    cookie: owner.cookie,
+    body: { extraWatch: [] },
+  });
+  assert.deepEqual(cleared.json.policy.extraWatch, []);
+  assert.equal(cleared.json.policy.version, before + 1, 'agents pick the change up at their next check-in');
+  assert.equal(
+    (
+      await call('/api/guard/endpoints/policy', {
+        method: 'POST',
+        cookie: viewer.cookie,
+        headers: { 'x-shannon-org': owner.orgId },
+        body: { extraWatch: ['/etc'] },
+      })
+    ).status,
+    403,
+  );
 });

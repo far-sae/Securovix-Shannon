@@ -70,6 +70,7 @@ integrations as `guard.incident`, and runs autopilot if an owner switched it on.
 | `SHANNON_GUARD_INTERVAL_MS` | (unset = 120000) | How often to sync. Minimum 60000. |
 | `SHANNON_GUARD_INTEL` | (unset) | Downloads the abuse.ch Feodo Tracker IP blocklist every 6 hours; `0` turns it off. Nothing about the customer is sent. |
 | `SHANNON_ENCRYPTION_KEY` | 32+ random characters | Required in production; tenant secrets are stored encrypted with it. |
+| `SHANNON_GUARD_DEMO` | (unset) | A production server shows only real data: the demo tenant cannot be added and its scenarios cannot run. Set `1` to offer it (for example to show Guard to a prospect). Outside production it is always available. |
 
 Customers connect on the **Guard** page (owners and admins). Microsoft 365 needs an app
 registration with application permissions `AuditLog.Read.All`, `Directory.Read.All` and Office 365
@@ -78,8 +79,12 @@ Management APIs `ActivityFeed.Read`; one-click responses also need `User.ReadWri
 `AppRoleAssignment.ReadWrite.All`. Sign-in logs need Entra ID P1 (included in Business Premium).
 Google Workspace needs a service account with domain-wide delegation for
 `admin.reports.audit.readonly`, `admin.directory.user`, `admin.directory.user.security`. Google's
-logs have no location, so travel checks are Microsoft-only. The **demo tenant** needs nothing and
-can play an account takeover, a password spray or insider data theft.
+logs have no location, so travel checks are Microsoft-only. The **demo tenant** (off in
+production unless `SHANNON_GUARD_DEMO=1`) needs nothing and can play an account takeover, a
+password spray or insider data theft. Removing it deletes everything it simulated: its incidents,
+the actions taken on them, the addresses those actions blocked and the baselines of its users.
+Removing a real tenant keeps its incident history (`DELETE …/connections/:id?purge=1` removes
+that too).
 
 What it detects: impossible travel, first sign-in from a new country (after a 7-day, 10-sign-in
 learning period per person), sign-ins from threat-feed or blocklisted addresses, the provider's own
@@ -104,12 +109,27 @@ self-defense skips that path because agents upload attack command lines as evide
 join the same Guard incidents, autopilot and alert integrations; isolate/stop/quarantine actions
 are queued for the machine and complete when it confirms (normally within 10 seconds).
 
+**Getting the agent onto a machine.** `Dockerfile.dashboard` builds the agent in its first stage
+(Linux as one static binary that runs on any distribution, Windows cross-compiled) and puts both
+in the image, so the agent a customer installs always matches the server. **Add a machine** on the
+Guard page shows one command per platform that downloads the binary from
+`/api/endpoint-agent/v1/download/<linux|windows>`, checks its SHA-256 against this server's build
+and installs it as a service. That download needs no sign-in, so a server without a browser can
+fetch it with `curl`; the program is open source and does nothing until it is enrolled with an
+organization's token. The first build of a new agent version adds roughly two minutes to the image
+build; after that the stage is cached until `packages/guard-agent` changes.
+
+Servers have no Documents folder, so list their data folders under **Protection settings → Extra
+folders to watch** (on a Docker host, the folders mounted into containers). Machines start watching
+a new folder at their next check-in. Isolating a Linux machine also closes its forward path, so
+containers and virtual machines on it lose the network too and published ports stop answering.
+
 | Env var | Set to | What it does |
 |---|---|---|
 | `SHANNON_CAPE_URL` | your CAPE v2 server | Optional. Files from agents are detonated there and scored; a malicious verdict blocks that hash on every customer's machines (hash, family and verdict only are shared). Without it, files are recorded but not analysed. |
 | `SHANNON_CAPE_TOKEN` | CAPE API token | Sent as `Authorization: Token …`. |
 | `SHANNON_CAPE_TIMEOUT_SEC` | (unset = 180) | Analysis time per file. |
-| `SHANNON_GUARD_AGENT_DIR` | folder with release binaries | Optional. Lets **Add a machine** offer downloads; otherwise customers get the binaries from the release. |
+| `SHANNON_GUARD_AGENT_DIR` | folder with agent binaries | Optional. Serve agent builds from this folder instead of the ones built into the image (`securovix-guard-linux-x86_64`, `securovix-guard-windows-x86_64.exe`), for example signed binaries. |
 
 CAPE needs its own KVM host with analysis VMs and cannot run on Railway. The sandbox verdict is a
 logistic regression over the CAPE report (malscore, signatures, YARA, family, dropped files,

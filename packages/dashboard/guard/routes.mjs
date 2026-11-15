@@ -52,6 +52,12 @@ export function registerGuardRoutes(app, deps) {
     can,
   } = deps;
 
+  // The demo tenant produces simulated sign-ins and incidents. A production server shows only
+  // real data unless the operator turns the demo on (SHANNON_GUARD_DEMO=1), for example to show
+  // Guard to a prospect. An existing demo tenant can always be removed.
+  const demoAllowed = () => process.env.SHANNON_GUARD_DEMO === '1' || process.env.NODE_ENV !== 'production';
+  const DEMO_OFF = 'The demo tenant is switched off on this server, so Guard shows only real data.';
+
   const withHtml = (incident) => ({
     ...publicIncident(incident),
     summaryHtml: renderMarkdown(incident.summary || ''),
@@ -97,8 +103,11 @@ export function registerGuardRoutes(app, deps) {
         intel: intelStatus(),
         canManage: can(ctx.membership.role, 'integrations.manage'),
         canRespond: can(ctx.membership.role, 'defender.manage'),
-        providers: Object.entries(PROVIDERS).map(([id, p]) => ({ id, label: p.label })),
-        scenarios: SCENARIOS,
+        providers: Object.entries(PROVIDERS)
+          .filter(([id]) => id !== 'simulation' || demoAllowed())
+          .map(([id, p]) => ({ id, label: p.label })),
+        demoAllowed: demoAllowed(),
+        scenarios: demoAllowed() ? SCENARIOS : {},
         rules: Object.fromEntries(Object.entries(RULES).map(([id, r]) => [id, r.title])),
         autopilotActions: AUTOPILOT_ACTIONS.map((type) => ({ type, label: ACTIONS[type].label })),
       });
@@ -285,8 +294,13 @@ export function registerGuardRoutes(app, deps) {
     if (!ctx) return;
     if (limited(req, res, `guard-connect:${ctx.org.id}`, 20, 60 * 60 * 1000)) return;
     const provider = clean(req.body?.provider, 20);
+    if (provider === 'simulation' && !demoAllowed()) return res.status(403).json({ error: DEMO_OFF });
     if (!providers[provider])
-      return res.status(400).json({ error: 'Choose Microsoft 365, Google Workspace or the demo tenant.' });
+      return res.status(400).json({
+        error: demoAllowed()
+          ? 'Choose Microsoft 365, Google Workspace or the demo tenant.'
+          : 'Choose Microsoft 365 or Google Workspace.',
+      });
     const existing = await engine.listConnections(ctx.org.id);
     if (existing.length >= 10)
       return res.status(409).json({ error: 'An organization can have up to 10 Guard connections.' });
@@ -358,11 +372,19 @@ export function registerGuardRoutes(app, deps) {
   app.delete('/api/guard/connections/:id', async (req, res) => {
     const found = await ownConnection(req, res, 'integrations.manage');
     if (!found) return;
-    await store.connections.remove(found.connection.id);
-    audit(found.ctx, 'guard.connection.deleted', 'guard_connection', found.connection.id, {
-      provider: found.connection.provider,
-    });
-    res.json({ ok: true });
+    try {
+      // The demo tenant takes its simulated incidents, actions and baselines with it. A real
+      // tenant keeps its incident history unless the caller asks for a purge.
+      const purge = found.connection.provider === 'simulation' || req.query.purge === '1';
+      const removed = await engine.removeConnection(found.ctx.org.id, found.connection.id, { purge });
+      audit(found.ctx, 'guard.connection.deleted', 'guard_connection', found.connection.id, {
+        provider: found.connection.provider,
+        ...removed,
+      });
+      res.json({ ok: true, removed });
+    } catch (error) {
+      fail(res, error);
+    }
   });
 
   app.post('/api/guard/connections/:id/simulate', async (req, res) => {
@@ -370,6 +392,7 @@ export function registerGuardRoutes(app, deps) {
     if (!found) return;
     if (found.connection.provider !== 'simulation')
       return res.status(400).json({ error: 'Scenarios only run on the demo tenant.' });
+    if (!demoAllowed()) return res.status(403).json({ error: `${DEMO_OFF} Remove the demo tenant to clear it.` });
     try {
       const state = found.connection.state || {};
       queueScenario(state, clean(req.body?.scenario, 40));

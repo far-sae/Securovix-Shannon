@@ -5645,6 +5645,12 @@ async function pgGuard(id){
   try{ep=await api('/guard/endpoints')}catch{ep=null}
   GUARD={ov,list,waf,ep};
   const s=ov.score,demo=ov.connections.find(c=>c.provider==='simulation');
+  const realConns=ov.connections.filter(c=>c.provider!=='simulation'),machines=ep?ep.agents.length:0;
+  const step=(done,title,text,btn)=>`<div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--brd);flex-wrap:wrap"><span style="display:flex;gap:10px;min-width:0;flex:1"><b style="color:${done?'var(--acc2)':'var(--t3)'}">${done?'✔':'○'}</b><span style="min-width:0"><b style="color:var(--t0)">${title}</b><br><small style="color:var(--t3)">${text}</small></span></span>${done?'':btn}</div>`;
+  const startCard=(!realConns.length||!machines)&&ov.canManage?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Set up Guard</h2><small>${(realConns.length?1:0)+(machines?1:0)} of 2 done</small></div>
+      ${step(machines>0,'Protect a machine',machines?`${machines} machine${machines===1?'':'s'} reporting.`:'One command installs the agent on a Windows PC or a Linux server (Docker hosts included). It appears here within seconds.',`<button class="btn btn-p" onclick="guardAddMachine()">Add a machine</button>`)}
+      ${step(realConns.length>0,'Connect your sign-ins and mail',realConns.length?`${realConns.length} connected.`:'Microsoft 365 or Google Workspace, read-only to start. Guard learns what is normal for each person over the first week.',`<span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" onclick="guardConnectMicrosoft()">Microsoft 365</button><button class="btn" onclick="guardConnectGoogle()">Google Workspace</button></span>`)}
+      ${demo?`<p style="font-size:12.5px;color:var(--amber,#f5b942);margin:10px 0 0">The demo tenant below is simulated. Removing it deletes its incidents, actions and learned baselines, leaving only real data.</p>`:''}</section>`:'';
   const kpi=(label,value,small,tone)=>`<div class="sec-kpi ${tone||''}"><span>${label}</span><strong>${value}</strong><small>${small}</small></div>`;
   const incRow=i=>`<button onclick="go('guard','${i.id}')" style="all:unset;cursor:pointer;display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--brd);width:100%;box-sizing:border-box;flex-wrap:wrap">
       <span style="display:flex;gap:10px;align-items:center;min-width:0;flex:1">${sevBadge(i.severity)}<span style="min-width:0"><b style="color:var(--t0)">${H(i.title)}</b><br><small style="color:var(--t3)">${i.alertCount} alert${i.alertCount===1?'':'s'} · last ${asWhen(i.lastSeenAt)} · ${(i.mitre||[]).map(m=>H(m.id)).join(' ')}</small></span></span>${guardChip(i.status)}</button>`;
@@ -5665,12 +5671,13 @@ async function pgGuard(id){
       ${kpi('Time to contain',guardDur(ov.medianTimeToContainMs),'median, detection to containment','')}
       ${kpi('Known-exploited CVEs',ov.counts.kev,'CISA KEV, from Vulnerabilities',ov.counts.kev?'warn':'good')}
     </div>
+    ${startCard}
     ${s.deductions.length?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Why the score is ${s.score}</h2></div>${s.deductions.map(d=>`<p style="font-size:13px;margin:4px 0"><b style="color:var(--red)">−${d.points}</b> ${H(d.reason)}</p>`).join('')}</section>`:''}
     <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Incidents</h2><small>${ov.canRespond?`<button class="btn" onclick="guardSync()">Check now</button>`:''}</small></div>
-      ${open.length?open.map(incRow).join(''):`<p style="color:var(--t3);font-size:13px;margin:0">${ov.connections.length?'No open incidents.':'Connect Microsoft 365 or Google Workspace below, or add the demo tenant to see Guard work.'}</p>`}
+      ${open.length?open.map(incRow).join(''):`<p style="color:var(--t3);font-size:13px;margin:0">${realConns.length||machines?'No open incidents.':'Nothing to show yet. Guard reports only what it sees on your own machines and accounts: add a machine or connect Microsoft 365 or Google Workspace below.'}</p>`}
       ${closed.length?`<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--t3);font-size:13px">${closed.length} closed</summary>${closed.map(incRow).join('')}</details>`:''}</section>
     <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Connections</h2><small>checked every 2 minutes</small></div>
-      ${ov.canManage?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn btn-p" onclick="guardConnectMicrosoft()">Connect Microsoft 365</button><button class="btn btn-p" onclick="guardConnectGoogle()">Connect Google Workspace</button>${demo?'':`<button class="btn" onclick="guardConnectDemo()">Add demo tenant</button>`}<button class="btn" onclick="guardEditSettings()">Company domains and trusted apps</button></div>`:''}
+      ${ov.canManage?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn btn-p" onclick="guardConnectMicrosoft()">Connect Microsoft 365</button><button class="btn btn-p" onclick="guardConnectGoogle()">Connect Google Workspace</button>${demo||!ov.demoAllowed?'':`<button class="btn" onclick="guardConnectDemo()">Add demo tenant</button>`}<button class="btn" onclick="guardEditSettings()">Company domains and trusted apps</button></div>`:''}
       ${ov.connections.length?ov.connections.map(conn).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">Nothing connected yet.</p>'}
       <p style="font-size:12px;color:var(--t3);margin:10px 0 0">Threat feed: ${ov.intel.addresses?`${ov.intel.addresses} known-bad addresses (abuse.ch)`:'loads on the first sync of a real tenant'}. Guard keeps alerts and per-person baselines, never the raw logs.</p></section>
     ${ep?guardEndpointsCard(ep):''}
@@ -5724,8 +5731,9 @@ async function guardToggle(id,enabled){
   try{await api(`/guard/connections/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({enabled})});pgGuard()}catch(e){showNotice('Could not update',H(e.detail||e.message))}
 }
 async function guardRemove(id){
-  if(!confirm('Remove this connection? Guard stops reading it. Incidents already raised stay.'))return;
-  try{await api(`/guard/connections/${encodeURIComponent(id)}`,{method:'DELETE'});pgGuard()}catch(e){showNotice('Could not remove',H(e.detail||e.message))}
+  const isDemo=GUARD?.ov?.connections?.find(c=>c.id===id)?.provider==='simulation';
+  if(!confirm(isDemo?'Remove the demo tenant? Its simulated incidents, actions and learned baselines are deleted with it, so only real data is left.':'Remove this connection? Guard stops reading it. Incidents already raised stay.'))return;
+  try{const r=await api(`/guard/connections/${encodeURIComponent(id)}`,{method:'DELETE'});await pgGuard();if(isDemo)showNotice('Demo tenant removed',`Deleted ${r.removed.incidents} simulated incident${r.removed.incidents===1?'':'s'}, ${r.removed.actions} action${r.removed.actions===1?'':'s'} and ${r.removed.baselines} baseline${r.removed.baselines===1?'':'s'}. Guard now shows only real data.`)}catch(e){showNotice('Could not remove',H(e.detail||e.message))}
 }
 async function guardEditSettings(){
   let cur;try{cur=(await api('/guard/settings')).settings}catch(e){showNotice('Could not load settings',H(e.detail||e.message));return}
@@ -5761,17 +5769,25 @@ function guardEndpointsCard(ep){
       ${toggle('quarantineKnownMalware','Stop and quarantine files the sandbox has proven malicious',pol.quarantineKnownMalware!==false)}
       ${toggle('autoSubmitExecutables','Send unknown programs started from Downloads/Temp to the sandbox',!!pol.autoSubmitExecutables,!ep.sandbox.configured)}
       ${toggle('useSysmon','Use Sysmon on Windows when it is installed (catches very short-lived programs and LSASS access)',pol.useSysmon!==false)}
+      <label style="display:block;margin:10px 0 4px;font-size:13px">Extra folders to watch for ransomware, one per line</label>
+      <textarea id="gep-extra" rows="3" style="width:100%;box-sizing:border-box;background:var(--s1);color:var(--t0);border:1px solid var(--brd);border-radius:8px;padding:8px;font:12.5px ui-monospace,monospace" placeholder="/srv/data&#10;/var/www&#10;D:\\Shared">${H((pol.extraWatch||[]).join('\n'))}</textarea>
+      <p style="font-size:12px;color:var(--t3);margin:4px 0 0">People's Documents, Desktop, Downloads and Pictures are always watched. A server has none of those, so list the folders that hold its data (for a Docker host, the folders you mount into containers). Machines start watching a new folder at their next check-in; a folder that does not exist on a machine is skipped there.</p>
       <button class="btn btn-p" style="margin-top:6px" onclick="guardSavePolicy()">Save settings</button></details>`:''}
     <details style="margin-top:10px" ${ep.samples.length?'open':''}><summary style="cursor:pointer;font-size:13px;color:var(--t2)">Malware sandbox · ${ep.sandbox.configured?'connected':'not configured'} · ${ep.sandbox.knownMaliciousHashes} known-malicious file${ep.sandbox.knownMaliciousHashes===1?'':'s'} blocked on every machine</summary>
       ${ep.samples.length?`<div style="overflow-x:auto"><table style="width:100%;font-size:12.5px;border-collapse:collapse;margin-top:6px">${ep.samples.map(x=>`<tr><td style="padding:4px 8px">${H(x.filename||'')}</td><td style="padding:4px 8px">${H(x.hostname||'')}</td><td style="padding:4px 8px">${verdict(x.verdict)}${x.family?' · '+H(x.family):''}${x.score!=null?' · '+Math.round(x.score*100)+'%':''}</td><td style="padding:4px 8px;color:var(--t3)">${H(x.status)}${x.error?' · '+H(x.error):''}</td><td style="padding:4px 8px;color:var(--t3)">${asWhen(x.createdAt)}</td></tr>`).join('')}</table></div>`:`<p style="color:var(--t3);font-size:13px;margin:6px 0 0">${ep.sandbox.configured?'No files analysed yet.':'Set SHANNON_CAPE_URL to a CAPE sandbox to analyse files. Known-malicious hashes are still blocked.'}</p>`}</details></section>`;
 }
 async function guardAddMachine(){
   let token;try{token=(await api('/guard/endpoints/enroll-token',{method:'POST'})).token}catch(e){showNotice('Could not create a token',H(e.detail||e.message));return}
-  const server=GUARD?.ep?.server||location.origin;
-  showNotice('Add a machine',`<p style="font-size:13px;margin:0 0 6px">Download the agent for the machine (<a href="/api/guard/endpoints/download/windows" style="color:var(--acc2)">Windows</a> · <a href="/api/guard/endpoints/download/linux" style="color:var(--acc2)">Linux</a>), then run as administrator / root:</p>
-    <p style="font-size:12px;color:var(--t3);margin:8px 0 2px">Windows (PowerShell as administrator)</p>${guardPre(`.\\securovix-guard.exe install --server ${server} --token ${token}`)}
-    <p style="font-size:12px;color:var(--t3);margin:8px 0 2px">Linux</p>${guardPre(`sudo ./securovix-guard install --server ${server} --token ${token}`)}
-    <p style="font-size:12px;color:var(--t3);margin:8px 0 0">The token works for any number of machines until you create a new one, and is shown only now. Creating a new token stops this one from enrolling more machines; machines already enrolled keep working.</p>`);
+  const server=(GUARD?.ep?.server||location.origin).replace(/\/$/,''),dl=GUARD?.ep?.downloads||{};
+  const url=p=>`${server}/api/endpoint-agent/v1/download/${p}`;
+  // One command per platform: download, check the file is the one this server built, install.
+  const linux=dl.linux?.available?`curl -fsSL ${url('linux')} -o securovix-guard && echo "${dl.linux.sha256}  securovix-guard" | sha256sum -c - && chmod +x securovix-guard && sudo ./securovix-guard install --server ${server} --token ${token}`:null;
+  const windows=dl.windows?.available?`Invoke-WebRequest ${url('windows')} -OutFile securovix-guard.exe -UseBasicParsing; if ((Get-FileHash securovix-guard.exe -Algorithm SHA256).Hash -ne '${dl.windows.sha256.toUpperCase()}') { throw 'The download does not match the build on this server.' }; .\\securovix-guard.exe install --server ${server} --token ${token}`:null;
+  const missing='<p style="font-size:12.5px;color:var(--red);margin:4px 0">This server has no build for this platform yet.</p>';
+  showNotice('Add a machine',`<p style="font-size:13px;margin:0 0 6px">Paste one command on the machine. It downloads the agent, checks it is the exact file this server built, and installs it as a service that starts with the machine. The machine shows up here within seconds.</p>
+    <p style="font-size:12px;color:var(--t3);margin:8px 0 2px">Linux server or desktop, Docker hosts included (any distribution, as a user who can sudo)</p>${linux?guardPre(linux):missing}
+    <p style="font-size:12px;color:var(--t3);margin:8px 0 2px">Windows (PowerShell, run as administrator)</p>${windows?guardPre(windows):missing}
+    <p style="font-size:12px;color:var(--t3);margin:8px 0 0">The token works for any number of machines until you create a new one, and is shown only now. Creating a new token stops this one from enrolling more machines; machines already enrolled keep working. To remove the agent later: <code>sudo securovix-guard uninstall</code> (Linux) or <code>&amp; "C:\\Program Files\\Securovix Guard\\securovix-guard.exe" uninstall</code> (Windows).</p>`);
 }
 async function guardMachine(id,type){
   if(type==='isolate-host'&&!confirm('Isolate this machine? It loses all network access except to Securovix until you reconnect it.'))return;
@@ -5784,6 +5800,8 @@ async function guardRetire(id){
 async function guardSavePolicy(){
   const body={ransomware:{}};
   document.querySelectorAll('.gep-pol').forEach(c=>{if(c.disabled)return;if(c.dataset.key==='autoKill')body.ransomware.autoKill=c.checked;else body[c.dataset.key]=c.checked});
+  const extra=document.getElementById('gep-extra');
+  if(extra)body.extraWatch=extra.value.split('\n').map(x=>x.trim()).filter(Boolean);
   try{await api('/guard/endpoints/policy',{method:'POST',body:JSON.stringify(body)});pgGuard()}catch(e){showNotice('Could not save',H(e.detail||e.message))}
 }
 
