@@ -64,6 +64,18 @@ test('production dashboard UI parses and never persists remediation tokens in br
   const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map((match) => match[1]).filter(Boolean);
   assert.ok(scripts.length > 0);
   for (const source of scripts) new Function(source);
+
+  // The side menu hides pages nothing uses yet; every hidden id must be a real page and a real
+  // button, and the pages people do use must stay in the menu.
+  const hidden = JSON.parse(/const HIDDEN_NAV=(\[[^\]]*\])/.exec(html)[1].replaceAll("'", '"'));
+  assert.deepEqual(hidden, ['vuln', 'assistant', 'billing']);
+  const pages = /const PAGES=\{([^}]*)\}/.exec(html)[1].split(',').map((entry) => entry.split(':')[0]);
+  for (const id of hidden) {
+    assert.ok(pages.includes(id), `${id} is still a page, reachable by link`);
+    assert.match(html, new RegExp(`id="n-${id}"`), `${id} has a button to hide`);
+  }
+  for (const id of ['dash', 'new', 'domains', 'team', 'integrations', 'agent', 'code', 'shield', 'cfg', 'developer', 'defender', 'guard'])
+    assert.ok(!hidden.includes(id) && html.includes(`id="n-${id}"`), `${id} stays in the menu`);
 });
 
 test('dashboard APIs require authentication and enforce organization roles', async () => {
