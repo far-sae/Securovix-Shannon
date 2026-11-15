@@ -556,13 +556,29 @@ function makeCollection(localKey, table, fields) {
   const toRow = (record) => Object.fromEntries(entries.map(([camel, snake]) => [snake, record[camel] ?? null]));
   const fromRow = (row) => row && Object.fromEntries(entries.map(([camel, snake]) => [camel, row[snake] ?? null]));
   const matches = (record, filter) => Object.entries(filter).every(([field, value]) => value === undefined || record[field] === value);
+  // Both backends refuse a field the record type does not have. The local store used to accept
+  // anything, so a sort or filter on a missing column passed every test and then failed on
+  // Supabase ("column ... undefined does not exist").
+  const column = (field, what) => {
+    if (!Object.hasOwn(fields, field)) throw new Error(`${table}: "${field}" is not a field of this record type (${what})`);
+    return fields[field];
+  };
+  // Newest first by the first timestamp the record type has; not every type has createdAt.
+  const defaultOrder = ['createdAt', 'enrolledAt', 'addedAt', 'updatedAt'].find((field) => Object.hasOwn(fields, field)) || 'id';
   return {
     async save(record) {
+      // A field with no column would be dropped without a word on Supabase. Under test, say so.
+      if (process.env.NODE_ENV === 'test') {
+        const unmapped = Object.keys(record).filter((key) => !Object.hasOwn(fields, key) && record[key] !== undefined);
+        if (unmapped.length) throw new Error(`${table}: no column for ${unmapped.join(', ')}; the value would be lost`);
+      }
       if (!USE_SUPABASE) {
+        // Keep exactly what Supabase would keep: mapped fields only, missing ones as null.
+        const stored = fromRow(toRow(record));
         const index = local[localKey].findIndex((item) => item.id === record.id);
-        if (index >= 0) local[localKey][index] = record; else local[localKey].push(record);
+        if (index >= 0) local[localKey][index] = stored; else local[localKey].push(stored);
         persist();
-        return record;
+        return stored;
       }
       const rows = await rest(`/${table}`, { method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([toRow(record)]) });
       return fromRow(rows?.[0]);
@@ -572,13 +588,15 @@ function makeCollection(localKey, table, fields) {
       const rows = await rest(`/${table}?id=eq.${encodeURIComponent(id)}&limit=1`);
       return fromRow(rows?.[0]);
     },
-    async list(filter = {}, { orderBy = 'createdAt', limit = 100 } = {}) {
+    async list(filter = {}, { orderBy = defaultOrder, limit = 100 } = {}) {
       const cap = Math.max(1, Math.min(500, Number(limit) || 100));
+      const order = column(orderBy, 'sort');
+      const conditions = Object.entries(filter).filter(([, value]) => value !== undefined);
+      const where = conditions.map(([field, value]) => `${column(field, 'filter')}=eq.${encodeURIComponent(value)}`);
       if (!USE_SUPABASE) {
         return local[localKey].filter((item) => matches(item, filter)).sort((a, b) => (b[orderBy] || 0) - (a[orderBy] || 0)).slice(0, cap);
       }
-      const where = Object.entries(filter).filter(([, value]) => value !== undefined).map(([field, value]) => `${fields[field]}=eq.${encodeURIComponent(value)}`);
-      const rows = await rest(`/${table}?${[...where, `order=${fields[orderBy]}.desc`, `limit=${cap}`].join('&')}`);
+      const rows = await rest(`/${table}?${[...where, `order=${order}.desc`, `limit=${cap}`].join('&')}`);
       return (rows || []).map(fromRow);
     },
     async remove(id) {
