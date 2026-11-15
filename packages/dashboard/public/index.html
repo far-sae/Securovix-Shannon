@@ -1741,6 +1741,12 @@ const PAGES={dash:pgDash,new:pgNew,domains:pgDomains,team:pgTeam,vuln:pgVuln,int
 // Report and live-scan pages have no sidebar button; highlight the section they belong to instead of
 // clearing the nav, which is what used to happen.
 const NAV_FOR={scan:'dash',live:'dash'};
+// Side-menu buttons that are not shown. Nothing on the live site uses these pages yet (no
+// vulnerability data, no assistant conversations, payments switched off), so they only added
+// clutter. The pages still exist and open by link (#vuln, #assistant, #billing); remove an id
+// from this list to show its button again.
+const HIDDEN_NAV=['vuln','assistant','billing'];
+HIDDEN_NAV.forEach(p=>{const b=document.getElementById('n-'+p);if(b)b.remove()});
 function routeHash(p,d){return '#'+p+(d!==undefined&&d!==null&&d!==''?'/'+encodeURIComponent(String(d)):'')}
 function parseHash(){
   const m=/^#([a-z]+)(?:\/(.*))?$/.exec(location.hash||'');
