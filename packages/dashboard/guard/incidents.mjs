@@ -34,6 +34,7 @@ const KIND_ORDER = [
   'evasion',
   'malware',
   'ransomware',
+  'health',
 ];
 
 function uniqueMitre(alerts) {
@@ -151,17 +152,20 @@ export function describeIncident(incident) {
     (a) => `- ${new Date(a.at).toISOString().slice(0, 16).replace('T', ' ')} UTC: ${markdownText(a.explanation)}`,
   );
   const actions = recommendedActions(alerts);
-  const what = isRansomware(alerts)
-    ? 'Treat this as ransomware until proven otherwise. Isolate the machine now (it keeps talking to Securovix only), do not switch it off, and check your backups are offline and intact. Then find how it got in: look at the other alerts on this machine.'
-    : isHostIntrusion(alerts)
-      ? 'Someone is working on this machine by hand: collecting passwords or reaching other machines. Isolate it, then reset the passwords of everyone who signed in to it recently, starting with admins.'
-      : alerts.some((a) => a.host?.id)
-        ? 'Check with whoever uses this machine whether they ran this. If not, stop the process and isolate the machine.'
-        : isTakeoverChain(alerts)
-          ? 'This looks like someone else is using the account. Sign them out everywhere, force a password change, then undo what they set up (rules, app access, roles).'
-          : alerts.some((a) => a.rule === 'exploit-attempt')
-            ? 'Someone is attacking a weakness Shannon already proved. Ship the fix and re-test; until then keep the WAF rule in place.'
-            : 'Check with the person whether this was them. If not, act on the steps below.';
+  const healthOnly = alerts.length > 0 && alerts.every((a) => RULES[a.rule]?.kind === 'health');
+  const what = healthOnly
+    ? 'Nothing here shows an attack. Check that the machine is switched on and connected, and that the Guard service is running. If this machine is often switched off, turn off "Alert when offline" for it on the Guard page.'
+    : isRansomware(alerts)
+      ? 'Treat this as ransomware until proven otherwise. Isolate the machine now (it keeps talking to Securovix only), do not switch it off, and check your backups are offline and intact. Then find how it got in: look at the other alerts on this machine.'
+      : isHostIntrusion(alerts)
+        ? 'Someone is working on this machine by hand: collecting passwords or reaching other machines. Isolate it, then reset the passwords of everyone who signed in to it recently, starting with admins.'
+        : alerts.some((a) => a.host?.id)
+          ? 'Check with whoever uses this machine whether they ran this. If not, stop the process and isolate the machine.'
+          : isTakeoverChain(alerts)
+            ? 'This looks like someone else is using the account. Sign them out everywhere, force a password change, then undo what they set up (rules, app access, roles).'
+            : alerts.some((a) => a.rule === 'exploit-attempt')
+              ? 'Someone is attacking a weakness Shannon already proved. Ship the fix and re-test; until then keep the WAF rule in place.'
+              : 'Check with the person whether this was them. If not, act on the steps below.';
   // Paragraphs are separated by blank lines so Markdown does not fold them into the last bullet.
   const paragraphs = [
     [
@@ -174,11 +178,9 @@ export function describeIncident(incident) {
     paragraphs.push(
       `**Recommended.** ${actions.map((a) => a.label + markdownText(actionTarget(a.params))).join('; ')}.`,
     );
-  paragraphs.push(
-    `**MITRE ATT&CK.** ${uniqueMitre(alerts)
-      .map((m) => `${m.id} ${m.name} (${m.tactic})`)
-      .join('; ')}.`,
-  );
+  const techniques = uniqueMitre(alerts);
+  if (techniques.length)
+    paragraphs.push(`**MITRE ATT&CK.** ${techniques.map((m) => `${m.id} ${m.name} (${m.tactic})`).join('; ')}.`);
   const summary = paragraphs.join('\n\n');
   return { title, summary, actions };
 }
@@ -236,19 +238,25 @@ export function groupAlerts(openIncidents, alerts, { orgId, now = Date.now() } =
     incident.alertCount = (incident.alertCount || 0) + 1;
     incident.lastSeenAt = Math.max(incident.lastSeenAt, alert.at);
     incident.firstSeenAt = Math.min(incident.firstSeenAt, alert.at);
-    incident.severity = incident.alerts.reduce((s, a) => maxSeverity(s, a.severity), 'info');
-    if (isTakeoverChain(incident.alerts) || isRansomware(incident.alerts) || isHostIntrusion(incident.alerts))
-      incident.severity = 'critical';
-    incident.mitre = uniqueMitre(incident.alerts);
-    incident.kinds = [...new Set(incident.alerts.map((a) => RULES[a.rule]?.kind))].sort(
-      (a, b) => KIND_ORDER.indexOf(a) - KIND_ORDER.indexOf(b),
-    );
-    Object.assign(incident, describeIncident(incident));
-    incident.aiSummary = null; // stale once new evidence arrives
-    incident.updatedAt = now;
+    rebuildIncident(incident, now);
     changed.set(incident.id, incident);
   }
   return { changed: [...changed.values()], created };
+}
+
+/** Recomputes everything derived from an incident's alerts: severity, techniques, title, summary. */
+export function rebuildIncident(incident, now = Date.now()) {
+  incident.severity = incident.alerts.reduce((s, a) => maxSeverity(s, a.severity), 'info');
+  if (isTakeoverChain(incident.alerts) || isRansomware(incident.alerts) || isHostIntrusion(incident.alerts))
+    incident.severity = 'critical';
+  incident.mitre = uniqueMitre(incident.alerts);
+  incident.kinds = [...new Set(incident.alerts.map((a) => RULES[a.rule]?.kind))].sort(
+    (a, b) => KIND_ORDER.indexOf(a) - KIND_ORDER.indexOf(b),
+  );
+  Object.assign(incident, describeIncident(incident));
+  incident.aiSummary = null; // stale once the evidence changes
+  incident.updatedAt = now;
+  return incident;
 }
 
 export function publicIncident(incident) {

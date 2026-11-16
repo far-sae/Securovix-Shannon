@@ -20,6 +20,8 @@ mod ransomware;
 mod respond;
 mod service;
 mod shared;
+#[cfg(unix)]
+mod sig;
 mod util;
 mod winlog;
 
@@ -109,6 +111,8 @@ fn main() {
                 std::process::exit(1)
             };
             println!("Securovix Guard {} running as {} against {}", env!("CARGO_PKG_VERSION"), config.agent_id, config.server);
+            #[cfg(unix)]
+            sig::install();
             let shared = Arc::new(shared::Shared::new(config));
             agent::run(shared.clone());
             shared.stop.store(true, Ordering::SeqCst);
@@ -125,6 +129,19 @@ fn main() {
             None => println!("not enrolled"),
         },
         Some("selftest-ransomware") => selftest(&args),
+        // What Guard would report about an autostart command: the program it starts, where a
+        // Store app shortcut points, and who signed it. Reads only; needs no administrator rights.
+        #[cfg(windows)]
+        Some("inspect-autostart") => {
+            let command = args.get(2).cloned().unwrap_or_else(|| usage());
+            let described = persistence::describe(event::Persistence { kind: "run-key".into(), name: "inspect".into(), command, ..Default::default() });
+            println!("program   {}", persistence::locate_program(&described.command).unwrap_or_else(|| "(a bare name, found through PATH)".into()));
+            println!("resolved  {}", described.resolved.as_deref().unwrap_or("-"));
+            match described.signer {
+                Some(s) => println!("signer    {} {}", s.status, s.subject.unwrap_or_default()),
+                None => println!("signer    not checked (a protected folder, a shortcut, or no such file)"),
+            }
+        }
         _ => usage(),
     }
 }

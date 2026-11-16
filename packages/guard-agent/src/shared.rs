@@ -16,6 +16,9 @@ pub struct Shared {
     pub canaries: Mutex<HashSet<std::path::PathBuf>>,
     pub watched: Mutex<usize>,
     pub submitted: Mutex<HashSet<String>>,
+    /// When this process started. Sent with every check-in so the server can tell an agent that
+    /// was restarted from one that is still on its way down.
+    pub started_at: u64,
 }
 
 impl Shared {
@@ -31,6 +34,7 @@ impl Shared {
             canaries: Mutex::new(HashSet::new()),
             watched: Mutex::new(0),
             submitted: Mutex::new(HashSet::new()),
+            started_at: crate::util::now_ms(),
         }
     }
 

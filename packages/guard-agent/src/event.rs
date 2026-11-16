@@ -42,13 +42,30 @@ pub struct FileInfo {
     pub entropy: Option<f64>,
 }
 
+/// Who signed a program: "valid", "unsigned" or "invalid" (signed, but the signature fails).
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct Signer {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+}
+
 #[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Persistence {
     pub kind: String,
     pub name: String,
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer: Option<Signer>,
+    /// Where a Store app shortcut really points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<String>,
+    /// The package that installed the file (Linux).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_owner: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -141,6 +158,23 @@ mod tests {
         let json = serde_json::to_string(&q.take(1)[0]).unwrap();
         assert!(json.contains("\"type\":\"process.start\""));
         assert!(!json.contains("process\":"), "empty sections are omitted");
+    }
+
+    #[test]
+    fn autostart_details_use_server_field_names() {
+        let mut e = Event::new("persistence.created");
+        e.persistence = Some(Persistence {
+            kind: "run-key".into(),
+            name: "App".into(),
+            command: "C:\\x\\app.exe".into(),
+            signer: Some(Signer { status: "valid".into(), subject: Some("Example Ltd".into()) }),
+            package_owner: Some("pkg".into()),
+            ..Default::default()
+        });
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"signer\":{\"status\":\"valid\",\"subject\":\"Example Ltd\"}"), "{json}");
+        assert!(json.contains("\"packageOwner\":\"pkg\""));
+        assert!(!json.contains("resolved"), "empty details are omitted");
     }
 
     #[test]

@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Windows allows command lines up to 32,767 characters. Sent whole, so a hidden (encoded)
+/// script can be read to its last line instead of being cut off part-way.
+pub const MAX_CMDLINE: usize = 32_768;
+
 pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }

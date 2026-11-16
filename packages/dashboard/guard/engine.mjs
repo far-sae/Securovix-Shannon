@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { ACTIONS, PROVIDERS, RULES, SEVERITY_RANK } from './catalog.mjs';
 import { detect, emptyOrgState, exploitAttempts } from './detect.mjs';
-import { groupAlerts, publicIncident, recommendedActions, securityScore } from './incidents.mjs';
+import { groupAlerts, publicIncident, rebuildIncident, recommendedActions, securityScore } from './incidents.mjs';
 
 const DAY = 86_400_000;
 
@@ -543,6 +543,36 @@ export function createGuardEngine({
     return publicIncident(saved);
   }
 
+  // A command or file was marked as expected: take every alert with that fingerprint out of the
+  // open incidents. An incident left with no alerts is closed, with a note saying why.
+  async function dropExpected(orgId, fp, { actor = null } = {}) {
+    return withLock(orgId, async () => {
+      let removed = 0;
+      let closed = 0;
+      for (const incident of await openIncidents(orgId)) {
+        const all = incident.alerts || [];
+        const keep = all.filter((a) => a.trust?.fp !== fp);
+        if (keep.length === all.length) continue;
+        removed += all.length - keep.length;
+        if (!keep.length) {
+          closed += 1;
+          await store.incidents.save({
+            ...incident,
+            status: 'closed',
+            closedAt: now(),
+            closedBy: actor,
+            closeNote: 'Every alert in this incident was marked as expected.',
+            updatedAt: now(),
+          });
+          continue;
+        }
+        await store.incidents.save(rebuildIncident({ ...incident, alerts: keep, alertCount: keep.length }, now()));
+        await refreshContainment(orgId, incident.id);
+      }
+      return { removed, closed };
+    });
+  }
+
   // Disconnects a tenant. With `purge` it also removes everything that connection produced: its
   // incidents, the actions taken on them, the blocklist entries those actions added, and the
   // per-person baselines learned for its domains. An incident that also holds alerts from another
@@ -651,6 +681,7 @@ export function createGuardEngine({
     runAction,
     undoAction,
     closeIncident,
+    dropExpected,
     overview,
     listConnections,
     removeConnection,

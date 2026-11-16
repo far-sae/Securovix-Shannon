@@ -20,6 +20,16 @@ use sysinfo::{ProcessRefreshKind, System, UpdateKind};
 
 pub const CANARY_NAMES: &[&str] = &["0000-securovix-canary.docx", "0000-securovix-canary.xlsx"];
 
+fn canary_text() -> String {
+    "Securovix Guard decoy file. Please leave it in place: Guard watches it to catch ransomware early.\n".repeat(20)
+}
+
+/// True when a decoy still holds exactly what Guard wrote. Backup tools, indexers and antivirus
+/// scans touch a file's attributes and timestamps without changing a byte; that is not an attack.
+pub fn canary_intact(path: &Path) -> bool {
+    std::fs::read(path).map(|bytes| bytes == canary_text().as_bytes()).unwrap_or(false)
+}
+
 /// Document folders of every profile on the machine, plus the policy's extra folders.
 pub fn watch_dirs(user_folders: bool, extra: &[String]) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -61,8 +71,7 @@ pub fn plant_canaries(dirs: &[PathBuf]) -> Vec<PathBuf> {
         for name in CANARY_NAMES {
             let path = dir.join(name);
             if !path.exists() {
-                let text = "Securovix Guard decoy file. Please leave it in place: Guard watches it to catch ransomware early.\n".repeat(20);
-                if std::fs::write(&path, text).is_err() {
+                if std::fs::write(&path, canary_text()).is_err() {
                     continue;
                 }
                 #[cfg(windows)]
@@ -111,6 +120,19 @@ fn suspect(sys: &mut System) -> Option<(u32, String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_decoy_that_was_only_touched_is_intact() {
+        let dir = std::env::temp_dir().join(format!("svx-canary-test-{}", crate::util::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let planted = plant_canaries(std::slice::from_ref(&dir));
+        assert_eq!(planted.len(), CANARY_NAMES.len());
+        assert!(canary_intact(&planted[0]), "freshly planted");
+        std::fs::write(&planted[0], b"\x13\x37 encrypted").unwrap();
+        assert!(!canary_intact(&planted[0]), "rewritten");
+        assert!(!canary_intact(&dir.join("gone.docx")), "missing counts as changed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_new_programs_from_user_writable_folders_can_be_stopped() {
@@ -237,6 +259,9 @@ pub fn run(shared: Arc<Shared>) {
                 }
                 continue;
             }
+            if crate::ransomware::noisy(&to) {
+                continue; // a tool's own folder (.git, node_modules, caches)
+            }
             if crate::util::extension(&from) != crate::util::extension(&to) {
                 // Ransomware writes then renames at once, so the write event's path is often gone
                 // by the time it is read. Judge the content under its new name instead.
@@ -252,9 +277,13 @@ pub fn run(shared: Arc<Shared>) {
                         }
                     }
                 }
-                let mut e = Event::new("file.rename");
-                e.file = Some(FileInfo { path: to.to_string_lossy().into(), old_path: Some(from.to_string_lossy().into()), ..Default::default() });
-                shared.emit(e);
+                // Only renames that could be encryption are sent: a document given an unfamiliar
+                // or an added extension. Downloads finishing and Office saving are not.
+                if crate::ransomware::suspicious_rename(&from, &to) {
+                    let mut e = Event::new("file.rename");
+                    e.file = Some(FileInfo { path: to.to_string_lossy().into(), old_path: Some(from.to_string_lossy().into()), ..Default::default() });
+                    shared.emit(e);
+                }
                 if let Some(v) = detector.on_rename(now, &from, &to) {
                     respond(&shared, &mut sys, v, "ransomware.detected", FileInfo { path: to.to_string_lossy().into(), old_path: Some(from.to_string_lossy().into()), ..Default::default() }, "renamed");
                 }
@@ -276,9 +305,15 @@ pub fn run(shared: Arc<Shared>) {
                         continue;
                     }
                     if is_canary(p) {
+                        if canary_intact(p) {
+                            continue; // only its attributes or timestamps were touched
+                        }
                         if let Some(v) = detector.on_canary(now, "modified") {
                             respond(&shared, &mut sys, v, "canary.touched", FileInfo { path: p.to_string_lossy().into(), ..Default::default() }, "modified");
                         }
+                        continue;
+                    }
+                    if crate::ransomware::noisy(p) {
                         continue;
                     }
                     if last_checked.get(p).is_some_and(|t| now.saturating_sub(*t) < 2000) {

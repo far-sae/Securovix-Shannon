@@ -128,7 +128,7 @@ fn check_in(shared: &Arc<Shared>, client: &Client, sys: &mut System) {
         let c = shared.config.read().unwrap();
         (c.policy.version, c.hash_version, c.isolated)
     };
-    let body = json!({ "version": env!("CARGO_PKG_VERSION"), "policyVersion": policy_version, "hashVersion": hash_version, "isolated": isolated, "stats": own_stats(sys, shared) });
+    let body = json!({ "version": env!("CARGO_PKG_VERSION"), "policyVersion": policy_version, "hashVersion": hash_version, "isolated": isolated, "startedAt": shared.started_at, "stats": own_stats(sys, shared) });
     let Ok(reply) = client.check_in(body) else { return };
     if reply.policy.is_some() || reply.hashes.is_some() {
         let mut c = shared.config.write().unwrap();
@@ -160,6 +160,17 @@ pub fn run(shared: Arc<Shared>) {
     let mut last_checkin = Instant::now() - Duration::from_secs(3600);
     let mut last_flush = Instant::now();
     while !shared.stopping() {
+        #[cfg(unix)]
+        if crate::sig::terminated() {
+            // systemd stops every service when the machine shuts down; otherwise someone stopped Guard.
+            if crate::sig::system_stopping() {
+                report_offline(&shared, "shutdown");
+            } else {
+                report_stop(&shared, "the Guard service was stopped on this machine");
+            }
+            shared.stop.store(true, Ordering::SeqCst);
+            break;
+        }
         let policy = shared.policy();
         let urgent = shared.urgent.swap(false, Ordering::SeqCst);
         if urgent || last_flush.elapsed() >= Duration::from_secs(policy.flush_seconds.max(1)) {
@@ -187,5 +198,17 @@ pub fn report_stop(shared: &Arc<Shared>, reason: &str) {
     };
     let mut event = Event::new("agent.tamper");
     event.detail = Some(json!({ "reason": reason }));
-    let _ = Client::new(&server, &token).send_events(&[event]);
+    let _ = Client::quick(&server, &token).send_events(&[event]);
+}
+
+/// Sent just before the machine shuts down or goes to sleep ("shutdown", "sleep"), so the
+/// silence that follows is shown as "offline" instead of raising an alert.
+pub fn report_offline(shared: &Arc<Shared>, reason: &str) {
+    let (server, token) = {
+        let c = shared.config.read().unwrap();
+        (c.server.clone(), c.token.clone())
+    };
+    let mut event = Event::new("agent.offline");
+    event.detail = Some(json!({ "reason": reason }));
+    let _ = Client::quick(&server, &token).send_events(&[event]);
 }

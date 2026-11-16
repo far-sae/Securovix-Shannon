@@ -5761,8 +5761,8 @@ async function guardSaveAutopilot(){
 function guardEndpointsCard(ep){
   const pol=ep.policy||{},rw=pol.ransomware||{};
   const row=a=>`<div style="padding:9px 0;border-bottom:1px solid var(--brd);display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap">
-    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${a.online?'var(--acc2)':'var(--t3)'};margin-right:6px" title="${a.online?'online':'offline'}"></span><b>${H(a.hostname)}</b> <small style="color:var(--t3)">${H(a.os||'')} · agent ${H(a.version||'')} · ${a.online?'online':'last seen '+asWhen(a.lastSeenAt)}${a.stats?` · ${a.stats.cpuPercent??'?'}% CPU, ${a.stats.memoryMb??'?'} MB${a.stats.sysmon?' · Sysmon':''}`:''}</small>${a.isolated?' <b style="color:var(--red);font-size:12px">ISOLATED</b>':''}</span>
-    <span style="display:flex;gap:6px;flex-wrap:wrap">${ep.canRespond?(a.isolated?`<button class="btn" onclick="guardMachine('${a.id}','release-host')">Reconnect</button>`:`<button class="btn" onclick="guardMachine('${a.id}','isolate-host')">Isolate</button>`):''}${ep.canManage?`<button class="btn" onclick="guardRetire('${a.id}')">Retire</button>`:''}</span></div>`;
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${a.online?'var(--acc2)':'var(--t3)'};margin-right:6px" title="${a.online?'online':'offline'}"></span><b>${H(a.hostname)}</b> <small style="color:var(--t3)">${H(a.os||'')} · agent ${H(a.version||'')} · ${a.online?'online':'last seen '+asWhen(a.lastSeenAt)+(a.offlineReason?` (${H({shutdown:'shut down',sleep:'asleep',upgrade:'updating',restart:'restarting'}[a.offlineReason]||a.offlineReason)})`:'')}${a.stats?` · ${a.stats.cpuPercent??'?'}% CPU, ${a.stats.memoryMb??'?'} MB${a.stats.sysmon?' · Sysmon':''}`:''}</small>${a.isolated?' <b style="color:var(--red);font-size:12px">ISOLATED</b>':''}</span>
+    <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${ep.canManage?`<label style="font-size:12px;color:var(--t2);display:flex;align-items:center;gap:4px;margin-right:4px" title="On for servers that should never be off. Off for PCs and laptops, which are closed and switched off every day: they just show as offline."><input type="checkbox" ${a.expectOnline?'checked':''} onchange="guardExpectOnline('${a.id}',this.checked)"> Alert if offline</label>`:''}${ep.canRespond?(a.isolated?`<button class="btn" onclick="guardMachine('${a.id}','release-host')">Reconnect</button>`:`<button class="btn" onclick="guardMachine('${a.id}','isolate-host')">Isolate</button>`):''}${ep.canManage?`<button class="btn" onclick="guardRetire('${a.id}')">Retire</button>`:''}</span></div>`;
   const toggle=(key,label,checked,disabled)=>`<label style="display:block;margin:4px 0;font-size:13px${disabled?';color:var(--t3)':''}"><input type="checkbox" class="gep-pol" data-key="${key}" ${checked?'checked':''} ${disabled?'disabled':''}> ${label}</label>`;
   const verdict=v=>v==='malicious'?'<b style="color:var(--red)">malicious</b>':v==='suspicious'?'<b style="color:var(--amber,#f5b942)">suspicious</b>':v?H(v):'—';
   return `<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Laptops and servers</h2><small>${ep.agents.filter(a=>a.online).length} of ${ep.agents.length} online</small></div>
@@ -5779,8 +5779,15 @@ function guardEndpointsCard(ep){
       <textarea id="gep-extra" rows="3" style="width:100%;box-sizing:border-box;background:var(--s1);color:var(--t0);border:1px solid var(--brd);border-radius:8px;padding:8px;font:12.5px ui-monospace,monospace" placeholder="/srv/data&#10;/var/www&#10;D:\\Shared">${H((pol.extraWatch||[]).join('\n'))}</textarea>
       <p style="font-size:12px;color:var(--t3);margin:4px 0 0">People's Documents, Desktop, Downloads and Pictures are always watched. A server has none of those, so list the folders that hold its data (for a Docker host, the folders you mount into containers). Machines start watching a new folder at their next check-in; a folder that does not exist on a machine is skipped there.</p>
       <button class="btn btn-p" style="margin-top:6px" onclick="guardSavePolicy()">Save settings</button></details>`:''}
+    ${(ep.expected||[]).length?`<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--t2)">Marked as expected · ${ep.expected.length}</summary>
+      <p style="font-size:12px;color:var(--t3);margin:6px 0">Guard does not alert on these commands and files. Remove one to be alerted again.</p>
+      ${ep.expected.map(x=>`<div style="padding:6px 0;border-bottom:1px solid var(--brd);display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap;font-size:12.5px"><span style="word-break:break-all"><code>${H(x.label||'')}</code><br><small style="color:var(--t3)">${asWhen(x.at)}${x.by?' · '+H(x.by):''}</small></span>${ep.canManage?`<button class="btn" onclick="guardUnexpected('${H(x.fp)}')">Remove</button>`:''}</div>`).join('')}</details>`:''}
     <details style="margin-top:10px" ${ep.samples.length?'open':''}><summary style="cursor:pointer;font-size:13px;color:var(--t2)">Malware sandbox · ${ep.sandbox.configured?'connected':'not configured'} · ${ep.sandbox.knownMaliciousHashes} known-malicious file${ep.sandbox.knownMaliciousHashes===1?'':'s'} blocked on every machine</summary>
       ${ep.samples.length?`<div style="overflow-x:auto"><table style="width:100%;font-size:12.5px;border-collapse:collapse;margin-top:6px">${ep.samples.map(x=>`<tr><td style="padding:4px 8px">${H(x.filename||'')}</td><td style="padding:4px 8px">${H(x.hostname||'')}</td><td style="padding:4px 8px">${verdict(x.verdict)}${x.family?' · '+H(x.family):''}${x.score!=null?' · '+Math.round(x.score*100)+'%':''}</td><td style="padding:4px 8px;color:var(--t3)">${H(x.status)}${x.error?' · '+H(x.error):''}</td><td style="padding:4px 8px;color:var(--t3)">${asWhen(x.createdAt)}</td></tr>`).join('')}</table></div>`:`<p style="color:var(--t3);font-size:13px;margin:6px 0 0">${ep.sandbox.configured?'No files analysed yet.':'Set SHANNON_CAPE_URL to a CAPE sandbox to analyse files. Known-malicious hashes are still blocked.'}</p>`}</details></section>`;
+}
+async function guardExpectOnline(id,value){
+  try{await api(`/guard/endpoints/${encodeURIComponent(id)}/expect-online`,{method:'POST',body:JSON.stringify({value})})}catch(e){showNotice('Could not save',H(e.detail||e.message))}
+  pgGuard();
 }
 async function guardAddMachine(){
   let token;try{token=(await api('/guard/endpoints/enroll-token',{method:'POST'})).token}catch(e){showNotice('Could not create a token',H(e.detail||e.message));return}
@@ -5827,6 +5834,7 @@ async function guardIncidentView(id){
   const ev=e=>`<tr><td style="padding:4px 8px;white-space:nowrap">${asWhen(e.at)}</td><td style="padding:4px 8px">${H(e.type||'')}</td><td style="padding:4px 8px">${H(e.user||'')}</td><td style="padding:4px 8px"><code>${H(e.ip||'')}</code></td><td style="padding:4px 8px">${H(e.place||'')}</td><td style="padding:4px 8px">${H(e.outcome||'')}</td></tr>`;
   const alert=a=>`<div style="padding:10px 0;border-bottom:1px solid var(--brd)"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${sevBadge(a.severity)} <b>${H(a.title)}</b> <small style="color:var(--t3)">${asWhen(a.at)}</small></div>
       <p style="font-size:13px;color:var(--t1);margin:6px 0">${H(a.explanation)}</p>${guardMitre(a.mitre)}
+      ${a.trust&&i.status!=='closed'&&out.canManage?`<p style="margin:6px 0 0"><button class="btn" onclick="guardExpected('${i.id}','${a.id}')">This is expected</button> <small style="color:var(--t3)">Stops Guard alerting on this exact ${a.trust.fp.startsWith('file:')?'file':'command'} on every machine.</small></p>`:''}
       <details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px;color:var(--t3)">Evidence (${(a.evidence||[]).length})</summary><div style="overflow-x:auto"><table style="font-size:12px;border-collapse:collapse;margin-top:6px">${(a.evidence||[]).map(ev).join('')}</table></div></details></div>`;
   M.innerHTML=`<div class="pg sec-page">
     <p style="margin:0 0 10px"><a href="#guard" style="color:var(--acc2)">← All incidents</a></p>
@@ -5841,6 +5849,20 @@ async function guardIncidentView(id){
     ${out.actionsTaken.length?`<section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Actions taken</h2><small>${out.actionsTaken.length}</small></div>${out.actionsTaken.map(taken).join('')}</section>`:''}
     <section class="sec-card"><div class="sec-card-head"><h2>Alerts</h2><small>${(i.alerts||[]).length} · ${guardMitre(i.mitre).length?'MITRE ATT&amp;CK mapped':''}</small></div>${[...(i.alerts||[])].sort((a,b)=>a.at-b.at).map(alert).join('')}</section>
   </div>`;
+}
+async function guardExpected(incidentId,alertId){
+  const a=(GUARD_INC?.incident?.alerts||[]).find(x=>x.id===alertId);if(!a?.trust)return;
+  if(!confirm(`Mark this as expected?\n\n${a.trust.label}\n\nGuard will stop alerting on it on every machine, and matching alerts are removed from open incidents. You can undo this on the Guard page under "Marked as expected".`))return;
+  try{
+    const r=await api('/guard/endpoints/expected',{method:'POST',body:JSON.stringify({incidentId,alertId})});
+    if(r.closed){await go('guard');showNotice('Marked as expected',`Removed ${r.removed} alert${r.removed===1?'':'s'}. The incident had nothing else in it, so it was closed.`)}
+    else{await guardIncidentView(incidentId);showNotice('Marked as expected',`Removed ${r.removed} alert${r.removed===1?'':'s'} from open incidents.`)}
+  }catch(e){showNotice('Could not save',H(e.detail||e.message))}
+}
+async function guardUnexpected(fp){
+  if(!confirm('Start alerting on this again?'))return;
+  try{await api(`/guard/endpoints/expected/${encodeURIComponent(fp)}`,{method:'DELETE'})}catch(e){showNotice('Could not save',H(e.detail||e.message))}
+  pgGuard();
 }
 async function guardAct(idx){
   const i=GUARD_INC.incident,a=i.actions[idx];if(!a)return;

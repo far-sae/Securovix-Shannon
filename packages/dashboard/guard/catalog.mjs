@@ -43,6 +43,30 @@ export const MITRE = Object.freeze({
   T1047: { id: 'T1047', name: 'Windows Management Instrumentation', tactic: 'Execution' },
   T1562_1: { id: 'T1562.001', name: 'Impair Defenses: Disable or Modify Tools', tactic: 'Defense Evasion' },
   T1070_1: { id: 'T1070.001', name: 'Indicator Removal: Clear Windows Event Logs', tactic: 'Defense Evasion' },
+  T1070_3: { id: 'T1070.003', name: 'Indicator Removal: Clear Command History', tactic: 'Defense Evasion' },
+  T1070_4: { id: 'T1070.004', name: 'Indicator Removal: File Deletion', tactic: 'Defense Evasion' },
+  T1562_2: { id: 'T1562.002', name: 'Impair Defenses: Disable Windows Event Logging', tactic: 'Defense Evasion' },
+  T1562_4: { id: 'T1562.004', name: 'Impair Defenses: Disable or Modify System Firewall', tactic: 'Defense Evasion' },
+  T1003_8: { id: 'T1003.008', name: 'OS Credential Dumping: /etc/passwd and /etc/shadow', tactic: 'Credential Access' },
+  T1021_3: { id: 'T1021.003', name: 'Remote Services: Distributed Component Object Model', tactic: 'Lateral Movement' },
+  T1036_5: { id: 'T1036.005', name: 'Masquerading: Match Legitimate Name or Location', tactic: 'Defense Evasion' },
+  T1036_7: { id: 'T1036.007', name: 'Masquerading: Double File Extension', tactic: 'Defense Evasion' },
+  T1059_4: { id: 'T1059.004', name: 'Command and Scripting Interpreter: Unix Shell', tactic: 'Execution' },
+  T1059_5: { id: 'T1059.005', name: 'Command and Scripting Interpreter: Visual Basic', tactic: 'Execution' },
+  T1059_7: { id: 'T1059.007', name: 'Command and Scripting Interpreter: JavaScript', tactic: 'Execution' },
+  T1098_4: { id: 'T1098.004', name: 'Account Manipulation: SSH Authorized Keys', tactic: 'Persistence' },
+  T1136_1: { id: 'T1136.001', name: 'Create Account: Local Account', tactic: 'Persistence' },
+  T1496: { id: 'T1496', name: 'Resource Hijacking', tactic: 'Impact' },
+  T1505_3: { id: 'T1505.003', name: 'Server Software Component: Web Shell', tactic: 'Persistence' },
+  T1546_3: {
+    id: 'T1546.003',
+    name: 'Event Triggered Execution: WMI Event Subscription',
+    tactic: 'Persistence',
+  },
+  T1546_4: { id: 'T1546.004', name: 'Event Triggered Execution: Unix Shell Configuration', tactic: 'Persistence' },
+  T1546_8: { id: 'T1546.008', name: 'Event Triggered Execution: Accessibility Features', tactic: 'Persistence' },
+  T1547_4: { id: 'T1547.004', name: 'Boot or Logon Autostart: Winlogon Helper DLL', tactic: 'Persistence' },
+  T1574_6: { id: 'T1574.006', name: 'Hijack Execution Flow: Dynamic Linker Hijacking', tactic: 'Persistence' },
 });
 
 // kind: what the rule is about. 'signin' rules plus a 'persistence' rule on the same person is
@@ -169,11 +193,43 @@ export const RULES = Object.freeze({
     mitre: ['T1218', 'T1105'],
     actions: ['kill-process', 'collect-file'],
   },
+  // The id is kept from when this rule fired on any encoded command. It now fires on what the
+  // PowerShell does (after decoding): running downloaded or unpacked code, obfuscation, attack tools.
   'encoded-powershell': {
-    title: 'Hidden or downloaded PowerShell',
+    title: 'PowerShell running hidden or downloaded code',
     kind: 'execution',
     mitre: ['T1059_1'],
     actions: ['kill-process'],
+  },
+  'reverse-shell': {
+    title: 'Remote command shell opened',
+    kind: 'execution',
+    mitre: ['T1059_4'],
+    actions: ['isolate-host', 'kill-process'],
+  },
+  'risky-script': {
+    title: 'Script run from a folder any user can write to',
+    kind: 'execution',
+    mitre: ['T1059_5'],
+    actions: ['kill-process', 'quarantine-file', 'collect-file'],
+  },
+  masquerading: {
+    title: 'Program disguised as something else',
+    kind: 'execution',
+    mitre: ['T1036_5'],
+    actions: ['kill-process', 'quarantine-file', 'collect-file'],
+  },
+  webshell: {
+    title: 'Web server started a command shell',
+    kind: 'execution',
+    mitre: ['T1505_3'],
+    actions: ['isolate-host', 'kill-process'],
+  },
+  cryptominer: {
+    title: 'Cryptocurrency miner',
+    kind: 'malware',
+    mitre: ['T1496'],
+    actions: ['kill-process', 'quarantine-file', 'isolate-host'],
   },
   'office-spawned-shell': {
     title: 'Office document started a shell',
@@ -216,6 +272,14 @@ export const RULES = Object.freeze({
     kind: 'evasion',
     mitre: ['T1562_1'],
     actions: ['isolate-host'],
+  },
+  // A machine marked "should stay on" went quiet without saying it was shutting down. This is a
+  // health notice, not evidence of an attack: it carries no technique and recommends no action.
+  'agent-offline': {
+    title: 'Machine stopped reporting',
+    kind: 'health',
+    mitre: [],
+    actions: [],
   },
 });
 
