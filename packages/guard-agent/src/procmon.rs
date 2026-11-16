@@ -101,7 +101,7 @@ pub fn run(shared: Arc<Shared>) {
                     ppid: proc_.parent().map(|p| p.as_u32()),
                     name: proc_.name().to_string(),
                     path: path.clone(),
-                    cmdline: Some(crate::util::truncate(&proc_.cmd().join(" "), 8192)).filter(|c| !c.is_empty()),
+                    cmdline: Some(crate::util::truncate(&proc_.cmd().join(" "), crate::util::MAX_CMDLINE)).filter(|c| !c.is_empty()),
                     user: proc_.user_id().and_then(|u| users.get_user_by_id(u)).map(|u| u.name().to_string()),
                     sha256: sha.clone(),
                     parents,

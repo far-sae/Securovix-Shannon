@@ -9,7 +9,14 @@
 // every customer (hash, family and verdict only — never the file name or who submitted it).
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { ACTIONS } from './catalog.mjs';
-import { detectEndpoint, emptyHostState, staleAgentAlerts } from './endpoint-detect.mjs';
+import {
+  ENDPOINT_DEFAULTS,
+  detectEndpoint,
+  emptyHostState,
+  expectsOnline,
+  staleAgentAlerts,
+  stoppedAgentAlert,
+} from './endpoint-detect.mjs';
 import { classify } from './sandbox.mjs';
 
 const MIN = 60_000;
@@ -25,11 +32,13 @@ const EVENT_TYPES = new Set([
   'lsass.access',
   'logon',
   'agent.tamper',
+  'agent.offline',
   'malware.blocked',
   'net.connect',
 ]);
 export const MAX_SAMPLE_BYTES = 32 * 1024 * 1024;
 const COMMAND_TTL = 24 * HOUR;
+const SIGNER_STATES = new Set(['valid', 'invalid', 'unsigned', 'unknown']);
 
 export function defaultPolicy({ sandbox = false } = {}) {
   return {
@@ -91,7 +100,7 @@ export function sanitizeEvents(agent, events, now = Date.now()) {
             ppid: Number.isFinite(Number(p.ppid)) ? Number(p.ppid) : null,
             name: str(p.name, 260),
             path: str(p.path, 1024),
-            cmdline: str(p.cmdline, 8192),
+            cmdline: str(p.cmdline, 32_768),
             user: str(p.user, 200),
             sha256: /^[a-f0-9]{64}$/i.test(p.sha256 || '') ? p.sha256.toLowerCase() : null,
             parents: (Array.isArray(p.parents) ? p.parents : [])
@@ -111,8 +120,15 @@ export function sanitizeEvents(agent, events, now = Date.now()) {
         ? {
             kind: str(raw.persistence.kind, 40),
             name: str(raw.persistence.name, 260),
-            command: str(raw.persistence.command, 2048),
+            command: str(raw.persistence.command, 4096),
             path: str(raw.persistence.path, 1024),
+            // Who signed the program (Windows) or which package owns the file (Linux), when the
+            // agent could tell. 'resolved' is where a Store app shortcut really points.
+            signer: SIGNER_STATES.has(raw.persistence.signer?.status)
+              ? { status: raw.persistence.signer.status, subject: str(raw.persistence.signer.subject, 200) }
+              : undefined,
+            resolved: str(raw.persistence.resolved, 1024) || undefined,
+            packageOwner: str(raw.persistence.packageOwner, 120) || undefined,
           }
         : undefined,
       logon: raw.logon
@@ -230,8 +246,15 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
       updatedAt: now(),
     };
     await store.agents.save(agent);
-    const policy = (await endpointRecord(parsed.orgId)).policy;
-    return { agentId: agent.id, token: `svxa_${agent.id}.${raw}`, policy };
+    const current = await endpointRecord(parsed.orgId);
+    // A reinstall explains a stop that was waiting to be reported.
+    if (existing && current.hosts[agent.id]?.pendingStop)
+      await withLock(parsed.orgId, async () => {
+        const fresh = await endpointRecord(parsed.orgId);
+        if (fresh.hosts[agent.id]) fresh.hosts[agent.id].pendingStop = undefined;
+        await store.endpoint.save({ ...fresh, updatedAt: now() });
+      });
+    return { agentId: agent.id, token: `svxa_${agent.id}.${raw}`, policy: current.policy };
   }
 
   async function authenticate(header) {
@@ -271,6 +294,7 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
     ).filter((c) => c.status === 'queued' || (c.status === 'sent' && now() - c.sentAt > 2 * MIN));
     for (const command of queued) await store.commands.save({ ...command, status: 'sent', sentAt: now() });
     const record = await endpointRecord(agent.orgId);
+    if (record.hosts[agent.id]?.pendingStop) await settleStop(updated, body);
     const hashes = await knownHashes();
     return {
       serverTime: now(),
@@ -281,6 +305,29 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
       policy: Number(body.policyVersion) === record.policy.version ? undefined : record.policy,
       hashes: Number(body.hashVersion) === hashes.version ? undefined : { version: hashes.version, list: hashes.list },
     };
+  }
+
+  // The Guard service was stopped by hand and the agent is talking again. A new version or a
+  // reinstall explains it; the same agent coming back unchanged means someone switched Guard off
+  // for a while, which is worth knowing even though it is running again.
+  async function settleStop(agent, body = {}) {
+    const alert = await withLock(agent.orgId, async () => {
+      const record = await endpointRecord(agent.orgId);
+      const pending = record.hosts[agent.id]?.pendingStop;
+      if (!pending) return null;
+      const startedAt = Number(body.startedAt);
+      // The stopping agent can still send one last check-in: only a process that started after
+      // the stop (or, for agents that do not say, a check-in a few seconds later) is "back".
+      const back = Number.isFinite(startedAt) && startedAt > 0 ? startedAt > pending.at : now() - pending.at > 5000;
+      if (!back) return null;
+      record.hosts[agent.id].pendingStop = undefined;
+      await store.endpoint.save({ ...record, updatedAt: now() });
+      const sameVersion = (str(body.version, 40) || agent.version) === pending.version;
+      return sameVersion && !pending.reported
+        ? stoppedAgentAlert(agent, pending, { orgId: agent.orgId, now: now(), back: true })
+        : null;
+    });
+    if (alert) await engine.ingestAlerts(agent.orgId, [alert]);
   }
 
   async function ingest(agent, events) {
@@ -298,6 +345,8 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
       });
       for (const host of Object.values(result.hosts))
         if (host.seen?.length > 500) host.seen.splice(0, host.seen.length - 500);
+      const mine = result.hosts[agent.id];
+      if (mine?.pendingStop && !mine.pendingStop.version) mine.pendingStop.version = agent.version || null;
       await store.endpoint.save({ ...record, hosts: result.hosts, org: result.org, updatedAt: now() });
       return result.alerts;
     });
@@ -491,14 +540,34 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
     for (const agent of agents) byOrg.set(agent.orgId, [...(byOrg.get(agent.orgId) || []), agent]);
     let stale = 0;
     for (const [orgId, list] of byOrg) {
-      const alerts = staleAgentAlerts(list, { orgId, now: now() });
-      if (!alerts.length) continue;
-      stale += alerts.length;
+      const record = await endpointRecord(orgId);
+      const alerts = staleAgentAlerts(list, {
+        orgId,
+        now: now(),
+        hosts: record.hosts,
+        expectOnline: record.policy.expectOnline || {},
+      });
       for (const alert of alerts) {
         const agent = list.find((a) => a.id === alert.host.id);
         if (agent) await store.agents.save({ ...agent, tamperAlertedAt: now(), updatedAt: now() });
       }
-      await engine.ingestAlerts(orgId, alerts);
+      // A Guard service that was stopped by hand and has stayed down.
+      const stopped = await withLock(orgId, async () => {
+        const fresh = await endpointRecord(orgId);
+        const out = [];
+        for (const agent of list) {
+          const pending = fresh.hosts[agent.id]?.pendingStop;
+          if (!pending || pending.reported || now() - pending.at < ENDPOINT_DEFAULTS.stopGrace) continue;
+          pending.reported = true;
+          out.push(stoppedAgentAlert(agent, pending, { orgId, now: now() }));
+        }
+        if (out.length) await store.endpoint.save({ ...fresh, updatedAt: now() });
+        return out;
+      });
+      const all = [...alerts, ...stopped];
+      if (!all.length) continue;
+      stale += all.length;
+      await engine.ingestAlerts(orgId, all);
     }
     let expired = 0;
     for (const command of await store.commands.list({ status: 'queued' }, { orderBy: 'createdAt', limit: 500 })) {
@@ -529,9 +598,20 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
     ]);
     const hashes = await knownHashes();
     return {
-      agents: agents.filter((a) => a.status !== 'retired').map((a) => publicAgent(a, now())),
+      agents: agents
+        .filter((a) => a.status !== 'retired')
+        .map((a) => {
+          const said = record.hosts[a.id]?.offline;
+          const view = publicAgent(a, now());
+          return {
+            ...view,
+            expectOnline: expectsOnline(a, record.policy.expectOnline),
+            offlineReason: !view.online && said && said.at >= (a.lastSeenAt || 0) - 2 * MIN ? said.reason : null,
+          };
+        }),
       enrollment: { hint: record.enrollHint, createdAt: record.enrollCreatedAt },
       policy: record.policy,
+      expected: [...(record.org.trusted || [])].sort((a, b) => b.at - a.at),
       samples,
       sandbox: { configured: cape.configured(), knownMaliciousHashes: hashes.list.length },
       server: publicUrl(),
@@ -548,6 +628,44 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
     };
     await store.endpoint.save({ ...record, policy, updatedAt: now() });
     return policy;
+  }
+
+  // Commands and files the organization marked as expected, by fingerprint. Detection skips them
+  // from now on, on every machine.
+  async function markExpected(orgId, { fp, label, rule }, actor = null) {
+    if (!/^(?:cmd|file):[a-f0-9]{16}$/.test(String(fp || '')))
+      throw Object.assign(new Error('This kind of alert cannot be marked as expected.'), {
+        status: 400,
+        userError: true,
+      });
+    return withLock(orgId, async () => {
+      const record = await endpointRecord(orgId);
+      const kept = (record.org.trusted || []).filter((t) => t.fp !== fp);
+      kept.push({ fp, label: str(label, 300), rule: str(rule, 60), by: actor, at: now() });
+      record.org.trusted = kept.slice(-500);
+      await store.endpoint.save({ ...record, updatedAt: now() });
+      return record.org.trusted;
+    });
+  }
+
+  async function unmarkExpected(orgId, fp) {
+    return withLock(orgId, async () => {
+      const record = await endpointRecord(orgId);
+      const before = (record.org.trusted || []).length;
+      record.org.trusted = (record.org.trusted || []).filter((t) => t.fp !== String(fp));
+      await store.endpoint.save({ ...record, updatedAt: now() });
+      return before !== record.org.trusted.length;
+    });
+  }
+
+  // Whether a machine going quiet should raise an alert. Servers default to yes, PCs to no.
+  async function setExpectOnline(orgId, agentId, value) {
+    const agent = await store.agents.get(String(agentId || ''));
+    if (!agent || agent.orgId !== orgId) throw Object.assign(new Error('Machine not found.'), { status: 404 });
+    const record = await endpointRecord(orgId);
+    const expectOnline = { ...(record.policy.expectOnline || {}), [agent.id]: !!value };
+    await store.endpoint.save({ ...record, policy: { ...record.policy, expectOnline }, updatedAt: now() });
+    return expectsOnline(agent, expectOnline);
   }
 
   async function retire(orgId, agentId) {
@@ -570,6 +688,9 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
     cycle,
     overview,
     savePolicy,
+    setExpectOnline,
+    markExpected,
+    unmarkExpected,
     retire,
     knownHashes,
     actions: ACTIONS,

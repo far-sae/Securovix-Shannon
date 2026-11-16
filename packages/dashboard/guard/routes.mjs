@@ -159,6 +159,7 @@ export function registerGuardRoutes(app, deps) {
         })),
       connections: connections.map(publicConnection),
       canRespond: can(found.ctx.membership.role, 'defender.manage'),
+      canManage: can(found.ctx.membership.role, 'integrations.manage'),
     });
   });
 

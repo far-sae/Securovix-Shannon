@@ -194,6 +194,57 @@ export function registerEndpointRoutes(app, deps) {
     res.json({ ok: true, policy });
   });
 
+  // "This is expected": stop alerting on one exact command or file, on every machine, and take
+  // the matching alerts out of the open incidents. Ransomware, credential theft and other
+  // critical alerts carry no fingerprint and cannot be silenced this way.
+  app.post('/api/guard/endpoints/expected', async (req, res) => {
+    const ctx = requirePermission(req, res, 'integrations.manage');
+    if (!ctx) return;
+    try {
+      const incident = await deps.store.incidents.get(String(req.body?.incidentId || ''));
+      const alert =
+        incident?.orgId === ctx.org.id ? (incident.alerts || []).find((a) => a.id === String(req.body?.alertId)) : null;
+      if (!alert) return res.status(404).json({ error: 'Alert not found.' });
+      if (!alert.trust?.fp) return res.status(400).json({ error: 'This kind of alert cannot be marked as expected.' });
+      await endpoints.markExpected(ctx.org.id, { ...alert.trust, rule: alert.rule }, ctx.user.email);
+      const result = await engine.dropExpected(ctx.org.id, alert.trust.fp, { actor: ctx.user.email });
+      audit(ctx, 'guard.endpoint.marked_expected', 'guard_incident', incident.id, {
+        rule: alert.rule,
+        label: alert.trust.label,
+      });
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.delete('/api/guard/endpoints/expected/:fp', async (req, res) => {
+    const ctx = requirePermission(req, res, 'integrations.manage');
+    if (!ctx) return;
+    try {
+      const removed = await endpoints.unmarkExpected(ctx.org.id, String(req.params.fp));
+      audit(ctx, 'guard.endpoint.unmarked_expected', 'guard_endpoint', ctx.org.id, {});
+      res.json({ ok: true, removed });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  // Whether this machine going quiet raises an alert. Servers default to yes; PCs and laptops,
+  // which are closed and switched off every day, default to no.
+  app.post('/api/guard/endpoints/:agentId/expect-online', async (req, res) => {
+    const ctx = requirePermission(req, res, 'integrations.manage');
+    if (!ctx) return;
+    if (typeof req.body?.value !== 'boolean') return res.status(400).json({ error: 'value must be true or false.' });
+    try {
+      const expectOnline = await endpoints.setExpectOnline(ctx.org.id, String(req.params.agentId), req.body.value);
+      audit(ctx, 'guard.endpoint.expect_online', 'guard_agent', String(req.params.agentId), { value: req.body.value });
+      res.json({ ok: true, expectOnline });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
   // Isolate / release / stop a process / quarantine or collect a file, outside an incident.
   app.post('/api/guard/endpoints/:agentId/actions', async (req, res) => {
     const ctx = requirePermission(req, res, 'defender.manage');

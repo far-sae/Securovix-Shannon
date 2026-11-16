@@ -60,7 +60,16 @@ fn describe(err: ureq::Error) -> String {
 
 impl Client {
     pub fn new(server: &str, token: &str) -> Client {
-        let http = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout(Duration::from_secs(60)).user_agent(concat!("securovix-guard/", env!("CARGO_PKG_VERSION"))).build();
+        Client::with_timeouts(server, token, 10, 60)
+    }
+
+    /// For the last message before a shutdown or a sleep, when there are only seconds left.
+    pub fn quick(server: &str, token: &str) -> Client {
+        Client::with_timeouts(server, token, 3, 4)
+    }
+
+    fn with_timeouts(server: &str, token: &str, connect: u64, total: u64) -> Client {
+        let http = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(connect)).timeout(Duration::from_secs(total)).user_agent(concat!("securovix-guard/", env!("CARGO_PKG_VERSION"))).build();
         Client { base: format!("{}/api/endpoint-agent/v1", server.trim_end_matches('/')), token: token.to_string(), http }
     }
 

@@ -69,7 +69,7 @@ pub fn to_event(channel: &str, r: &Record) -> Option<Event> {
                 ppid: num("ParentProcessId"),
                 name: base_name(&image),
                 path: Some(image),
-                cmdline: Some(crate::util::truncate(&d("CommandLine"), 8192)),
+                cmdline: Some(crate::util::truncate(&d("CommandLine"), crate::util::MAX_CMDLINE)),
                 user: Some(d("User")).filter(|u| !u.is_empty()),
                 sha256: sha,
                 parents: vec![Parent { name: base_name(&d("ParentImage")), pid: num("ParentProcessId").unwrap_or(0) }],

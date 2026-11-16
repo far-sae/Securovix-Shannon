@@ -65,18 +65,45 @@ pub fn install(server: &str, enroll_token: &str) -> Result<String, String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    // Updating: the running agent holds its program file open, so it is stopped first. Its
+    // credential was replaced by the enrollment above, so this stop is not reported as tampering.
+    #[cfg(windows)]
+    {
+        let _ = run("sc", &["stop", "SecurovixGuard"]);
+        for _ in 0..30 {
+            let state = run("sc", &["query", "SecurovixGuard"]).1;
+            if !state.contains("STOP_PENDING") && !state.contains("RUNNING") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = run("systemctl", &["stop", "securovix-guard"]);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = run("launchctl", &["unload", "/Library/LaunchDaemons/com.securovix.guard.plist"]);
+    }
     if me != target {
-        std::fs::copy(&me, &target).map_err(|e| format!("could not copy the agent to {}: {e}", target.display()))?;
+        replace_binary(&me, &target)?;
     }
     let bin = target.to_string_lossy().to_string();
     #[cfg(windows)]
     {
-        let _ = run("sc", &["stop", "SecurovixGuard"]);
-        let _ = run("sc", &["delete", "SecurovixGuard"]);
         let bin_path = format!("\"{bin}\" service");
-        let (ok, out) = run("sc", &["create", "SecurovixGuard", "binPath=", &bin_path, "start=", "auto", "DisplayName=", "Securovix Guard"]);
+        // An existing service is pointed at the new program rather than deleted and created
+        // again: Windows only marks a service for deletion while anything still holds a handle to
+        // it, and a create in that state fails.
+        let exists = run("sc", &["query", "SecurovixGuard"]).0;
+        let (ok, out) = if exists {
+            run("sc", &["config", "SecurovixGuard", "binPath=", &bin_path, "start=", "auto", "DisplayName=", "Securovix Guard"])
+        } else {
+            run("sc", &["create", "SecurovixGuard", "binPath=", &bin_path, "start=", "auto", "DisplayName=", "Securovix Guard"])
+        };
         if !ok {
-            return Err(format!("sc create failed: {}", out.trim()));
+            return Err(format!("sc {} failed: {}", if exists { "config" } else { "create" }, out.trim()));
         }
         run("sc", &["description", "SecurovixGuard", "Securovix Guard endpoint protection. Stopping it alerts your security team."]);
         // Tamper protection: Windows restarts the service if it is killed.
@@ -97,12 +124,40 @@ pub fn install(server: &str, enroll_token: &str) -> Result<String, String> {
         let unit = format!("[Unit]\nDescription=Securovix Guard endpoint agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nExecStart={bin} run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n");
         std::fs::write("/etc/systemd/system/securovix-guard.service", unit).map_err(|e| e.to_string())?;
         run("systemctl", &["daemon-reload"]);
-        let (ok, out) = run("systemctl", &["enable", "--now", "securovix-guard"]);
+        let (ok, out) = run("systemctl", &["enable", "securovix-guard"]);
         if !ok {
             return Err(format!("systemctl enable failed: {}", out.trim()));
         }
+        // "restart" starts a stopped service and replaces a running one, so an update takes effect.
+        let (ok, out) = run("systemctl", &["restart", "securovix-guard"]);
+        if !ok {
+            return Err(format!("systemctl restart failed: {}", out.trim()));
+        }
     }
-    Ok(format!("Installed and running as {} (agent {}).", bin, config.agent_id))
+    Ok(format!("Installed and running as {} (agent {}, version {}).", bin, config.agent_id, env!("CARGO_PKG_VERSION")))
+}
+
+/// Puts the new program in place. Written beside the old one and then renamed over it: a rename
+/// works even while the old file is still mapped by a process that is on its way out, where an
+/// in-place copy fails ("text file busy" on Linux, a sharing violation on Windows).
+fn replace_binary(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
+    let staged = to.with_extension("new");
+    std::fs::copy(from, &staged).map_err(|e| format!("could not copy the agent to {}: {e}", staged.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
+    }
+    let mut last = String::new();
+    for _ in 0..20 {
+        match std::fs::rename(&staged, to) {
+            Ok(()) => return Ok(()),
+            Err(e) => last = e.to_string(),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    let _ = std::fs::remove_file(&staged);
+    Err(format!("could not replace {}: {last}. Is another copy of the agent still running?", to.display()))
 }
 
 pub fn uninstall() -> Result<String, String> {
@@ -145,7 +200,7 @@ pub mod winservice {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
-    use windows_service::service::{ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType};
+    use windows_service::service::{PowerEventParam, ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType};
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::{define_windows_service, service_dispatcher};
 
@@ -159,7 +214,7 @@ pub mod winservice {
         ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
             current_state: state,
-            controls_accepted: if state == ServiceState::Running { ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN } else { ServiceControlAccept::empty() },
+            controls_accepted: if state == ServiceState::Running { ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN | ServiceControlAccept::POWER_EVENT } else { ServiceControlAccept::empty() },
             exit_code: ServiceExitCode::Win32(0),
             checkpoint: 0,
             wait_hint: Duration::from_secs(10),
@@ -179,9 +234,16 @@ pub mod winservice {
                 ServiceControlHandlerResult::NoError
             }
             ServiceControl::Shutdown => {
+                // The machine is switching off: say so, so the silence is not mistaken for tampering.
+                crate::agent::report_offline(&s, "shutdown");
                 s.stop.store(true, Ordering::SeqCst);
                 ServiceControlHandlerResult::NoError
             }
+            ServiceControl::PowerEvent(PowerEventParam::Suspend) => {
+                crate::agent::report_offline(&s, "sleep");
+                ServiceControlHandlerResult::NoError
+            }
+            ServiceControl::PowerEvent(_) => ServiceControlHandlerResult::NoError,
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
             _ => ServiceControlHandlerResult::NotImplemented,
         };
