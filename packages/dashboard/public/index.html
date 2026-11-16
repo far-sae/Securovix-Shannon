@@ -5690,7 +5690,7 @@ async function pgGuard(id){
     <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Autopilot</h2><small>${ap.enabled?'<b style="color:var(--acc2)">on</b>':'off'}</small></div>
       <p style="font-size:13px;color:var(--t2);margin:0 0 10px">Off by default. When on, Guard runs the ticked responses by itself on new incidents at or above the chosen severity, and records them like any other action, so reversible ones can be undone.</p>
       ${ov.canManage?`<label style="display:block;margin:4px 0"><input type="checkbox" id="gap-on" ${ap.enabled?'checked':''}> Autopilot on, for incidents that are <select id="gap-sev"><option value="critical" ${ap.minSeverity==='critical'?'selected':''}>critical</option><option value="high" ${ap.minSeverity==='high'?'selected':''}>high or critical</option></select></label>
-        ${ov.autopilotActions.map(a=>`<label style="display:block;margin:4px 0 4px 18px;font-size:13px"><input type="checkbox" class="gap-act" value="${a.type}" ${ap.actions?.[a.type]?'checked':''}> ${H(a.label)}</label>`).join('')}
+        ${[['On laptops and servers (carried out by the Guard agent, only for an alert that is itself at that severity)',true],['On Microsoft 365 and Google accounts',false]].map(([title,machine])=>`<div style="margin:8px 0 2px 18px;font-size:12px;color:var(--t3)">${title}</div>${ov.autopilotActions.filter(a=>!!a.machine===machine).map(a=>`<label style="display:block;margin:4px 0 4px 18px;font-size:13px"><input type="checkbox" class="gap-act" value="${a.type}" ${ap.actions?.[a.type]?'checked':''}> ${H(a.label)}${a.reversible?' <small style="color:var(--t3)">· can be undone</small>':''}</label>`).join('')}`).join('')}
         <button class="btn btn-p" style="margin-top:8px" onclick="guardSaveAutopilot()">Save autopilot</button>`:'<p style="font-size:12.5px;color:var(--t3)">Owners and admins can change autopilot.</p>'}</section>
     <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Shannon → WAF</h2><small>temporary blocks for proven vulnerabilities</small></div>
       <p style="font-size:13px;color:var(--t2);margin:0 0 8px">Each rule only covers the vulnerable path, so it cannot break the rest of the site. Keep it until the fix ships and Shannon re-tests it. Attacks that hit one of these paths open a critical Guard incident.</p>${wafCard}</section>
@@ -5754,6 +5754,7 @@ async function guardSaveAutopilot(){
   const actions={};document.querySelectorAll('.gap-act').forEach(c=>{actions[c.value]=c.checked});
   const enabled=$('gap-on').checked;
   if(enabled&&actions['disable-user']&&!confirm('Autopilot will be able to disable accounts by itself, including an admin\'s. Continue?'))return;
+  if(enabled&&actions['isolate-host']&&!confirm('Autopilot will be able to cut a machine off the network by itself. An isolated machine can only reach Securovix until someone clicks Reconnect on the Guard page from another device. Continue?'))return;
   try{await api('/guard/settings',{method:'POST',body:JSON.stringify({autopilot:{enabled,minSeverity:$('gap-sev').value,actions}})});pgGuard()}catch(e){showNotice('Could not save',H(e.detail||e.message))}
 }
 

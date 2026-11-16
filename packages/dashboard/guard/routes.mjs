@@ -109,7 +109,12 @@ export function registerGuardRoutes(app, deps) {
         demoAllowed: demoAllowed(),
         scenarios: demoAllowed() ? SCENARIOS : {},
         rules: Object.fromEntries(Object.entries(RULES).map(([id, r]) => [id, r.title])),
-        autopilotActions: AUTOPILOT_ACTIONS.map((type) => ({ type, label: ACTIONS[type].label })),
+        autopilotActions: AUTOPILOT_ACTIONS.map((type) => ({
+          type,
+          label: ACTIONS[type].label,
+          machine: ACTIONS[type].channel === 'agent',
+          reversible: !!ACTIONS[type].reversible,
+        })),
       });
     } catch (error) {
       fail(res, error);
