@@ -15,6 +15,10 @@ export const AUTOPILOT_ACTIONS = Object.freeze([
   'remove-inbox-rule',
   'revoke-oauth-grant',
   'block-ip',
+  // On machines, carried out by the Guard agent.
+  'kill-process',
+  'quarantine-file',
+  'isolate-host',
 ]);
 
 export function defaultSettings(orgId) {
@@ -292,13 +296,24 @@ export function createGuardEngine({
       )
         continue;
       const done = await actionsFor(orgId, incident.id);
+      // Account actions follow the incident: a takeover is a chain of alerts that are each only
+      // "high". Machine actions follow the alert: a process is stopped, a file quarantined or a
+      // machine cut off only for an alert that is itself at the chosen severity, never for a
+      // lesser alert that happens to share the incident.
+      const floor = SEVERITY_RANK[auto.minSeverity] || 4;
+      const keyOf = (a) => `${a.type}|${JSON.stringify(a.params)}`;
+      const strong = new Set(
+        recommendedActions(incident.alerts.filter((a) => (SEVERITY_RANK[a.severity] || 0) >= floor)).map(keyOf),
+      );
       for (const action of recommendedActions(incident.alerts)) {
         if (!auto.actions?.[action.type]) continue;
+        const onMachine = ACTIONS[action.type]?.channel === 'agent';
+        if (onMachine && !strong.has(keyOf(action))) continue;
         if (
           done.some(
             (a) =>
-              (a.status === 'done' || a.status === 'pending') &&
-              !a.undoneAt &&
+              // A machine action is tried once: a process that has already exited stays exited.
+              (onMachine || ((a.status === 'done' || a.status === 'pending') && !a.undoneAt)) &&
               a.type === action.type &&
               JSON.stringify(a.params) === JSON.stringify(action.params),
           )

@@ -993,6 +993,14 @@ export function detectEndpoint(events, state) {
     if (trust && trusted.has(trust.fp)) return;
     const id = alertId(orgId, rule, `${event.host?.id}|${key}`);
     if (alerts.has(id)) return;
+    // The file a response would act on (quarantine, send to the sandbox). A program in a
+    // protected folder is part of Windows or installed software: the tool an attacker used
+    // (reg.exe, powershell.exe, bash), not the thing to remove. Only a file proven malicious by
+    // its hash is offered from there.
+    let subject = Object.hasOwn(context, 'path')
+      ? context.path
+      : event.file?.path || event.persistence?.path || event.process?.path || null;
+    if (subject && rule !== 'malicious-file' && locate(subject) === 'protected') subject = null;
     alerts.set(id, {
       id,
       orgId,
@@ -1038,9 +1046,9 @@ export function detectEndpoint(events, state) {
       context: {
         pid: event.process?.pid ?? event.detail?.pid ?? null,
         processName: event.process?.name || event.detail?.process || null,
-        path: event.file?.path || event.persistence?.path || event.process?.path || null,
         sha256: event.file?.sha256 || event.process?.sha256 || null,
         ...context,
+        path: subject,
       },
     });
   };
@@ -1257,7 +1265,7 @@ export function detectEndpoint(events, state) {
               severity: risk.level,
               mitre: [persist.mitre],
               explanation: `${where}: ${persist.what}${risk.why ? `, and ${risk.why}` : ''}${quote}.`,
-              context: risk.target ? { path: risk.target } : {},
+              context: { path: risk.target || null },
               trust: persist.payload ? (risk.target ? fileTrust(risk.target) : cmdTrust) : undefined,
             });
         }

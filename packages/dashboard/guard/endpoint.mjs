@@ -278,7 +278,8 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
       stats:
         body.stats && typeof body.stats === 'object'
           ? {
-              cpuPercent: Number(body.stats.cpuPercent) || 0,
+              // The agent sends a 32-bit float; rounded so 0.3 does not show as 0.30000001192092896.
+              cpuPercent: Math.round((Number(body.stats.cpuPercent) || 0) * 10) / 10,
               memoryMb: Number(body.stats.memoryMb) || 0,
               queued: Number(body.stats.queued) || 0,
               sysmon: !!body.stats.sysmon,
