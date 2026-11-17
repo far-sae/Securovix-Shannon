@@ -100,25 +100,8 @@ export function httpProxyConnector({ origin, port = 0, host = '127.0.0.1', onEve
     let size = 0;
     let oversize = false;
 
-    req.on('data', (d) => {
-      if (oversize) return; // the pipe below owns the rest of the stream
-      size += d.length;
-      if (size > MAX_CLASSIFIED_BODY) {
-        oversize = true;
-        const fwd = openUpstream(upstreamHeaders(null));
-        for (const c of chunks) fwd.write(c);
-        chunks = [];
-        fwd.write(d);
-        req.pipe(fwd);
-        return;
-      }
-      chunks.push(d);
-    });
-
-    req.on('end', () => {
-      if (oversize) return; // forwarded unclassified; req.pipe() ends the upstream request
-      const bodyBuf = Buffer.concat(chunks);
-      chunks = [];
+    // Whether to refuse the request, judged on the URL, the headers and this much of the body.
+    const refuse = (bodyBuf) => {
       // Classify on a text view, but forward the ORIGINAL BYTES. Decoding a binary body as UTF-8
       // and re-encoding it replaces every non-UTF-8 byte with U+FFFD — and because we also re-frame
       // content-length, the corruption is self-consistent, so the protected app never notices its
@@ -145,10 +128,37 @@ export function httpProxyConnector({ origin, port = 0, host = '127.0.0.1', onEve
       }
 
       if (block) {
-        res.writeHead(403, { 'content-type': 'text/plain' });
+        res.writeHead(403, { 'content-type': 'text/plain', connection: 'close' });
         res.end('Blocked by Securovix Defender');
+      }
+      return block;
+    };
+
+    req.on('data', (d) => {
+      if (oversize) return; // the pipe below owns the rest of the stream
+      size += d.length;
+      if (size > MAX_CLASSIFIED_BODY) {
+        // Too large to buffer whole. What has arrived so far is still judged before it is passed on.
+        oversize = true;
+        const prefix = Buffer.concat([...chunks, d]);
+        chunks = [];
+        if (refuse(prefix)) {
+          req.resume();
+          return;
+        }
+        const fwd = openUpstream(upstreamHeaders(null));
+        fwd.write(prefix);
+        req.pipe(fwd);
         return;
       }
+      chunks.push(d);
+    });
+
+    req.on('end', () => {
+      if (oversize) return; // req.pipe() ends the upstream request
+      const bodyBuf = Buffer.concat(chunks);
+      chunks = [];
+      if (refuse(bodyBuf)) return;
 
       const fwd = openUpstream(upstreamHeaders(bodyBuf));
       if (bodyBuf.length) fwd.write(bodyBuf);

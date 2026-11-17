@@ -94,7 +94,12 @@ export function buildProbeTasks(surface = {}, { maxTasks = 30, maxPer = 6 } = {}
 // One pass over a surface: run each (not-yet-tested) probe task; on a confirmed finding, escalate it
 // into an impact demonstrator. Returns findings (probe + impact), the narrated steps, and testedIds
 // (so a campaign can dedupe across rounds).
-export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 30, concurrency = 4, onStep } = {}) {
+/** How many checks the surface offers when nothing is capped. Shows what a run left out. */
+export function countProbeTasks(surface = {}) {
+  return buildProbeTasks(surface, { maxTasks: 1_000_000, maxPer: 1_000_000 }).length;
+}
+
+export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 30, maxPer = 6, concurrency = 4, onStep } = {}) {
   const understanding = analyzeSurface(surface);
   const steps = [];
   const emit = (phase, detail) => {
@@ -113,7 +118,10 @@ export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 
     `Prioritized ${understanding.plan.length} test categor${understanding.plan.length === 1 ? 'y' : 'ies'}${understanding.traits.length ? ` — this target ${understanding.traits.join(', ')}` : ''}.`,
   );
 
-  const tasks = buildProbeTasks(surface, { maxTasks }).filter((t) => !(skip && skip.has(taskId(t))));
+  // Checks that could not run are counted apart, so a site that refuses the requests is never
+  // reported as clean.
+  let errors = 0;
+  const tasks = buildProbeTasks(surface, { maxTasks, maxPer }).filter((t) => !(skip && skip.has(taskId(t))));
   const lanes = Math.max(1, Math.min(Number(concurrency) || 4, 8));
   emit(
     'act',
@@ -134,6 +142,8 @@ export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 
         res = (await probe(task.key, task.target)) || [];
       } catch {
         res = [];
+        // A check that could not run is not a check that found nothing.
+        errors += 1;
       }
       if (!res.length) return;
       for (const f of res) findings.push({ ...f, cls: task.key });
@@ -160,13 +170,22 @@ export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 
     lanes,
   );
 
+  const failed = errors ? ` ${errors} of ${tasks.length} check${tasks.length === 1 ? '' : 's'} could not run.` : '';
   emit(
     'report',
     findings.length
-      ? `${findings.length} finding${findings.length === 1 ? '' : 's'} PROVEN with a benign proof marker.`
-      : 'No vulnerabilities confirmed. Every probe abstained — nothing proven, nothing invented.',
+      ? `${findings.length} finding${findings.length === 1 ? '' : 's'} PROVEN with a benign proof marker.${failed}`
+      : errors
+        ? `Nothing was confirmed, but${failed} This is not a clean result.`
+        : 'No vulnerabilities confirmed. Every probe abstained — nothing proven, nothing invented.',
   );
-  return { understanding, steps, findings, stats: { tasks: tasks.length, confirmed: findings.length }, testedIds };
+  return {
+    understanding,
+    steps,
+    findings,
+    stats: { tasks: tasks.length, confirmed: findings.length, errors },
+    testedIds,
+  };
 }
 
 // Multi-round adaptive campaign. Each round runs the loop; between rounds it RE-CRAWLS (deeper, or as a
@@ -179,9 +198,11 @@ export async function runAgentCampaign({
   recrawl,
   maxRounds = 3,
   maxTasks = 30,
+  maxPer = 6,
   onStep,
 } = {}) {
   const tested = new Set();
+  let errors = 0;
   const steps = [];
   const findings = [];
   const push = (s) => {
@@ -200,9 +221,10 @@ export async function runAgentCampaign({
     });
     // Run the loop without re-emitting its steps through onStep twice: pass onStep so streaming works,
     // and collect its steps/findings into the campaign aggregate.
-    const r = await runAgentLoop({ surface: cur, probe, escalate, skip: tested, maxTasks, onStep });
+    const r = await runAgentLoop({ surface: cur, probe, escalate, skip: tested, maxTasks, maxPer, onStep });
     for (const s of r.steps) steps.push(s);
     for (const f of r.findings) findings.push({ ...f, round });
+    errors += r.stats.errors || 0;
     for (const id of r.testedIds) tested.add(id);
 
     if (round >= maxRounds || !recrawl) break;
@@ -214,10 +236,16 @@ export async function runAgentCampaign({
       next = null;
     }
     if (!next) break;
-    const fresh = buildProbeTasks(next, { maxTasks }).some((t) => !tested.has(taskId(t)));
+    const fresh = buildProbeTasks(next, { maxTasks, maxPer }).some((t) => !tested.has(taskId(t)));
     if (!fresh) break; // nothing new to test → stop rather than spin
     cur = next;
     adoptedIdentity = nextIdentity;
   }
-  return { steps, findings, stats: { rounds, confirmed: findings.length, tested: tested.size } };
+  return {
+    steps,
+    findings,
+    // `possible` is every check the mapped site offers; `tested` is how many were run.
+    stats: { rounds, confirmed: findings.length, tested: tested.size, errors, possible: countProbeTasks(cur) },
+    surface: cur,
+  };
 }

@@ -476,7 +476,7 @@ test('C3: benign traffic leaves the blackboard flat while stats still count it',
 });
 
 // ---------- connector hardening (I1 / I2 / I3) ----------
-test('connector: a body over the 1 MB classification cap is forwarded unclassified, not buffered', async () => {
+test('connector: a body over the 1 MB cap is judged on its first part, then streamed through', async () => {
   let got = 0;
   const app = await upstream((req, res) => {
     req.on('data', (d) => {
@@ -492,15 +492,25 @@ test('connector: a body over the 1 MB classification cap is forwarded unclassifi
     origin: app.origin,
     onEvent: (e) => {
       seen.push(e);
-      return { block: true }; // would block if it were ever classified
+      return { block: false };
     },
   });
-  const big = 'a'.repeat(1024 * 1024 + 4096);
-  const res = await fetch(`${c.meta.url}/upload`, { method: 'POST', body: big });
-  assert.equal(res.status, 200, 'fail-open: an oversize body is forwarded, never blocked');
-  assert.equal(seen.length, 0, 'it was never classified, so it was never buffered for classification');
+  const big = 'a'.repeat(4 * 1024 * 1024);
+  const res = await fetch(`${c.meta.url}/upload?q=1`, { method: 'POST', body: big });
+  assert.equal(res.status, 200);
+  assert.equal(seen.length, 1, 'the URL and the first part of the body are judged once');
+  assert.equal(seen[0].url, '/upload?q=1');
+  assert.ok(seen[0].body.length > 1024 * 1024 && seen[0].body.length < 2 * 1024 * 1024, 'only the first part was buffered');
   assert.equal(got, big.length, 'the full body still reached the upstream app byte-for-byte');
   await c.stop();
+
+  // An attack in the URL of a large upload used to pass because nothing was looked at.
+  const strict = await httpProxyConnector({ origin: app.origin, onEvent: () => ({ block: true }) });
+  got = 0;
+  const refused = await fetch(`${strict.meta.url}/upload`, { method: 'POST', body: big }).catch((error) => ({ status: 0, error }));
+  assert.ok(refused.status === 403 || refused.status === 0, 'refused before reaching the upstream app');
+  assert.equal(got, 0, 'nothing was forwarded');
+  await strict.stop();
   await app.close();
 });
 test('connector: hop-by-hop headers are stripped and content-length is re-framed', async () => {

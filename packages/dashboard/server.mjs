@@ -8,6 +8,17 @@ import { isIP } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
+import { SCAN_PHASES, createSeen, progressSince } from './scan-progress.mjs';
+import { DEFENDER_RULES, normalizePolicy, policyFor, sdkBundle } from './defender-policy.mjs';
+import {
+  CODE_SCAN_MAX_CHARS,
+  FILE_IS_DATA_RULE,
+  checkScanResult,
+  fileBlock,
+  outputBudget,
+  parseModelJson,
+  safeFilename,
+} from './code-scan.mjs';
 import express from 'express';
 import QRCode from 'qrcode';
 import { parse as parseYaml } from 'yaml';
@@ -756,6 +767,7 @@ app.use('/api', async (req, res, next) => {
   const bearerRoute =
     req.headers.authorization &&
     (relative === '/defender/report'
+      || (relative === '/defender/sdk/policy' && req.method === 'GET')
       || relative === '/defender/sensors/heartbeat'
       || (relative === '/defender/edge/routes' && req.method === 'GET')
       || relative === '/platform/defender/edge/routes'
@@ -2478,43 +2490,56 @@ const CS_PHASES = [
   { id: 'synth', agentId: 'b2', step: 'Synthesize fixed code & full report' },
 ];
 
-async function csCallProvider(provider, model, system, user, keys, maxTokens) {
-  // The synthesis turn must hold the full fixed source code + markdown report, so we
-  // bump max tokens for that turn. Earlier turns stay lean.
+// The Claude client Code Scan uses. Tests replace it with a fake so no real request is made.
+let csClientFactory = (apiKey) => new Anthropic({ apiKey, timeout: 15 * 60 * 1000, maxRetries: 2 });
+export function setCodeScanClientFactory(factory) {
+  csClientFactory = factory;
+}
+
+// One model reply: its text, and whether the provider cut it off at the output limit. A reply
+// that was cut off is never treated as a finished one.
+async function csCallProvider(provider, model, system, user, keys, maxTokens, signal) {
+  // The synthesis turn must hold the full fixed source code + markdown report, so the caller
+  // gives it a larger budget. Earlier turns stay lean.
   const mt = maxTokens || 4000;
   if (provider === 'claude') {
     const apiKey = keys?.claude;
     if (!apiKey) throw new Error('No Anthropic API key supplied');
-    const client = new Anthropic({ apiKey });
-    const resp = await client.messages.create({
-      model: model || 'claude-opus-4-7',
-      max_tokens: mt,
-      system,
-      messages: [{ role: 'user', content: user }],
-    });
-    return (resp.content || [])
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n');
+    // Streamed: a reply that carries a whole corrected file is too long for one plain response.
+    const message = await csClientFactory(apiKey)
+      .messages.stream(
+        { model: model || 'claude-opus-4-7', max_tokens: mt, system, messages: [{ role: 'user', content: user }] },
+        { signal },
+      )
+      .finalMessage();
+    if (message.stop_reason === 'refusal') throw new Error('The AI declined to review this file.');
+    return {
+      text: (message.content || [])
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n'),
+      truncated: message.stop_reason === 'max_tokens',
+    };
   }
   if (provider === 'openai') {
     if (!keys?.openai) throw new Error('No OpenAI key supplied');
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: { authorization: 'Bearer ' + keys.openai, 'content-type': 'application/json' },
+      signal,
+      headers: { authorization: `Bearer ${keys.openai}`, 'content-type': 'application/json' },
+      // GPT-5 models take max_completion_tokens and only the default temperature.
       body: JSON.stringify({
         model: model || 'gpt-5',
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-        max_tokens: mt,
-        temperature: 0.4,
+        max_completion_tokens: mt,
       }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error?.message || `OpenAI HTTP ${r.status}`);
-    return j.choices?.[0]?.message?.content || '';
+    return { text: j.choices?.[0]?.message?.content || '', truncated: j.choices?.[0]?.finish_reason === 'length' };
   }
   if (provider === 'gemini') {
     if (!keys?.gemini) throw new Error('No Gemini key supplied');
@@ -2523,6 +2548,7 @@ async function csCallProvider(provider, model, system, user, keys, maxTokens) {
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(keys.gemini)}`,
       {
         method: 'POST',
+        signal,
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
@@ -2533,13 +2559,17 @@ async function csCallProvider(provider, model, system, user, keys, maxTokens) {
     );
     const j = await r.json();
     if (!r.ok) throw new Error(j.error?.message || `Gemini HTTP ${r.status}`);
-    return j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+    return {
+      text: j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '',
+      truncated: j.candidates?.[0]?.finishReason === 'MAX_TOKENS',
+    };
   }
   if (provider === 'glm') {
     if (!keys?.glm) throw new Error('No GLM key supplied');
     const r = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
       method: 'POST',
-      headers: { authorization: 'Bearer ' + keys.glm, 'content-type': 'application/json' },
+      signal,
+      headers: { authorization: `Bearer ${keys.glm}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: model || 'glm-4-plus',
         messages: [
@@ -2552,22 +2582,27 @@ async function csCallProvider(provider, model, system, user, keys, maxTokens) {
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error?.message || `GLM HTTP ${r.status}`);
-    return j.choices?.[0]?.message?.content || '';
+    return { text: j.choices?.[0]?.message?.content || '', truncated: j.choices?.[0]?.finish_reason === 'length' };
   }
-  throw new Error('Unknown provider: ' + provider);
+  throw new Error(`Unknown provider: ${provider}`);
 }
 
-async function csCallAgent(agent, system, user, keys, maxTokens) {
+// Runs one agent's turn. A provider that fails is replaced by Claude for that turn and for the
+// rest of the run (`failed` remembers it), so one broken key costs one failed call, not one per turn.
+async function csCallAgent(agent, system, user, keys, maxTokens, signal, failed) {
+  const standIn = async (reason) => {
+    const fbSystem = `${system}\n\n[FALLBACK ROLEPLAY: The "${agent.label}" provider failed (${reason}). Continue in-character as ${agent.label} but execute on Anthropic.]`;
+    const out = await csCallProvider('claude', null, fbSystem, user, keys, maxTokens, signal);
+    return { ...out, fallback: true, fallbackReason: reason };
+  };
+  if (agent.provider !== 'claude' && failed.has(agent.provider)) return standIn(failed.get(agent.provider));
   try {
-    const text = await csCallProvider(agent.provider, agent.model, system, user, keys, maxTokens);
-    return { text, fallback: false };
+    const out = await csCallProvider(agent.provider, agent.model, system, user, keys, maxTokens, signal);
+    return { ...out, fallback: false };
   } catch (err) {
-    if (agent.provider === 'claude') throw err;
-    const fbSystem =
-      system +
-      `\n\n[FALLBACK ROLEPLAY: The "${agent.label}" provider failed (${err.message}). Continue in-character as ${agent.label} but execute on Anthropic.]`;
-    const text = await csCallProvider('claude', null, fbSystem, user, keys, maxTokens);
-    return { text, fallback: true, fallbackReason: err.message };
+    if (agent.provider === 'claude' || signal?.aborted) throw err;
+    failed.set(agent.provider, err.message);
+    return { ...(await standIn(err.message)), providerFailed: true };
   }
 }
 
@@ -2581,7 +2616,10 @@ function csBuildSystem(agent, phase, isFinalSynth) {
 
 You will see a running transcript of every other agent's contribution. Address peers by name. Build on or critique their work — DO NOT repeat what others have said.
 
-Keep your turn under ~600 words. Be concrete: name lines, name attack vectors, name patches.`;
+${FILE_IS_DATA_RULE}
+
+Be concrete: name lines, name attack vectors, name patches.`;
+  if (!isFinalSynth) txt += '\n\nKeep your turn under ~600 words.';
   if (isFinalSynth) {
     txt += `
 
@@ -2591,27 +2629,28 @@ THIS IS THE FINAL SYNTHESIS TURN. Produce a single JSON object inside a \`\`\`js
   "overallRisk": "critical"|"high"|"medium"|"low"|"clean",
   "redTeam": {
     "summary": "string",
-    "findings": [ {"id":"F1","severity":"critical|high|medium|low|info","category":"string","title":"string","description":"string","lines":[int],"exploit":"string"} ]
+    "findings": [ {"id":"F1","severity":"critical|high|medium|low|info","category":"string","title":"string","description":"string","lines":[int],"snippet":"the vulnerable line(s) copied exactly from the file, without the line-number prefix","exploit":"string"} ]
   },
   "blueTeam": {
     "summary": "string",
-    "fixedCode": "FULL corrected source code (complete file, not a diff)",
+    "fixedCode": "FULL corrected source code (complete file, not a diff, no line-number prefixes)",
     "patches": [ {"findingIds":["F1"],"description":"string","rationale":"string"} ]
   },
   "report": "Markdown executive report covering: ## Summary, ## Findings (per finding with severity & PoC), ## Patch Strategy, ## Risk Assessment, ## Recommendations, ## Agent Collaboration Notes."
 }
 
-Consolidate everything from the transcript. Output ONLY the JSON fence — no prose outside it.`;
+Consolidate everything from the transcript. Every finding must quote the vulnerable code in "snippet" exactly as it stands in the file: a finding whose quote is not in the file is discarded, so do not include a finding you cannot point to. Output ONLY the JSON fence — no prose outside it.`;
   }
   return txt;
 }
 
-function csBuildUser(code, filename, transcript, phase, isFinalSynth) {
-  let u = `=== Source code under review${filename ? ` (file: ${filename})` : ''} ===\n<code>\n${code}\n</code>\n\n`;
+function csBuildUser(code, filename, transcript, phase, isFinalSynth, nonce) {
+  let u = `=== Source code under review ===\n${fileBlock(code, filename, nonce)}\n\n`;
   if (transcript.length > 0) {
     u += `=== War-room transcript so far ===\n`;
     for (const t of transcript) {
-      const trim = t.text.length > 4000 ? t.text.slice(0, 4000) + '\n…(truncated)' : t.text;
+      // A turn may be up to 4,000 tokens long; it is passed on whole so nothing a reviewer found is lost.
+      const trim = t.text.length > 20_000 ? `${t.text.slice(0, 20_000)}\n…(truncated)` : t.text;
       u += `\n--- [${t.label} · ${t.step}] ---\n${trim}\n`;
     }
   }
@@ -2620,179 +2659,6 @@ function csBuildUser(code, filename, transcript, phase, isFinalSynth) {
     ? `Produce the final JSON deliverable per the system prompt schema. Consolidate all prior turns into definitive findings, patches, fixedCode, and a markdown report.`
     : `Contribute NEW analysis specific to this step. Reference peers by name. Be concrete.`;
   return u;
-}
-
-// Robust extractor for the final synthesis turn.
-// Models occasionally truncate their output (no closing ``` fence, or the JSON itself
-// gets cut off mid-string). When that happens, the strict JSON.parse fails and we used
-// to drop the entire result on the floor — including the corrected code the user came
-// for. This helper tries multiple strategies in order:
-//   1. Strict parse of the ```json fence (happy path)
-//   2. Strict parse of the largest {...} block we can find
-//   3. String-level extraction of "fixedCode": "..." with proper escape handling
-// On a partial recovery we return { _partial: true, ...recoveredFields } so the UI can
-// show a yellow banner and STILL surface a Download fixed file button.
-function csParseSynthesis(text) {
-  if (!text) return { error: 'No synthesis text', raw: '' };
-
-  // Strategy 1: ```json fenced block, optionally without closing fence (truncated).
-  let body = null;
-  const closed = text.match(/```json\s*([\s\S]+?)\s*```/);
-  if (closed) {
-    body = closed[1];
-  } else {
-    const open = text.match(/```json\s*([\s\S]+)$/);
-    if (open) body = open[1].replace(/```\s*$/, '');
-  }
-  if (!body) {
-    // No fence at all — try to pull the outermost JSON object from the raw text.
-    const s = text.indexOf('{'),
-      e = text.lastIndexOf('}');
-    if (s >= 0 && e > s) body = text.slice(s, e + 1);
-    else body = text;
-  }
-
-  // Strategy 2: strict parse on whatever we extracted.
-  try {
-    const obj = JSON.parse(body);
-    return obj;
-  } catch {
-    /* fall through to salvage */
-  }
-
-  // Strategy 2b: trim from the last balanced } and try again.
-  const lastBrace = body.lastIndexOf('}');
-  if (lastBrace > 0) {
-    try {
-      const obj = JSON.parse(body.slice(0, lastBrace + 1));
-      return obj;
-    } catch {
-      /* fall through */
-    }
-  }
-
-  // Strategy 3: salvage individual fields with string-level extraction.
-  // The big one is "fixedCode" — that's the file the user actually wants.
-  const recovered = { _partial: true, raw: text.slice(0, 12000) };
-
-  const fixedCode = csExtractStringField(body, 'fixedCode');
-  if (fixedCode) {
-    recovered.blueTeam = recovered.blueTeam || {};
-    recovered.blueTeam.fixedCode = fixedCode;
-  }
-  const language = csExtractStringField(body, 'language');
-  if (language) recovered.language = language;
-  const overallRisk = csExtractStringField(body, 'overallRisk');
-  if (overallRisk) recovered.overallRisk = overallRisk;
-  const redSummary = csExtractStringField(body, 'summary'); // first occurrence — likely redTeam.summary
-  if (redSummary) {
-    recovered.redTeam = recovered.redTeam || {};
-    recovered.redTeam.summary = redSummary;
-  }
-  // Try to grab the findings array even if truncated.
-  const findings = csExtractFindingsArray(body);
-  if (findings.length) {
-    recovered.redTeam = recovered.redTeam || {};
-    recovered.redTeam.findings = findings;
-  }
-  // If salvage gave us absolutely nothing useful, fall back to the original parse-error shape.
-  if (!recovered.blueTeam?.fixedCode && !recovered.redTeam?.findings?.length) {
-    return { error: 'Failed to parse final synthesis (no recoverable fields)', raw: text.slice(0, 12000) };
-  }
-  return recovered;
-}
-
-// Extract a single JSON string-field value from text, properly handling escaped quotes
-// and backslashes. Returns null if not found or unterminated.
-function csExtractStringField(text, fieldName) {
-  const re = new RegExp('"' + fieldName + '"\\s*:\\s*"', 'g');
-  const m = re.exec(text);
-  if (!m) return null;
-  let i = m.index + m[0].length;
-  let out = '';
-  while (i < text.length) {
-    const c = text[i];
-    if (c === '\\' && i + 1 < text.length) {
-      const n = text[i + 1];
-      // Standard JSON escapes
-      if (n === 'n') out += '\n';
-      else if (n === 't') out += '\t';
-      else if (n === 'r') out += '\r';
-      else if (n === '"') out += '"';
-      else if (n === '\\') out += '\\';
-      else if (n === '/') out += '/';
-      else if (n === 'b') out += '\b';
-      else if (n === 'f') out += '\f';
-      else if (n === 'u' && i + 5 < text.length) {
-        try {
-          out += String.fromCharCode(Number.parseInt(text.slice(i + 2, i + 6), 16));
-          i += 4;
-        } catch {
-          out += n;
-        }
-      } else out += n;
-      i += 2;
-    } else if (c === '"') {
-      return out;
-    } else {
-      out += c;
-      i++;
-    }
-  }
-  // Unterminated — return what we got. Better partial code than nothing.
-  return out || null;
-}
-
-// Best-effort extraction of the findings array from a possibly-truncated synthesis.
-function csExtractFindingsArray(text) {
-  const m = text.match(/"findings"\s*:\s*\[/);
-  if (!m) return [];
-  // Walk forward, collecting balanced { ... } objects until we hit ] or run out.
-  let i = m.index + m[0].length;
-  const out = [];
-  while (i < text.length) {
-    while (i < text.length && /\s|,/.test(text[i])) i++;
-    if (text[i] === ']' || i >= text.length) break;
-    if (text[i] !== '{') break;
-    // Find matching closing brace, respecting strings + escapes.
-    let depth = 0,
-      j = i,
-      inStr = false,
-      escNext = false;
-    for (; j < text.length; j++) {
-      const c = text[j];
-      if (escNext) {
-        escNext = false;
-        continue;
-      }
-      if (c === '\\') {
-        escNext = true;
-        continue;
-      }
-      if (c === '"') {
-        inStr = !inStr;
-        continue;
-      }
-      if (inStr) continue;
-      if (c === '{') depth++;
-      else if (c === '}') {
-        depth--;
-        if (depth === 0) {
-          j++;
-          break;
-        }
-      }
-    }
-    if (depth !== 0) break; // truncated — stop salvaging
-    const raw = text.slice(i, j);
-    try {
-      out.push(JSON.parse(raw));
-    } catch {
-      /* skip malformed finding */
-    }
-    i = j;
-  }
-  return out;
 }
 
 const csRuns = new Map();
@@ -2806,8 +2672,10 @@ setInterval(
 ).unref?.();
 
 function csBc(run, ev) {
-  run.events.push(ev);
-  const msg = `data: ${JSON.stringify(ev)}\n\n`;
+  // Each event is numbered, so a browser that reconnects can ask for what came after the last one
+  // it saw instead of being sent the whole run again.
+  const id = run.events.push(ev) - 1;
+  const msg = `id: ${id}\ndata: ${JSON.stringify(ev)}\n\n`;
   run.sseClients = run.sseClients.filter((c) => {
     try {
       c.write(msg);
@@ -2818,12 +2686,27 @@ function csBc(run, ev) {
   });
 }
 
+// Ends a run. The submitted code and the provider keys are dropped: nothing needs them any more.
+function csEnd(run, status, error = null) {
+  run.status = status;
+  run.error = error;
+  run.endedAt = Date.now();
+  run.code = null;
+  run.keys = null;
+}
+
 async function csOrchestrate(runId) {
   const run = csRuns.get(runId);
   if (!run) return;
   const keys = run.keys || {};
-  const agents = csPickAgents(keys);
+  const code = run.code;
+  const agents = run.agents?.length ? run.agents : csPickAgents(keys);
   run.agents = agents;
+  const signal = run.abort?.signal;
+  // Providers that failed in this run, with the reason. They are not tried again.
+  const failed = new Map();
+  // The file is fenced with a code the file itself cannot contain or predict.
+  const nonce = randomUUID().replaceAll('-', '').slice(0, 16);
 
   csBc(run, { type: 'agents', agents });
   csBc(run, { type: 'phases', phases: CS_PHASES });
@@ -2834,11 +2717,7 @@ async function csOrchestrate(runId) {
       .join(' · '),
   });
 
-  for (let i = 0; i < CS_PHASES.length; i++) {
-    if (run.cancelled) {
-      csBc(run, { type: 'cancelled' });
-      break;
-    }
+  for (let i = 0; i < CS_PHASES.length && !run.cancelled; i++) {
     const phase = CS_PHASES[i];
     const agent = agents.find((a) => a.id === phase.agentId);
     const isFinalSynth = i === CS_PHASES.length - 1;
@@ -2854,37 +2733,30 @@ async function csOrchestrate(runId) {
     });
 
     const sys = csBuildSystem(agent, phase, isFinalSynth);
-    const user = csBuildUser(run.code, run.filename, run.transcript, phase, isFinalSynth);
-
-    let text = '',
-      fallback = false,
-      fbReason,
-      errored = false;
+    const user = csBuildUser(code, run.filename, run.transcript, phase, isFinalSynth, nonce);
     const t0 = Date.now();
-    // The synthesis turn carries the full fixed source code + markdown report, so it
-    // needs a much larger output budget than the analytical turns. 16k keeps us safe
-    // for typical files (~2k LOC) without blowing past provider per-call caps.
-    const maxTokens = isFinalSynth ? 16000 : 4000;
+    // The synthesis turn carries the whole corrected file and the report, so its budget grows
+    // with the file. The other turns are short.
+    const maxTokens = isFinalSynth ? outputBudget(code, { min: 16_000, max: 64_000, extra: 8_000 }) : 4000;
+    let turnResult;
     try {
-      const r = await csCallAgent(agent, sys, user, keys, maxTokens);
-      text = r.text;
-      fallback = r.fallback;
-      fbReason = r.fallbackReason;
+      turnResult = await csCallAgent(agent, sys, user, keys, maxTokens, signal, failed);
     } catch (err) {
-      errored = true;
-      // Penalise the provider that failed and abort the run
+      if (run.cancelled) break;
       csUpdateLeaderboard(agent.provider, csQualityDelta('', false, true), Date.now() - t0, 0);
-      run.status = 'failed';
-      run.error = `${agent.label} failed: ${err.message}`;
-      run.endedAt = Date.now();
+      csEnd(run, 'failed', `${agent.label} failed: ${err.message}`);
       csBc(run, { type: 'failed', error: run.error, agentId: agent.id });
       return;
     }
+    if (run.cancelled) break;
+    const { text, truncated, fallback, fallbackReason } = turnResult;
     const dt = Date.now() - t0;
 
-    // Update leaderboard for whichever provider actually ran (claude on fallback, agent.provider otherwise)
+    // The provider that broke is marked down once, when it breaks. The one that did the work
+    // (Claude, when it stood in) is credited for the work.
+    if (turnResult.providerFailed) csUpdateLeaderboard(agent.provider, csQualityDelta('', false, true), dt, 0);
     const realProvider = fallback ? 'claude' : agent.provider;
-    csUpdateLeaderboard(realProvider, csQualityDelta(text, fallback, errored), dt, text.length);
+    csUpdateLeaderboard(realProvider, csQualityDelta(text, false, false), dt, text.length);
 
     const turn = {
       phaseIndex: i,
@@ -2894,8 +2766,9 @@ async function csOrchestrate(runId) {
       team: agent.team,
       step: phase.step,
       text,
+      truncated,
       fallback,
-      fallbackReason: fbReason,
+      fallbackReason,
       provider: agent.provider,
       realProvider,
       ms: dt,
@@ -2905,21 +2778,29 @@ async function csOrchestrate(runId) {
     csBc(run, { type: 'turn', ...turn });
   }
 
-  const last = run.transcript[run.transcript.length - 1];
-  let result = null;
-  if (last) {
-    result = csParseSynthesis(last.text);
-    // Award a "win" to the provider that produced a fully parseable synthesis (not partial)
-    if (result && !result.error && !result._partial) {
-      csUpdateLeaderboard(last.realProvider || last.provider, 1.5, 0, 0, { win: true });
-    }
+  if (run.cancelled) {
+    csEnd(run, 'cancelled');
+    csBc(run, { type: 'cancelled' });
+    return;
   }
 
-  run.result = result;
-  run.status = 'complete';
-  run.endedAt = Date.now();
-
-  csBc(run, { type: 'complete', result, agents });
+  // Nothing the last turn says is passed on unchecked: it must be in the agreed shape, and each
+  // finding must be found in the submitted file.
+  const last = run.transcript.at(-1);
+  const parsed = parseModelJson(last?.text);
+  const checked = checkScanResult(parsed?.value ?? null, code, {
+    truncated: !!last?.truncated,
+    complete: parsed?.complete ?? false,
+  });
+  if (!checked.ok) {
+    csEnd(run, 'failed', checked.error);
+    csBc(run, { type: 'failed', error: checked.error });
+    return;
+  }
+  if (!checked.result.incomplete) csUpdateLeaderboard(last.realProvider || last.provider, 1.5, 0, 0, { win: true });
+  run.result = checked.result;
+  csEnd(run, 'complete');
+  csBc(run, { type: 'complete', result: checked.result, agents });
 }
 
 app.post('/api/code-scan/multi/start', async (req, res) => {
@@ -2928,10 +2809,16 @@ app.post('/api/code-scan/multi/start', async (req, res) => {
   if (limited(req, res, `code-scan:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
   const session = csSession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Authentication required.' });
-  const { code, filename } = req.body || {};
+  const { code } = req.body || {};
+  const filename = safeFilename(req.body?.filename);
   if (!code || typeof code !== 'string') return res.status(400).json({ ok: false, error: 'Provide source code.' });
-  if (code.length > 1_000_000)
-    return res.status(413).json({ ok: false, error: 'Code exceeds 1MB. Try splitting it into smaller files.' });
+  if (code.length > CODE_SCAN_MAX_CHARS)
+    return res.status(413).json({
+      ok: false,
+      code: 'FILE_TOO_LARGE',
+      limit: CODE_SCAN_MAX_CHARS,
+      error: `This file is too large for Code Scan (${code.length.toLocaleString('en')} characters; the limit is ${CODE_SCAN_MAX_CHARS.toLocaleString('en')}). A larger file could not be returned whole as a corrected copy. Split it into smaller files.`,
+    });
 
   const keys = await aiKeysForRequest(req);
   if (!keys.claude) {
@@ -2948,7 +2835,7 @@ app.post('/api/code-scan/multi/start', async (req, res) => {
   const run = {
     id: runId,
     code,
-    filename: filename || null,
+    filename,
     keys,
     transcript: [],
     events: [],
@@ -2957,6 +2844,7 @@ app.post('/api/code-scan/multi/start', async (req, res) => {
     status: 'running',
     result: null,
     cancelled: false,
+    abort: new AbortController(),
     startedAt: Date.now(),
     endedAt: null,
     session: sessForRun,
@@ -2968,9 +2856,7 @@ app.post('/api/code-scan/multi/start', async (req, res) => {
   run.agents = lineup;
 
   csOrchestrate(runId).catch((err) => {
-    run.status = 'failed';
-    run.error = err.message;
-    run.endedAt = Date.now();
+    csEnd(run, 'failed', err.message);
     csBc(run, { type: 'failed', error: err.message });
   });
 
@@ -2982,16 +2868,29 @@ app.get('/api/code-scan/multi/:id/events', (req, res) => {
   const ctx = requestContext(req);
   if (!run || !ctx || run.session?.userId !== ctx.user.id || run.session?.orgId !== ctx.org.id)
     return res.status(404).json({ ok: false, error: 'Run not found' });
-  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-  for (const ev of run.events) res.write(`data: ${JSON.stringify(ev)}\n\n`);
-  if (run.status === 'running') {
-    run.sseClients.push(res);
-    req.on('close', () => {
-      run.sseClients = run.sseClients.filter((c) => c !== res);
-    });
-  } else {
-    res.end();
-  }
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  // A browser that reconnects says which event it saw last and is sent only what came after.
+  const seen = Number.parseInt(req.headers['last-event-id'] ?? req.query.after ?? '', 10);
+  const from = Number.isInteger(seen) && seen >= 0 ? seen + 1 : 0;
+  for (let i = from; i < run.events.length; i++) res.write(`id: ${i}\ndata: ${JSON.stringify(run.events[i])}\n\n`);
+  if (run.status !== 'running') return res.end();
+  run.sseClients.push(res);
+  // A model call can be silent for minutes; without this a proxy closes the idle connection.
+  const beat = setInterval(() => {
+    try {
+      res.write(': keep-alive\n\n');
+    } catch {}
+  }, 15_000);
+  beat.unref?.();
+  req.on('close', () => {
+    clearInterval(beat);
+    run.sseClients = run.sseClients.filter((c) => c !== res);
+  });
 });
 
 app.get('/api/code-scan/multi/:id/result', (req, res) => {
@@ -3017,6 +2916,8 @@ app.post('/api/code-scan/multi/:id/cancel', (req, res) => {
   if (!run || run.session?.userId !== ctx.user.id || run.session?.orgId !== ctx.org.id)
     return res.status(404).json({ ok: false });
   run.cancelled = true;
+  // Stops the model call that is in flight, not only the ones after it.
+  run.abort?.abort();
   res.json({ ok: true });
 });
 
@@ -3036,57 +2937,36 @@ Respond with ONLY a single JSON object inside a \`\`\`json fence. Schema:
   "overallRisk": "critical"|"high"|"medium"|"low"|"clean",
   "redTeam": {
     "summary": "string",
-    "findings": [ { "id":"F1","severity":"critical|high|medium|low|info","category":"string","title":"string","description":"string","lines":[int],"exploit":"string" } ]
+    "findings": [ { "id":"F1","severity":"critical|high|medium|low|info","category":"string","title":"string","description":"string","lines":[int],"snippet":"the vulnerable line(s) copied exactly from the file, without the line-number prefix","exploit":"string" } ]
   },
   "blueTeam": {
     "summary": "string",
-    "fixedCode": "string (the COMPLETE corrected file content, not a diff)",
+    "fixedCode": "string (the COMPLETE corrected file content, not a diff, no line-number prefixes)",
     "patches": [ { "findingIds":["F1"],"description":"string","rationale":"string" } ]
   }
 }
 
 Rules:
 - fixedCode MUST be the complete file. If clean, return the original code unchanged with overallRisk "clean" and empty findings.
-- Output ONLY the JSON code fence — no prose before or after.`;
+- Every finding must quote the vulnerable code in "snippet" exactly as it stands in the file. A finding whose quote is not in the file is discarded, so do not include a finding you cannot point to.
+- Output ONLY the JSON code fence — no prose before or after.
 
-function extractJsonFence(text) {
-  if (!text) return null;
-  const fence = text.match(/```(?:json)?\s*([\s\S]+?)\s*```/);
-  const raw = fence ? fence[1] : text;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    /* try first { ... last } */
-  }
-  const start = raw.indexOf('{'),
-    end = raw.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    try {
-      return JSON.parse(raw.slice(start, end + 1));
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
+${FILE_IS_DATA_RULE}`;
 
-async function quickScanFile({ apiKey, code, filename }) {
-  const client = new Anthropic({ apiKey });
-  const safeFilename = filename || 'snippet.txt';
-  const userPrompt = `File: ${safeFilename}\n\n\`\`\`\n${code}\n\`\`\``;
-  const r = await client.messages.create({
-    model: process.env.SHANNON_QUICK_MODEL || 'claude-sonnet-4-6',
-    max_tokens: 8192,
-    system: QUICK_SYSTEM,
-    messages: [{ role: 'user', content: userPrompt }],
-  });
-  const text = (r.content || [])
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
-  const parsed = extractJsonFence(text);
-  if (!parsed) return { ok: false, error: 'Failed to parse model output', raw: text };
-  return { ok: true, result: parsed };
+async function quickScanFile({ apiKey, code, filename, signal }) {
+  const nonce = randomUUID().replaceAll('-', '').slice(0, 16);
+  const { text, truncated } = await csCallProvider(
+    'claude',
+    process.env.SHANNON_QUICK_MODEL || 'claude-sonnet-4-6',
+    QUICK_SYSTEM,
+    fileBlock(code, filename, nonce),
+    { claude: apiKey },
+    outputBudget(code, { min: 8192, max: 64_000, extra: 4000 }),
+    signal,
+  );
+  const parsed = parseModelJson(text);
+  const checked = checkScanResult(parsed?.value ?? null, code, { truncated, complete: parsed?.complete ?? false });
+  return checked.ok ? { ok: true, result: checked.result } : { ok: false, error: checked.error };
 }
 
 app.post('/api/code-scan/quick', async (req, res) => {
@@ -3095,9 +2975,16 @@ app.post('/api/code-scan/quick', async (req, res) => {
   if (limited(req, res, `quick-scan:${ctx.user.id}`, 60, 60 * 60 * 1000)) return;
   const session = csSession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Authentication required.' });
-  const { code, filename } = req.body || {};
+  const { code } = req.body || {};
+  const filename = safeFilename(req.body?.filename);
   if (!code || typeof code !== 'string') return res.status(400).json({ ok: false, error: 'Provide source code.' });
-  if (code.length > 1_000_000) return res.status(413).json({ ok: false, error: 'File exceeds 1MB.' });
+  if (code.length > CODE_SCAN_MAX_CHARS)
+    return res.status(413).json({
+      ok: false,
+      code: 'FILE_TOO_LARGE',
+      limit: CODE_SCAN_MAX_CHARS,
+      error: `File too large for Code Scan (${code.length.toLocaleString('en')} characters; the limit is ${CODE_SCAN_MAX_CHARS.toLocaleString('en')}).`,
+    });
 
   const apiKey = (await aiKeysForRequest(req)).claude;
   if (!apiKey) return res.status(400).json({ ok: false, error: 'Anthropic key required.' });
@@ -3105,7 +2992,8 @@ app.post('/api/code-scan/quick', async (req, res) => {
 
   try {
     const out = await quickScanFile({ apiKey, code, filename });
-    res.json({ ok: true, ...out });
+    // A reply that could not be used is a failed scan of this file, never an empty result.
+    res.status(out.ok ? 200 : 502).json(out);
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message || String(err) });
   }
@@ -3858,6 +3746,56 @@ app.post('/api/team/:orgId/artifacts/:id/url', async (req, res) => {
   res.json({ ok: true, ...(await signedArtifactUrl(artifact, 300)) });
 });
 
+// How a worker job reads as a scan. The page knows completed, running, queued, failed and stopped.
+function scanStatusOfJob(job) {
+  if (job.status === 'succeeded') return job.result?.status || 'completed';
+  if (job.status === 'dead-letter' || job.status === 'failed') return 'failed';
+  if (job.status === 'cancelled') return 'stopped';
+  return job.status;
+}
+
+// Where a scan's result files are: the working folder when this process ran the scan, storage when
+// the worker did. Only the verified-results folders are listed.
+async function scanResultStore(orgId, scanId) {
+  const dir = join(WORKSPACES, scanId);
+  if (existsSync(dir)) {
+    const paths = [];
+    const visit = (sub) => {
+      for (const entry of readdirSync(join(dir, sub), { withFileTypes: true })) {
+        const rel = `${sub}/${entry.name}`;
+        if (entry.isDirectory()) visit(rel);
+        else if (entry.isFile()) paths.push(rel);
+      }
+    };
+    for (const top of ['broker', 'defense']) if (existsSync(join(dir, top))) visit(top);
+    return {
+      paths,
+      read: async (rel) => {
+        try {
+          return readFileSync(join(dir, rel), 'utf-8');
+        } catch {
+          return null;
+        }
+      },
+    };
+  }
+  const byPath = new Map();
+  for (const artifact of await listArtifacts(orgId, scanId).catch(() => []))
+    if (artifact.metadata?.relativePath) byPath.set(artifact.metadata.relativePath, artifact);
+  return {
+    paths: [...byPath.keys()],
+    read: async (rel) => {
+      const artifact = byPath.get(rel);
+      if (!artifact) return null;
+      try {
+        return (await readArtifact(artifact)).toString('utf8');
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
 // ---- API: List scans (no workspace paths exposed) ----
 async function listOrgScans(orgId) {
   const scans = (existsSync(WORKSPACES) ? readdirSync(WORKSPACES) : [])
@@ -3887,12 +3825,13 @@ async function listOrgScans(orgId) {
       id: job.payload.scanId,
       jobId: job.id,
       target: job.result?.target || job.payload.targetUrl,
-      status: job.status === 'succeeded' ? job.result?.status || 'completed' : job.status,
+      status: scanStatusOfJob(job),
       startedAt: job.result?.startedAt || new Date(job.createdAt).toISOString(),
       completedAt: job.result?.completedAt || null,
       agents: 0,
       totalCost: 0,
-      hasReport: job.status === 'succeeded' && Number(job.result?.artifactCount || 0) > 0,
+      // A scan that stopped part-way still has what it found up to then.
+      hasReport: Number(job.result?.artifactCount || 0) > 0,
       attempts: job.attempts,
       error: job.error || null,
     });
@@ -3927,6 +3866,15 @@ app.get(['/api/scans/:id', '/api/v1/scans/:id'], async (req, res) => {
     const sessionRaw = await readText('session.json');
     if (sessionRaw) {
       try { session = JSON.parse(sessionRaw); } catch {}
+    }
+    // A scanner that was stopped never marks its own session as ended; the job knows how it ended.
+    if (!['queued', 'running', 'succeeded'].includes(job.status)) {
+      session = {
+        ...session,
+        status: scanStatusOfJob(job),
+        failReason: job.error || session.failReason || null,
+        completedAt: session.completedAt || job.result?.completedAt || new Date(job.updatedAt || Date.now()).toISOString(),
+      };
     }
     const files = {
       report: await readText('report.md'),
@@ -4049,53 +3997,58 @@ app.get(['/api/scans/:id/report', '/api/v1/scans/:id/report'], async (req, res) 
   res.end(readFileSync(p, 'utf-8'));
 });
 
-app.get('/api/scans/:id/broker', (req, res) => {
-  if (!scanContext(req, res, req.params.id)) return;
-  const scanDir = join(WORKSPACES, req.params.id);
-  const brokerDir = join(scanDir, 'broker');
-  const rj = (p) => {
+app.get('/api/scans/:id/broker', async (req, res) => {
+  const ctx = scanContext(req, res, req.params.id);
+  if (!ctx) return;
+  const store = await scanResultStore(ctx.org.id, req.params.id);
+  const json = async (rel) => {
+    const raw = await store.read(rel);
+    if (!raw) return null;
     try {
-      return existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : null;
+      return JSON.parse(raw);
     } catch {
       return null;
     }
   };
+  // <top>/<category>/<file>: the categories that have this file.
+  const categories = (top, file) =>
+    store.paths
+      .map((path) => path.split('/'))
+      .filter((parts) => parts.length === 3 && parts[0] === top && parts[2] === file)
+      .map((parts) => parts[1])
+      .sort();
 
   const findings = [];
   const rows = [];
   const owaspCoverage = {};
   const cweCoverage = {};
 
-  if (existsSync(brokerDir)) {
-    for (const category of readdirSync(brokerDir)) {
-      const catDir = join(brokerDir, category);
-      if (!statSync(catDir).isDirectory()) continue;
-      for (const f of rj(join(catDir, 'findings.json')) || []) findings.push({ category, ...f });
-      const compliance = rj(join(catDir, 'compliance.json'));
-      if (compliance) {
-        for (const r of compliance.rows || []) rows.push(r);
-        for (const [k, n] of Object.entries(compliance.owaspCoverage || {}))
-          owaspCoverage[k] = (owaspCoverage[k] || 0) + n;
-        for (const [k, n] of Object.entries(compliance.cweCoverage || {})) cweCoverage[k] = (cweCoverage[k] || 0) + n;
-      }
-    }
+  for (const category of categories('broker', 'findings.json')) {
+    const parsed = await json(`broker/${category}/findings.json`);
+    const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.findings) ? parsed.findings : [];
+    for (const f of list) findings.push({ category, ...f });
+  }
+  for (const category of categories('broker', 'compliance.json')) {
+    const compliance = await json(`broker/${category}/compliance.json`);
+    if (!compliance) continue;
+    for (const r of compliance.rows || []) rows.push(r);
+    for (const [k, n] of Object.entries(compliance.owaspCoverage || {})) owaspCoverage[k] = (owaspCoverage[k] || 0) + n;
+    for (const [k, n] of Object.entries(compliance.cweCoverage || {})) cweCoverage[k] = (cweCoverage[k] || 0) + n;
   }
 
   // Paired defenses from the Purple Engine: per confirmed exploit, a detection rule,
   // an inline-block proof, and LLM remediation (defense/<category>/defense.json).
   const defenses = [];
-  const defenseDir = join(scanDir, 'defense');
-  if (existsSync(defenseDir)) {
-    for (const category of readdirSync(defenseDir)) {
-      const d = rj(join(defenseDir, category, 'defense.json'));
-      if (d) defenses.push(d);
-    }
+  for (const category of categories('defense', 'defense.json')) {
+    const d = await json(`defense/${category}/defense.json`);
+    if (d) defenses.push(d);
   }
 
   // Advanced layers surfaced to the client: attack chains + impact are already in `findings`
   // (their own classes); the monitoring delta and AI leads are separate report artifacts.
-  const monitoring = rj(join(brokerDir, 'monitoring.json'));
-  const aiLeads = rj(join(brokerDir, 'ai-leads.json')) || [];
+  const monitoring = await json('broker/monitoring.json');
+  const leads = await json('broker/ai-leads.json');
+  const aiLeads = Array.isArray(leads) ? leads : [];
   const chains = findings.filter((f) => f.category === 'attack-chain');
   const impact = findings.filter((f) => f.category === 'impact');
 
@@ -4367,7 +4320,130 @@ function agentDeps(target, headers = {}) {
     return crawl({ target, maxPages: 25 * round, timeoutMs: 7000, maxRequests: 120 + 60 * round, headers: h });
   };
   const fetchText = async (url) => (await fetchT(url)).body || ''; // host-gated to the target origin
-  return { probe, escalate, recrawl, fetchText };
+  const fetchStatus = async (url) => (await fetchT(url)).status || 0;
+  return { probe, escalate, recrawl, fetchText, fetchStatus };
+}
+
+// The checking engine keeps the site it is aimed at, and that site's login session, in one shared
+// place. Two runs at once would switch each other's target and session mid-run, and each would
+// quietly test less than it reports. So runs take turns: one uses the engine, the others wait.
+let engineQueue = Promise.resolve();
+let engineWaiting = 0;
+function withEngine(work, { onWait } = {}) {
+  if (engineWaiting > 0) {
+    try {
+      onWait?.(engineWaiting);
+    } catch {}
+  }
+  engineWaiting += 1;
+  const turn = engineQueue.then(async () => {
+    try {
+      return await work();
+    } finally {
+      engineWaiting -= 1;
+      // A login session never outlives the run it was given for.
+      setSessionHeaders({});
+      setScanOrigin(null);
+    }
+  });
+  engineQueue = turn.catch(() => {});
+  return turn;
+}
+
+// How far a run goes. More pages and more checks take longer and send more requests to the site.
+const AGENT_DEPTHS = {
+  quick: { maxPages: 25, maxRequests: 120, maxTasks: 30, maxPer: 6 },
+  standard: { maxPages: 75, maxRequests: 320, maxTasks: 90, maxPer: 15 },
+  deep: { maxPages: 200, maxRequests: 800, maxTasks: 240, maxPer: 40 },
+};
+const agentDepth = (value) => (Object.hasOwn(AGENT_DEPTHS, value) ? value : 'quick');
+// What a site's firewall answers when it has decided to refuse an automated visitor.
+const REFUSED = new Set([401, 403, 406, 429, 503]);
+
+// One complete run: the campaign, the unproven leads, and an honest account of what was covered.
+async function agentCampaign(target, surface, headers, { depth = 'quick', onStep } = {}) {
+  const limits = AGENT_DEPTHS[agentDepth(depth)];
+  const deps = agentDeps(target, headers);
+  const origin = new URL(target).origin;
+  // The address the run was given must answer before anything is checked. A site that refuses it
+  // (a firewall, a rate limit, a login wall with no login supplied) cannot be tested, and saying
+  // "nothing found" about it would be false.
+  const status = await deps.fetchStatus(target).catch(() => 0);
+  if (!(surface.pages || []).length || REFUSED.has(status)) {
+    const reason = REFUSED.has(status)
+      ? `it answered ${status}, which usually means a firewall is refusing automated visitors`
+      : status
+        ? `it answered ${status}`
+        : 'it did not answer';
+    const error = new Error(`No page of ${origin} could be read (${reason}), so nothing was checked.${status === 401 || status === 403 ? ' If the site needs a login, add it under "Login / session" and run again.' : ''}`);
+    error.status = 502;
+    throw error;
+  }
+  const recrawl = async ({ round, identity }) => {
+    const h = identity?.headers ? { ...headers, ...identity.headers } : headers;
+    return crawl({
+      target,
+      maxPages: limits.maxPages * round,
+      timeoutMs: 7000,
+      maxRequests: limits.maxRequests + (limits.maxRequests / 2) * round,
+      headers: h,
+    });
+  };
+  const run = annotateFixes(
+    await runAgentCampaign({
+      surface,
+      probe: deps.probe,
+      escalate: deps.escalate,
+      recrawl,
+      maxTasks: limits.maxTasks,
+      maxPer: limits.maxPer,
+      onStep,
+    }),
+  );
+  const mapped = run.surface || surface;
+  run.surface = undefined;
+  // Did the site start refusing the requests while it was being checked?
+  const after = await deps.fetchStatus(target).catch(() => 0);
+  const blocked = REFUSED.has(after) || after === 0;
+  run.coverage = {
+    depth: agentDepth(depth),
+    pages: (mapped.pages || []).length,
+    forms: (mapped.forms || []).length,
+    checksRun: run.stats.tested || 0,
+    checksPossible: Math.max(run.stats.possible || 0, run.stats.tested || 0),
+    checksFailed: run.stats.errors || 0,
+    blocked,
+    siteStatus: after,
+  };
+  const note = (detail) => {
+    const step = { phase: 'warning', detail, t: run.steps.length };
+    run.steps.push(step);
+    onStep?.(step);
+  };
+  if (blocked)
+    note(
+      `By the end the site answered ${after || 'nothing'} to a plain request. A firewall or rate limit was refusing these checks, so the result is incomplete: "nothing confirmed" here does not mean the site is clean.`,
+    );
+  if (run.coverage.checksPossible > run.coverage.checksRun)
+    note(
+      `${run.coverage.checksRun} of ${run.coverage.checksPossible} possible checks were run at "${run.coverage.depth}" depth. Choose a deeper run to cover the rest.`,
+    );
+  run.leads = await gatherLeads(mapped, {
+    fetchText: deps.fetchText,
+    confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
+  });
+  return run;
+}
+
+// Keeps an event stream open while a long step is silent, so a proxy does not close it.
+function keepAlive(res) {
+  const beat = setInterval(() => {
+    try {
+      res.write(': keep-alive\n\n');
+    } catch {}
+  }, 15_000);
+  beat.unref?.();
+  return () => clearInterval(beat);
 }
 
 // Resolve an optional authenticated session from the request: a session Cookie, or a form login (which
@@ -4439,8 +4515,10 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
     const headers = await resolveAuthHeaders(req, target);
     const quota = await consumeOrgAllowance(ctx.org.id, 'agentRuns', 1);
     if (!quota.allowed) return { status: 429, error: `Daily organization limit reached for agent runs (${quota.used}/${quota.limit}) and no prepaid credits remain.` };
-    const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120, headers });
-    return { target, surface, headers, ctx };
+    const depth = agentDepth(String(req.body?.depth || req.query?.depth || ''));
+    const { maxPages, maxRequests } = AGENT_DEPTHS[depth];
+    const surface = await crawl({ target, maxPages, timeoutMs: 7000, maxRequests, headers });
+    return { target, surface, headers, ctx, depth };
   } catch (e) {
     return e?.status
       ? { status: e.status, error: e.message }
@@ -4513,16 +4591,11 @@ app.post('/api/agent/run', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   try {
-    const { probe, escalate, recrawl, fetchText } = agentDeps(r.target, r.headers);
-    const run = annotateFixes(await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl }));
-    run.leads = await gatherLeads(r.surface, {
-      fetchText,
-      confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
-    });
+    const run = await withEngine(() => agentCampaign(r.target, r.surface, r.headers, { depth: r.depth }));
     run.savedId = persistRun(req, r.target, run);
     res.json({ ok: true, run });
   } catch (e) {
-    res.status(500).json({ error: `Agent run failed: ${e.message}` });
+    res.status(e.status || 500).json({ error: e.status ? e.message : `Agent run failed: ${e.message}` });
   }
 });
 
@@ -4545,15 +4618,15 @@ app.get('/api/agent/run/stream', async (req, res) => {
     send({ message: r.error, needsVerification: r.needsVerification }, 'error');
     return res.end();
   }
+  const stop = keepAlive(res);
   try {
-    const { probe, escalate, recrawl, fetchText } = agentDeps(r.target, r.headers);
-    const run = annotateFixes(
-      await runAgentCampaign({ surface: r.surface, probe, escalate, recrawl, onStep: (s) => send(s) }),
+    const run = await withEngine(
+      () => agentCampaign(r.target, r.surface, r.headers, { depth: r.depth, onStep: (s) => send(s) }),
+      {
+        onWait: (ahead) =>
+          send({ phase: 'wait', detail: `Waiting for ${ahead} other check${ahead === 1 ? '' : 's'} to finish first…` }),
+      },
     );
-    run.leads = await gatherLeads(r.surface, {
-      fetchText,
-      confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
-    });
     run.savedId = persistRun(req, r.target, run);
     send({
       phase: 'leads',
@@ -4561,7 +4634,9 @@ app.get('/api/agent/run/stream', async (req, res) => {
     });
     send({ run }, 'done');
   } catch (e) {
-    send({ message: `Agent run failed: ${e.message}` }, 'error');
+    send({ message: e.status ? e.message : `Agent run failed: ${e.message}` }, 'error');
+  } finally {
+    stop();
   }
   res.end();
 });
@@ -4585,7 +4660,7 @@ app.post('/api/agent/team', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   try {
-    const out = await runSecurityTeam({ surface: r.surface, deps: teamDeps(r.target, r.headers), roster: { exploitAgents: 4 } });
+    const out = await withEngine(() => runSecurityTeam({ surface: r.surface, deps: teamDeps(r.target, r.headers), roster: { exploitAgents: 4 } }));
     out.savedId = persistRun(req, r.target, { stats: out.stats, findings: out.findings, leads: [] });
     res.json({ ok: true, team: out });
   } catch (e) {
@@ -4611,13 +4686,17 @@ app.get('/api/agent/team/stream', async (req, res) => {
     send({ message: r.error, needsVerification: r.needsVerification }, 'error');
     return res.end();
   }
+  const stopTeamBeat = keepAlive(res);
+  res.on('close', stopTeamBeat);
   try {
-    const out = await runSecurityTeam({
-      surface: r.surface,
-      deps: teamDeps(r.target, r.headers),
-      roster: { exploitAgents: 4 },
-      onEvent: (e) => send(e),
-    });
+    const out = await withEngine(() =>
+      runSecurityTeam({
+        surface: r.surface,
+        deps: teamDeps(r.target, r.headers),
+        roster: { exploitAgents: 4 },
+        onEvent: (e) => send(e),
+      }),
+    );
     out.savedId = persistRun(req, r.target, { stats: out.stats, findings: out.findings, leads: [] });
     send({ team: out }, 'done');
   } catch (e) {
@@ -4668,7 +4747,7 @@ function persistRun(req, target, run) {
       id,
       target,
       createdAt: Date.now(),
-      stats: run.stats || {},
+      stats: { ...(run.stats || {}), coverage: run.coverage || null },
       findings: run.findings || [],
       leads: run.leads || [],
     });
@@ -4714,13 +4793,7 @@ app.get('/api/agent/runs/:id/diff/:prevId', (req, res) => {
 // Reusable: crawl + run the campaign + gather leads (no HTTP req — used by the scheduler).
 async function executeAgentRun(target) {
   const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120 });
-  const { probe, escalate, recrawl, fetchText } = agentDeps(target);
-  const run = annotateFixes(await runAgentCampaign({ surface, probe, escalate, recrawl }));
-  run.leads = await gatherLeads(surface, {
-    fetchText,
-    confirmedTargets: run.findings.map((f) => f.target).filter(Boolean),
-  });
-  return run;
+  return withEngine(() => agentCampaign(target, surface, {}, { depth: 'quick' }));
 }
 
 let _monitorBusy = false;
@@ -4734,15 +4807,48 @@ async function runDueMonitors() {
         const prevSummary = listAgentRuns(m.userId, m.target)[0];
         const prev = prevSummary ? getAgentRun(m.userId, prevSummary.id) : null;
         const run = await executeAgentRun(m.target);
+        const runId = randomUUID().slice(0, 12);
         saveAgentRun(m.userId, {
-          id: randomUUID().slice(0, 12),
+          id: runId,
           target: m.target,
           createdAt: Date.now(),
-          stats: run.stats || {},
+          stats: { ...(run.stats || {}), coverage: run.coverage || null },
           findings: run.findings || [],
           leads: run.leads || [],
         });
         touchMonitor(m.userId, m.id, Date.now());
+        // What a scheduled check finds goes where a manual run's findings go: the organization's
+        // finding queue, and its alert destinations when something is new. Before this a monitor
+        // with no webhook of its own found things every hour and told nobody.
+        const org = listOrganizations(m.userId)[0];
+        const fresh = prev ? diffRuns(prev, run).added : run.findings || [];
+        if (org && fresh.length) {
+          try {
+            persistConfirmedFindings({ org, user: { id: m.userId } }, fresh, { source: 'agent-monitor', scanId: runId });
+            queueIntegrationEvent(
+              org.id,
+              {
+                id: `agent-monitor:${m.id}:${runId}`,
+                type: 'agent.monitor.new_findings',
+                at: new Date().toISOString(),
+                data: {
+                  target: m.target,
+                  new: fresh.length,
+                  findings: fresh.slice(0, 20).map((f) => ({
+                    cls: f.cls || f.tool || 'finding',
+                    severity: f.severity || 'medium',
+                    target: String(f.target || '').slice(0, 300),
+                    detail: String(f.detail || '').slice(0, 300),
+                  })),
+                },
+              },
+              m.userId,
+            ).catch((error) => console.error('[monitor] alert failed:', error.message));
+          } catch (error) {
+            console.error('[monitor] could not record findings:', error.message);
+          }
+        }
+        if (run.coverage?.blocked) console.warn(`[monitor] ${m.target} refused the checks (answered ${run.coverage.siteStatus}); this run is incomplete`);
         if (m.webhookUrl && prev) {
           const diff = diffRuns(prev, run);
           if (diff.summary.new > 0) {
@@ -5337,18 +5443,7 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
   };
   child.once('error', cleanScanConfig);
 
-  const phasePatterns = [
-    { re: /\[Phase 0\]/, id: 'http-recon', name: 'HTTP Recon' },
-    { re: /\[Phase 1\]/, id: 'pre-recon', name: 'Pre-Recon' },
-    { re: /\[Phase 2\]/, id: 'recon', name: 'Deep Recon' },
-    { re: /\[Phase 3\]/, id: 'red-team', name: 'Red Team Attack' },
-    { re: /\[Phase 4\]/, id: 'purple-team', name: 'Purple Team (2 Red + 2 Blue)' },
-    { re: /\[Phase 5\]/, id: 'exploit-verify', name: 'Exploit Verify' },
-    { re: /\[Phase 6\]/, id: 'chain', name: 'Attack Chains' },
-    { re: /\[Phase 7\]/, id: 'war-room', name: 'War Room' },
-    { re: /\[Phase 8\]/, id: 'report', name: 'Report' },
-    { re: /\[Phase 9\]/, id: 'forensic', name: 'Forensic' },
-  ];
+  const phasePatterns = SCAN_PHASES;
 
   const scan = {
     child,
@@ -5522,9 +5617,9 @@ app.get('/api/scans/:id/live', async (req, res) => {
   }
   const job = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
   if (job) return res.json({
-    status: job.status === 'succeeded' ? job.result?.status || 'completed' : job.status,
+    status: scanStatusOfJob(job),
     output: job.result?.outputTail || '', target: job.result?.target || job.payload?.targetUrl,
-    phases: [], attempts: job.attempts, error: job.error || null,
+    phases: Array.isArray(job.result?.phases) ? job.result.phases : [], attempts: job.attempts, error: job.error || null,
   });
   res.status(404).json({ error: 'Not found' });
 });
@@ -5538,20 +5633,41 @@ app.get('/api/scans/:id/events', async (req, res) => {
     const initial = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
     if (!initial) return res.status(404).json({ error: 'Not found' });
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    // The worker runs this scan in another process. It stores what the scanner printed and the
+    // phases so far; each viewer is sent what it has not seen yet, as the same events a scan run
+    // by this process sends.
+    const write = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+    const seen = createSeen();
     let previous = '';
+    let note = '';
+    let ended = false;
     const send = async () => {
+      if (ended) return;
       const job = await getJob(initial.id).catch(() => null);
       if (!job) return;
-      const snapshot = JSON.stringify({ status: job.status, attempts: job.attempts, error: job.error || null, output: job.result?.outputTail || '' });
-      if (snapshot !== previous) res.write(`data: ${JSON.stringify({ type: 'job', ...JSON.parse(snapshot) })}\n\n`);
+      const snapshot = JSON.stringify({ status: job.status, attempts: job.attempts, error: job.error || null });
+      if (snapshot !== previous) write({ type: 'job', ...JSON.parse(snapshot) });
       previous = snapshot;
+      // Say why nothing is moving, once per state.
+      const waiting =
+        job.status !== 'queued'
+          ? ''
+          : job.attempts > 0
+            ? 'The scan was interrupted and is waiting to start again.'
+            : 'Queued: waiting for the scan worker to pick this up.';
+      if (waiting && waiting !== note) write({ type: 'output', line: waiting });
+      note = waiting;
+      for (const event of progressSince(seen, job.result)) write(event);
       if (['succeeded', 'cancelled', 'dead-letter', 'failed'].includes(job.status)) {
-        res.write(`data: ${JSON.stringify({ type: job.status === 'succeeded' ? 'complete' : 'failed', status: job.status })}\n\n`);
+        ended = true;
         clearInterval(timer);
+        if (seen.carry.trim()) write({ type: 'output', line: seen.carry.trim() });
+        const type = job.status === 'succeeded' ? 'complete' : job.status === 'cancelled' ? 'stopped' : 'failed';
+        write({ type, status: job.status, ...(type === 'failed' ? { error: String(job.error || '').slice(0, 600) || null } : {}) });
         res.end();
       }
     };
-    const timer = setInterval(() => send().catch(() => {}), 2_000);
+    const timer = setInterval(() => send().catch(() => {}), Math.max(100, Number(process.env.SHANNON_SCAN_EVENTS_POLL_MS || 2_000)));
     timer.unref?.();
     req.on('close', () => clearInterval(timer));
     await send();
@@ -5932,6 +6048,76 @@ app.post('/api/defender/sdk/rotate', (req, res) => {
   saveUsers(loadUsers());
   audit(ctx, 'defender.sdk_key_rotated', 'organization', ctx.org.id, { version: ctx.user.defenderKeyVersion });
   res.json({ apiKey: defenderApiKey(ctx.user.id, ctx.org.id, ctx.user.defenderKeyVersion) });
+});
+
+// ── Website protection settings ──────────────────────────────────────────────────
+// One set per organization. The owner changes them in Settings; every website that carries the
+// organization's key reads them and applies them within a minute, so nothing has to be redeployed.
+const defenderPolicyRecord = (orgId) => getOrgSecret(orgId, 'defender-policy', 'site');
+
+app.get('/api/defender/policy', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const record = await defenderPolicyRecord(ctx.org.id);
+  const lastReport = listDefenseEvents(ctx.org.id, 200).find((event) => event.source === 'sdk');
+  res.json({
+    ok: true,
+    policy: policyFor(record?.config?.policy),
+    rules: DEFENDER_RULES,
+    updatedAt: record?.updatedAt || null,
+    // When a website last reported something, which shows the key is installed and working.
+    lastReportAt: lastReport?.at || null,
+    apiKey: defenderApiKey(ctx.user.id, ctx.org.id, ctx.user.defenderKeyVersion),
+    endpoint: publicBaseUrl(req),
+  });
+});
+
+app.put('/api/defender/policy', async (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const checked = normalizePolicy(req.body?.policy);
+  if (!checked.ok) return res.status(400).json({ error: checked.error });
+  const previous = await defenderPolicyRecord(ctx.org.id);
+  const now = Date.now();
+  await saveOrgSecret({
+    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`,
+    orgId: ctx.org.id,
+    kind: 'defender-policy',
+    name: 'site',
+    config: { policy: checked.policy },
+    // Nothing here is secret; the column is required, so it holds an empty sealed value.
+    secretEnc: previous?.secretEnc || encryptSecret({}),
+    createdBy: previous?.createdBy || ctx.user.id,
+    createdAt: previous?.createdAt || now,
+    updatedAt: now,
+  });
+  audit(ctx, 'defender.policy_updated', 'organization', ctx.org.id, {
+    enabled: checked.policy.enabled,
+    mode: checked.policy.mode,
+    disabled: checked.policy.disabled,
+    skip: checked.policy.skip.length,
+  });
+  res.json({ ok: true, policy: checked.policy, updatedAt: now });
+});
+
+// Read by the organization's websites.
+app.get('/api/defender/sdk/policy', async (req, res) => {
+  const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+  if (!principal) return res.status(401).json({ error: 'invalid api key' });
+  const record = await defenderPolicyRecord(principal.orgId).catch(() => null);
+  res.setHeader('cache-control', 'no-store');
+  res.json({ policy: policyFor(record?.config?.policy), version: record?.updatedAt || 0 });
+});
+
+// The adapter as one file, so a customer adds a single file to their own project.
+app.get('/api/defender/sdk/download/:kind', (req, res) => {
+  const ctx = requirePermission(req, res, 'defender.manage');
+  if (!ctx) return;
+  const code = sdkBundle(req.params.kind);
+  if (!code) return res.status(404).json({ error: 'Unknown download.' });
+  res.setHeader('content-type', 'text/javascript; charset=utf-8');
+  res.setHeader('content-disposition', `attachment; filename="securovix-defender${req.params.kind === 'express' ? '-express' : ''}.mjs"`);
+  res.end(code);
 });
 
 // ── Weekly attack summary ───────────────────────────────────────────────────────────────────────
@@ -6670,7 +6856,7 @@ export async function startDashboard({ port = PORT, scheduleMonitors = true } = 
   return server;
 }
 
-export { app };
+export { app, withEngine, runDueMonitors };
 
 if (process.argv[1] && resolve(process.argv[1]) === __filename) {
   startDashboard().catch(() => process.exit(1));

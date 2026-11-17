@@ -766,6 +766,7 @@ export async function updateJob(id, patch) {
     heartbeatAt: 'heartbeat_at',
     payload: 'payload',
     secretEnc: 'secret_enc',
+    attempts: 'attempts',
   };
   for (const [key, column] of Object.entries(map)) if (Object.hasOwn(patch, key)) body[column] = patch[key];
   const rows = await rest(`/shannon_jobs?id=eq.${encodeURIComponent(id)}`, {
@@ -922,6 +923,8 @@ export async function saveArtifact(record, content) {
     const target = join(DATA_DIR, 'artifacts', objectPath);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, body);
+    // One record per stored file: a scan that is run again replaces what the first run stored.
+    local.artifacts = local.artifacts.filter((item) => item.objectPath !== objectPath);
     local.artifacts.push(normalized);
     persist();
     return normalized;
@@ -940,7 +943,7 @@ export async function saveArtifact(record, content) {
     },
   );
   if (!upload.ok) throw new Error(`artifact upload failed: ${upload.status} ${(await upload.text()).slice(0, 240)}`);
-  await rest('/shannon_artifacts', {
+  await rest('/shannon_artifacts?on_conflict=object_path', {
     method: 'POST',
     headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify([
@@ -1389,12 +1392,17 @@ export async function purgeExpiredEnterpriseData({
     jobs: now - completedJobDays * 86_400_000,
     artifacts: now - artifactDays * 86_400_000,
   };
+  // A scan is listed from its job. Deleting the job before its stored results would make a
+  // finished scan vanish from the history while its report still exists.
+  const scanJobs = Math.min(cutoffs.jobs, cutoffs.artifacts);
   if (!USE_SUPABASE) {
     local.authTokens = local.authTokens.filter((x) => x.expiresAt >= cutoffs.auth);
     local.deliveries = local.deliveries.filter((x) => x.createdAt >= cutoffs.deliveries);
     local.operations = local.operations.filter((x) => x.createdAt >= cutoffs.operations);
     local.jobs = local.jobs.filter(
-      (x) => !['succeeded', 'cancelled', 'dead-letter'].includes(x.status) || x.updatedAt >= cutoffs.jobs,
+      (x) =>
+        !['succeeded', 'cancelled', 'dead-letter'].includes(x.status) ||
+        x.updatedAt >= (x.type === 'scan' ? scanJobs : cutoffs.jobs),
     );
     persist();
     return { ok: true, backend: 'local' };
@@ -1431,7 +1439,11 @@ export async function purgeExpiredEnterpriseData({
       method: 'DELETE',
       headers: { prefer: 'return=minimal' },
     }),
-    rest(`/shannon_jobs?status=in.(succeeded,cancelled,dead-letter)&updated_at=lt.${cutoffs.jobs}`, {
+    rest(`/shannon_jobs?status=in.(succeeded,cancelled,dead-letter)&type=neq.scan&updated_at=lt.${cutoffs.jobs}`, {
+      method: 'DELETE',
+      headers: { prefer: 'return=minimal' },
+    }),
+    rest(`/shannon_jobs?status=in.(succeeded,cancelled,dead-letter)&type=eq.scan&updated_at=lt.${scanJobs}`, {
       method: 'DELETE',
       headers: { prefer: 'return=minimal' },
     }),

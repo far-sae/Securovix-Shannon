@@ -228,33 +228,14 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
     let size = 0;
     let oversize = false;
 
-    req.on('data', (d) => {
-      if (oversize) return;
-      size += d.length;
-      if (size > MAX_CLASSIFIED_BODY) {
-        // Past the inspection cap we stream through unexamined rather than buffer a whole upload.
-        oversize = true;
-        const fwd = openUpstream(upstreamHeaders(null));
-        for (const c of chunks) fwd.write(c);
-        chunks = [];
-        fwd.write(d);
-        req.pipe(fwd);
-        return;
-      }
-      chunks.push(d);
-    });
-
-    req.on('end', () => {
-      if (oversize) return;
-      const bodyBuf = Buffer.concat(chunks);
-      chunks = [];
+    // Whether to refuse the request, judged on the URL, the headers and this much of the body.
+    const refuse = (bodyBuf) => {
       stats.requests++;
-
       let blocked = false;
       try {
         // latin1 keeps one char per byte, so ASCII signatures match and the ORIGINAL bytes are still
         // what gets forwarded — decoding as UTF-8 would silently corrupt uploads, gzip and protobuf.
-        const verdict = inspect(req.url || '', bodyBuf.toString('latin1'));
+        const verdict = inspect(req.url || '', bodyBuf.toString('latin1'), req.headers);
         if (verdict.attack) {
           stats.detections++;
           blocked = verdict.enforce && route.mode === 'enforce';
@@ -274,12 +255,39 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
       } catch {
         blocked = false; // FAIL-OPEN: our own fault must never break the customer's site
       }
-
       if (blocked) {
-        res.writeHead(403, { 'content-type': 'text/plain' });
+        res.writeHead(403, { 'content-type': 'text/plain', connection: 'close' });
         res.end('Blocked by Securovix Defender');
+      }
+      return blocked;
+    };
+
+    req.on('data', (d) => {
+      if (oversize) return;
+      size += d.length;
+      if (size > MAX_CLASSIFIED_BODY) {
+        // Past the inspection cap the rest is streamed through rather than buffered. What has
+        // arrived so far — the URL, the headers and the first part of the body — is still judged.
+        oversize = true;
+        const prefix = Buffer.concat([...chunks, d]);
+        chunks = [];
+        if (refuse(prefix)) {
+          req.resume();
+          return;
+        }
+        const fwd = openUpstream(upstreamHeaders(null));
+        fwd.write(prefix);
+        req.pipe(fwd);
         return;
       }
+      chunks.push(d);
+    });
+
+    req.on('end', () => {
+      if (oversize) return;
+      const bodyBuf = Buffer.concat(chunks);
+      chunks = [];
+      if (refuse(bodyBuf)) return;
 
       const fwd = openUpstream(upstreamHeaders(bodyBuf));
       if (bodyBuf.length) fwd.write(bodyBuf);

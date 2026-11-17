@@ -35,6 +35,8 @@ export const SELF_SKIP = [
   /^\/api\/agent\//,
   /^\/api\/scans/,
   /^\/api\/defender\//,
+  // The edge proxy reports the attacks it saw, with their URLs, to this path.
+  /^\/api\/platform\/defender\//,
   /^\/api\/code-scan\//,
   /^\/api\/personal-shield\//,
   // The security assistant and finding evidence carry attack text by design: people paste payloads
@@ -85,7 +87,7 @@ export function createSelfDefense({
   const recent = [];
   const listeners = new Set();
   if (typeof onDetection === 'function') listeners.add(onDetection);
-  const handle = defenderAgent(bb, { getMode: () => current, deps, allow, counters });
+  const handle = defenderAgent(bb, { getMode: () => current, deps, allow, counters, onDefense });
 
   // Repeat-offender state. Timestamps per IP of confirmed enforceable attacks; active bans per IP.
   const offences = new Map(); // ip -> number[] (ms)
@@ -153,8 +155,9 @@ export function createSelfDefense({
   const syncTimer = banStore && banSyncMs > 0 ? setInterval(syncBans, banSyncMs) : null;
   if (typeof syncTimer?.unref === 'function') syncTimer.unref();
 
-  bb.subscribe('defense', (e) => {
-    const { event, verdict, result } = e.data;
+  // Called for every detection. Not a subscription to the board: the board stops taking facts
+  // once it is full, and bans and alerts must not stop with it.
+  function onDefense({ event, verdict, result }) {
     const row = {
       type: 'detection',
       at: event.at,
@@ -173,7 +176,7 @@ export function createSelfDefense({
     // Only CONFIRMED ENFORCEABLE classes count toward a ban — regardless of monitor/enforce mode,
     // so monitor mode still shows what the policy would have done.
     if (verdict.recommendedAction === 'block-inline') recordOffence(row.srcIp);
-  });
+  }
 
   function middleware(req, res, next) {
     try {
@@ -254,7 +257,8 @@ export function createSelfDefense({
         srcIp: ip,
         method: req.method,
         url: req.originalUrl || req.url || '',
-        headers: null,
+        // Read for the Log4Shell lookup only, and never kept: stored events carry no headers.
+        headers: req.headers || null,
         body,
         connId: null,
         raw: `${req.method} ${req.originalUrl || req.url || ''}`,
