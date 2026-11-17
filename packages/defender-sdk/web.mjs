@@ -317,6 +317,10 @@ export function createWebDefender(opts = {}) {
         enforced,
         srcIp: ip,
       };
+      // A request from the owner's own test carries a signed mark. It is passed on untouched for the
+      // dashboard to check; here it changes nothing, so a marked attack is blocked like any other.
+      const mark = request.headers.get('x-securovix-test');
+      if (mark) detection.test = mark.slice(0, 200);
       report(detection, context);
       try {
         cfg.onDetection?.(detection);

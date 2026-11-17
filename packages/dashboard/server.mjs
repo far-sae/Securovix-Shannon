@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { SCAN_PHASES, createSeen, progressSince } from './scan-progress.mjs';
 import { DEFENDER_RULES, normalizePolicy, policyFor, sdkBundle } from './defender-policy.mjs';
+import { createOwnTestLedger, isOwnTest, signOwnTest, siteName, verifyOwnTest } from './defender-own-test.mjs';
 import {
   CODE_SCAN_MAX_CHARS,
   FILE_IS_DATA_RULE,
@@ -37,6 +38,7 @@ import {
   login,
   setScanOrigin,
   setSessionHeaders,
+  setTestMark,
 } from '../../purple-engine.mjs';
 import { createSelfDefense } from '../../defender/middleware.mjs';
 import { diffRuns } from './agent-history.mjs';
@@ -4329,7 +4331,14 @@ function agentDeps(target, headers = {}) {
 // quietly test less than it reports. So runs take turns: one uses the engine, the others wait.
 let engineQueue = Promise.resolve();
 let engineWaiting = 0;
-function withEngine(work, { onWait } = {}) {
+// The signed mark one run sends to the site it tests, so that site's Defender files the run's
+// requests as the organization's own test instead of as attacks (see defender-own-test.mjs).
+function ownTestMark(orgId, target, kind) {
+  const signed = signOwnTest(SESSION_SECRET, { orgId, target, kind });
+  return signed ? { header: signed.header, value: signed.value, applies: (url) => siteName(url) === signed.site } : null;
+}
+// `mark` is a function so the mark is signed when the run's turn comes, not while it waits in line.
+function withEngine(work, { onWait, mark } = {}) {
   if (engineWaiting > 0) {
     try {
       onWait?.(engineWaiting);
@@ -4338,12 +4347,14 @@ function withEngine(work, { onWait } = {}) {
   engineWaiting += 1;
   const turn = engineQueue.then(async () => {
     try {
+      setTestMark(typeof mark === 'function' ? mark() : null);
       return await work();
     } finally {
       engineWaiting -= 1;
-      // A login session never outlives the run it was given for.
+      // A login session never outlives the run it was given for, and neither does its test mark.
       setSessionHeaders({});
       setScanOrigin(null);
+      setTestMark(null);
     }
   });
   engineQueue = turn.catch(() => {});
@@ -4591,7 +4602,9 @@ app.post('/api/agent/run', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   try {
-    const run = await withEngine(() => agentCampaign(r.target, r.surface, r.headers, { depth: r.depth }));
+    const run = await withEngine(() => agentCampaign(r.target, r.surface, r.headers, { depth: r.depth }), {
+      mark: () => ownTestMark(r.ctx.org.id, r.target, 'agent'),
+    });
     run.savedId = persistRun(req, r.target, run);
     res.json({ ok: true, run });
   } catch (e) {
@@ -4625,6 +4638,7 @@ app.get('/api/agent/run/stream', async (req, res) => {
       {
         onWait: (ahead) =>
           send({ phase: 'wait', detail: `Waiting for ${ahead} other check${ahead === 1 ? '' : 's'} to finish first…` }),
+        mark: () => ownTestMark(r.ctx.org.id, r.target, 'agent'),
       },
     );
     run.savedId = persistRun(req, r.target, run);
@@ -4660,7 +4674,10 @@ app.post('/api/agent/team', async (req, res) => {
   const r = await agentGateAndCrawl(req);
   if (r.error) return res.status(r.status).json({ error: r.error, needsVerification: r.needsVerification });
   try {
-    const out = await withEngine(() => runSecurityTeam({ surface: r.surface, deps: teamDeps(r.target, r.headers), roster: { exploitAgents: 4 } }));
+    const out = await withEngine(
+      () => runSecurityTeam({ surface: r.surface, deps: teamDeps(r.target, r.headers), roster: { exploitAgents: 4 } }),
+      { mark: () => ownTestMark(r.ctx.org.id, r.target, 'team') },
+    );
     out.savedId = persistRun(req, r.target, { stats: out.stats, findings: out.findings, leads: [] });
     res.json({ ok: true, team: out });
   } catch (e) {
@@ -4689,13 +4706,15 @@ app.get('/api/agent/team/stream', async (req, res) => {
   const stopTeamBeat = keepAlive(res);
   res.on('close', stopTeamBeat);
   try {
-    const out = await withEngine(() =>
-      runSecurityTeam({
-        surface: r.surface,
-        deps: teamDeps(r.target, r.headers),
-        roster: { exploitAgents: 4 },
-        onEvent: (e) => send(e),
-      }),
+    const out = await withEngine(
+      () =>
+        runSecurityTeam({
+          surface: r.surface,
+          deps: teamDeps(r.target, r.headers),
+          roster: { exploitAgents: 4 },
+          onEvent: (e) => send(e),
+        }),
+      { mark: () => ownTestMark(r.ctx.org.id, r.target, 'team') },
     );
     out.savedId = persistRun(req, r.target, { stats: out.stats, findings: out.findings, leads: [] });
     send({ team: out }, 'done');
@@ -4791,9 +4810,11 @@ app.get('/api/agent/runs/:id/diff/:prevId', (req, res) => {
 
 // ── Continuous monitoring — a scheduled agent run + auto-diff + webhook alert on NEW findings ──
 // Reusable: crawl + run the campaign + gather leads (no HTTP req — used by the scheduler).
-async function executeAgentRun(target) {
+async function executeAgentRun(target, orgId = null) {
   const surface = await crawl({ target, maxPages: 25, timeoutMs: 7000, maxRequests: 120 });
-  return withEngine(() => agentCampaign(target, surface, {}, { depth: 'quick' }));
+  return withEngine(() => agentCampaign(target, surface, {}, { depth: 'quick' }), {
+    mark: orgId ? () => ownTestMark(orgId, target, 'monitor') : null,
+  });
 }
 
 let _monitorBusy = false;
@@ -4806,7 +4827,8 @@ async function runDueMonitors() {
       try {
         const prevSummary = listAgentRuns(m.userId, m.target)[0];
         const prev = prevSummary ? getAgentRun(m.userId, prevSummary.id) : null;
-        const run = await executeAgentRun(m.target);
+        const org = listOrganizations(m.userId)[0];
+        const run = await executeAgentRun(m.target, org?.id);
         const runId = randomUUID().slice(0, 12);
         saveAgentRun(m.userId, {
           id: runId,
@@ -4820,7 +4842,6 @@ async function runDueMonitors() {
         // What a scheduled check finds goes where a manual run's findings go: the organization's
         // finding queue, and its alert destinations when something is new. Before this a monitor
         // with no webhook of its own found things every hour and told nobody.
-        const org = listOrganizations(m.userId)[0];
         const fresh = prev ? diffRuns(prev, run).added : run.findings || [];
         if (org && fresh.length) {
           try {
@@ -5985,6 +6006,24 @@ async function loadCisaKev() {
   return cisaKevRequest;
 }
 
+// A report that carries this organization's own signed test mark is the AI Agent (or its monitor)
+// testing a site the organization owns. It is kept, so the owner can see the test arrived and
+// whether it was blocked, but it is filed as a test: one entry per run, no severity, already closed,
+// no alert sent, and left out of every attack count. A mark that does not check out is ignored and
+// the report is an attack like any other.
+function ownTestOf(orgId, raw, site) {
+  return typeof raw?.test === 'string' ? verifyOwnTest(SESSION_SECRET, raw.test, { orgId, url: site }) : null;
+}
+const notOwnTest = (event) => !isOwnTest(event);
+const OWN_TESTS = createOwnTestLedger({
+  append: (event) => appendDefenseEvent(event),
+  update: (orgId, id, patch) => updateDefenseEvent(orgId, id, patch),
+  newId: () => randomUUID(),
+  settleMs: Math.max(10, Number(process.env.SHANNON_OWN_TEST_SETTLE_MS) || 2000),
+});
+// "www.example.com/path?x=1" or a bare host -> the host as the site reported it.
+const reportedHost = (value) => String(value || '').replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/)[0].slice(0, 255);
+
 function defenderSeverity(cls) {
   const value = String(cls || '').toLowerCase();
   if (/(rce|command|cmd-injection|sqli|auth-bypass|metadata)/.test(value)) return 'critical';
@@ -6006,6 +6045,17 @@ app.post('/api/defender/report', (req, res) => {
     const eventTime = typeof d.at === 'string' && Number.isFinite(Date.parse(d.at))
       ? new Date(d.at).toISOString()
       : new Date().toISOString();
+    // The Express package reports a path, so it sends the site's name beside it.
+    const site = typeof d.host === 'string' && d.host ? d.host : d.url;
+    const own = ownTestOf(principal.orgId, d, site);
+    if (own) {
+      OWN_TESTS.record({
+        orgId: principal.orgId, userId: principal.userId, source: 'sdk', token: d.test, kind: own.kind,
+        site: reportedHost(site), detection: d, at: eventTime,
+      });
+      accepted += 1;
+      continue;
+    }
     const event = {
       id: randomUUID(),
       orgId: principal.orgId,
@@ -6126,7 +6176,7 @@ app.get('/api/defender/sdk/download/:kind', (req, res) => {
 const DIGEST_ROLES = new Set(['owner', 'admin']);
 
 function defenseDigest(orgId, { from, to }) {
-  const events = listDefenseEventsSince(orgId, from - 7 * DAY);
+  const events = listDefenseEventsSince(orgId, from - 7 * DAY).filter(notOwnTest);
   const inside = events.filter((event) => Number(event.createdAt) >= from && Number(event.createdAt) < to);
   // The store keeps the newest 2,000 events per organization. At that size the counts are a floor
   // and the week before is incomplete, so no comparison is offered.
@@ -6227,7 +6277,8 @@ const GUARD_STORE = {
   state: guardState,
   settings: guardSettings,
   listFindings: async (orgId) => listFindings(orgId),
-  listDefenseEventsSince: async (orgId, since) => listDefenseEventsSince(orgId, since),
+  // The organization's own tests are not attacks on it, so Guard never sees them.
+  listDefenseEventsSince: async (orgId, since) => listDefenseEventsSince(orgId, since).filter(notOwnTest),
   listVulnerabilityMatches: (orgId) => listVulnerabilityMatches(orgId),
 };
 export const guardEngine = createGuardEngine({
@@ -6498,6 +6549,15 @@ app.post('/api/platform/defender/edge/report', (req, res) => {
     const host = String(raw.host || '').toLowerCase().split(':')[0];
     const route = routesByHost.get(host);
     if (!route) continue;
+    const own = ownTestOf(route.orgId, raw, host);
+    if (own) {
+      OWN_TESTS.record({
+        orgId: route.orgId, userId: route.userId, source: 'edge', token: raw.test, kind: own.kind,
+        site: host, detection: raw, metadata: { host },
+      });
+      accepted += 1;
+      continue;
+    }
     const event = {
       id: randomUUID(), orgId: route.orgId, userId: route.userId,
       at: typeof raw.at === 'string' && Number.isFinite(Date.parse(raw.at)) ? new Date(raw.at).toISOString() : new Date().toISOString(),
@@ -6729,7 +6789,11 @@ app.get('/api/defender/list', (req, res) => {
 app.get('/api/defender/overview', (req, res) => {
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
-  const events = listDefenseEvents(ctx.org.id, 500);
+  // The numbers and the incident list are attacks. The organization's own tests (one entry per
+  // run) are summed up apart, so they never crowd an attack out of view.
+  const all = listDefenseEvents(ctx.org.id, 500);
+  const events = all.filter(notOwnTest);
+  const own = all.filter(isOwnTest);
   const routes = listEdgeRoutes({ orgId: ctx.org.id });
   const systems = [...defenders.values()]
     .filter((entry) => entry.system.orgId === ctx.org.id)
@@ -6760,6 +6824,14 @@ app.get('/api/defender/overview', (req, res) => {
       .slice(0, 8)
       .map(([name, count]) => ({ name, count })),
     events: events.slice(0, 100),
+    ownTests: {
+      runs: own.length,
+      runs24h: own.filter((event) => Number(event.createdAt) >= since).length,
+      requests: own.reduce((sum, event) => sum + Number(event.metadata.ownTest.requests || 0), 0),
+      blocked: own.reduce((sum, event) => sum + Number(event.metadata.ownTest.blocked || 0), 0),
+      lastAt: own[0]?.at || null,
+      recent: own.slice(0, 20),
+    },
     routes,
     systems,
   });

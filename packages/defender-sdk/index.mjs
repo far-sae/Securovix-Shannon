@@ -146,6 +146,13 @@ export function shannonDefender(opts = {}) {
           enforced,
           srcIp: req.ip || req.socket?.remoteAddress || null,
         };
+        // A request from the owner's own test carries a signed mark. It is passed on untouched for
+        // the dashboard to check, with the site's name; here it changes nothing.
+        const mark = req.headers?.['x-securovix-test'];
+        if (typeof mark === 'string' && mark) {
+          detection.test = mark.slice(0, 200);
+          detection.host = String(req.headers?.host || '').slice(0, 255);
+        }
 
         if (queue.length < cfg.maxQueue) queue.push(detection);
         else stats.dropped++;

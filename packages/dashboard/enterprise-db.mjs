@@ -1371,7 +1371,8 @@ export async function getDefenseTelemetry(orgId, since = Date.now() - 86_400_000
   ]);
   return {
     routes: (routeRows || []).map((row) => ({ host: row.host, origin: row.origin, mode: row.mode, createdAt: Number(row.created_at) })),
-    events: (eventRows || []).map((row) => ({ id: row.id, cls: row.cls, severity: row.severity, status: row.status, enforced: row.enforced === true, at: row.at, createdAt: Number(row.created_at) })),
+    // The organization's own tests are not attacks on it.
+    events: (eventRows || []).filter((row) => !row.metadata?.ownTest).map((row) => ({ id: row.id, cls: row.cls, severity: row.severity, status: row.status, enforced: row.enforced === true, at: row.at, createdAt: Number(row.created_at) })),
     findings: (findingRows || []).map((row) => ({ id: row.id, severity: row.severity, status: row.status, updatedAt: Number(row.updated_at) })),
     jobs,
   };
