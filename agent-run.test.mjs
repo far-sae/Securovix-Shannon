@@ -40,7 +40,8 @@ async function site(answer = () => null) {
     n += 1;
     const refuse = answer(req, n);
     if (refuse) {
-      res.writeHead(refuse, { 'content-type': 'text/html' });
+      // A status, or { status, headers } for a firewall that names itself.
+      res.writeHead(refuse.status || refuse, { 'content-type': 'text/html', ...(refuse.headers || {}) });
       return res.end('<html><body>Access denied</body></html>');
     }
     const page = (body) => {
@@ -223,8 +224,40 @@ test('a site that starts refusing part-way gives an incomplete result that says 
   assert.ok(done, `no "done" event: ${JSON.stringify(events.slice(-2)).slice(0, 300)}`);
   assert.equal(done.data.run.coverage.blocked, true);
   assert.equal(done.data.run.coverage.siteStatus, 429);
+  assert.equal(done.data.run.coverage.refusedBy, null, 'a refusal that does not say who sent it names nobody');
   const warning = events.find((e) => e.data.phase === 'warning');
+  assert.match(warning.data.detail, /A firewall or rate limit was refusing these checks/);
   assert.match(warning.data.detail, /does not mean the site is clean/);
+});
+
+test('when the firewall that cut a run short names itself, the result names it', async () => {
+  const cookie = await account();
+  const hosted = await site((_req, n) =>
+    n > 12 ? { status: 403, headers: { server: 'Vercel', 'x-vercel-mitigated': 'challenge' } } : null,
+  );
+  const out = await request('/api/agent/run', { method: 'POST', cookie, body: { target: hosted.url } });
+  assert.equal(out.status, 200);
+  assert.equal(out.json.run.coverage.blocked, true);
+  assert.equal(out.json.run.coverage.siteStatus, 403);
+  assert.equal(out.json.run.coverage.refusedBy, 'the Vercel Firewall');
+  const warning = out.json.run.steps.find((step) => step.phase === 'warning');
+  assert.match(warning.detail, /The refusal came from the Vercel Firewall, which was refusing these checks/);
+});
+
+test('a refusal is attributed only from what the reply says about itself', async () => {
+  const { refusedBy } = await import('./packages/dashboard/site-firewall.mjs');
+  const reply = (headers) => new Headers(headers);
+  assert.equal(refusedBy(reply({ 'x-vercel-mitigated': 'deny' })), 'the Vercel Firewall');
+  assert.equal(refusedBy(reply({ server: 'Vercel' })), 'Vercel (the website’s host)');
+  assert.equal(refusedBy(reply({ server: 'cloudflare', 'cf-mitigated': 'challenge' })), 'Cloudflare');
+  assert.equal(refusedBy(reply({ server: 'awselb/2.0' })), 'the AWS firewall');
+  assert.equal(
+    refusedBy(reply({ server: 'Vercel' }), '{"error":"Blocked by Securovix Defender"}'),
+    'Securovix Defender',
+  );
+  assert.equal(refusedBy(reply({ server: 'nginx' }), 'Access denied'), null);
+  assert.equal(refusedBy({ server: ['cloudflare'] }), 'Cloudflare', 'plain header objects work too');
+  assert.equal(refusedBy(null), null);
 });
 
 test('scheduled monitoring records what it finds once, in the organization’s findings', async () => {

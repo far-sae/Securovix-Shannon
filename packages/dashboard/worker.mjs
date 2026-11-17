@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify as stringifyYaml } from 'yaml';
+import { publicOriginAllowed } from './public-address.mjs';
 import {
   appendOperationalEvent,
   claimDueDefensePrograms,
@@ -164,6 +165,14 @@ async function executeScan(job) {
   const secret = decryptSecret(job.secretEnc) || {};
   const scanId = payload.scanId;
   if (!scanId || !payload.config) throw new Error('scan job is missing its scan configuration');
+  if (
+    process.env.NODE_ENV === 'production' &&
+    process.env.SHANNON_ALLOW_LOCAL_TARGETS !== '1' &&
+    payload.targetUrl &&
+    !(await publicOriginAllowed(payload.targetUrl).catch(() => false))
+  ) {
+    throw new Error('The target now points to a private or internal network, so the scan was not started.');
+  }
   const config = structuredClone(payload.config);
   if (secret.authentication) config.authentication = secret.authentication;
   const tempDir = mkdtempSync(join(tmpdir(), 'shannon-scan-'));
@@ -393,6 +402,8 @@ async function handle(job) {
     const result = await execute(job);
     await updateJob(job.id, {
       status: 'succeeded',
+      // A sent email's text is not kept: it can hold a one-time link meant for its recipient only.
+      ...(job.type === 'email' ? { payload: { to: job.payload?.to, subject: job.payload?.subject } } : {}),
       result,
       error: null,
       heartbeatAt: Date.now(),

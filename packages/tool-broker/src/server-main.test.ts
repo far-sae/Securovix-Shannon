@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildServer } from './server-main.js';
+import { buildServer, buildServerFromEnv } from './server-main.js';
 import type { ScopeConfig } from './types.js';
 
 const scope: ScopeConfig = {
@@ -35,5 +35,28 @@ describe('buildServer (broker bootstrap)', () => {
     const res = await fetch(`${base}/health`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'ok' });
+  });
+});
+
+describe('buildServerFromEnv (keys)', () => {
+  const names = ['SHANNON_BROKER_SCOPE', 'SHANNON_BROKER_SCOPE_KEY', 'SHANNON_BROKER_RECORD_KEY'] as const;
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  afterAll(() => {
+    for (const name of names) {
+      if (saved[name] === undefined) Reflect.deleteProperty(process.env, name);
+      else process.env[name] = saved[name];
+    }
+  });
+
+  it('does not start with a missing or short signing key', () => {
+    process.env.SHANNON_BROKER_SCOPE = JSON.stringify(scope);
+    Reflect.deleteProperty(process.env, 'SHANNON_BROKER_SCOPE_KEY');
+    Reflect.deleteProperty(process.env, 'SHANNON_BROKER_RECORD_KEY');
+    expect(() => buildServerFromEnv()).toThrow(/SHANNON_BROKER_SCOPE_KEY is required/);
+    process.env.SHANNON_BROKER_SCOPE_KEY = 'k'.repeat(32);
+    process.env.SHANNON_BROKER_RECORD_KEY = 'short';
+    expect(() => buildServerFromEnv()).toThrow(/SHANNON_BROKER_RECORD_KEY is required/);
+    process.env.SHANNON_BROKER_RECORD_KEY = 'r'.repeat(32);
+    expect(() => buildServerFromEnv()).not.toThrow();
   });
 });

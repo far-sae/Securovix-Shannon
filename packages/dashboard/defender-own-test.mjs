@@ -106,7 +106,9 @@ export function createOwnTestLedger({ append, update, newId, settleMs = 2000, no
   };
   const count = (event, detection, at) => {
     const was = event.metadata.ownTest;
-    const cls = String(detection?.cls || 'unknown').slice(0, 60);
+    // At most 24 kinds are counted by name in one run; anything further is counted as "other".
+    const named = String(detection?.cls || 'unknown').slice(0, 60);
+    const cls = Object.hasOwn(was.classes, named) || Object.keys(was.classes).length < 24 ? named : 'other';
     event.metadata = {
       ...event.metadata,
       ownTest: {

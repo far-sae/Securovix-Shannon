@@ -20,8 +20,10 @@ test('enterprise secrets, signed challenges, TOTP and recovery codes are verifia
   const encrypted = security.encryptSecret({ token: 'very-secret', nested: { value: 7 } });
   assert.notEqual(encrypted, 'very-secret');
   assert.deepEqual(security.decryptSecret(encrypted), { token: 'very-secret', nested: { value: 7 } });
-  // Always change the last character (it is "x" itself about 1 time in 64).
-  assert.throws(() => security.decryptSecret(`${encrypted.slice(0, -1)}${encrypted.endsWith('x') ? 'y' : 'x'}`));
+  // Change a character in the middle of the ciphertext. (The last character of a base64 group
+  // carries spare bits, so changing that one sometimes changes nothing and the test failed at random.)
+  const at = encrypted.length - 12;
+  assert.throws(() => security.decryptSecret(`${encrypted.slice(0, at)}${encrypted[at] === 'A' ? 'B' : 'A'}${encrypted.slice(at + 1)}`));
 
   const challenge = security.signChallenge({ uid: 'user-1' }, 'test', 60_000);
   assert.equal(security.verifyChallenge(challenge, 'test').uid, 'user-1');

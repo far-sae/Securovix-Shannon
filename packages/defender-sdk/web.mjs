@@ -15,7 +15,7 @@ import { HONEYPOT_PATHS, SCANNER_AGENTS, inspectRequest, listOption } from './si
 const DEFAULTS = {
   mode: 'monitor',
   endpoint: 'https://origin.securovix.com',
-  maxBody: 256 * 1024, // inspect the first 256KB of a body; a larger one is not read at all
+  maxBody: 256 * 1024, // the first 256KB of a body is inspected; the rest passes uninspected
   skip: [],
   honeypot: false,
   scanners: false,
@@ -51,15 +51,33 @@ function readsAsText(sample) {
   return odd * 20 <= sample.length;
 }
 
-// The platform-set client address, most trustworthy first. On Vercel and Cloudflare the platform
-// overwrites these, so a visitor cannot forge them; behind another proxy, pass your own `getIp`.
-function clientIp(request) {
+// The visitor's address, from the header the host platform itself writes. A header is only
+// trustworthy on the platform that overwrites it: Vercel overwrites `x-vercel-forwarded-for` and
+// `x-real-ip`, Cloudflare overwrites `cf-connecting-ip`. Anywhere else a visitor can send any of
+// them, and a ban or rate limit keyed on a value the visitor chose is worthless (or a way to get
+// someone else refused). So: name the platform, and only its header is read.
+//   platform: 'vercel' | 'cloudflare' | 'none' (no address: bans and rate limits are off)
+// Unset, Cloudflare Workers is recognised by itself; otherwise the headers are read in the order
+// below, which is right on Vercel. Behind any other proxy, pass `platform: 'none'` or your own `getIp`.
+const first = (value) => value?.split(',')[0].trim() || null;
+const onCloudflare = () => {
+  try {
+    return globalThis.navigator?.userAgent === 'Cloudflare-Workers';
+  } catch {
+    return false;
+  }
+};
+export function clientIp(request, platform) {
   const h = request.headers;
+  const where = platform || (onCloudflare() ? 'cloudflare' : '');
+  if (where === 'none') return null;
+  if (where === 'cloudflare') return h.get('cf-connecting-ip') || null;
+  if (where === 'vercel') return first(h.get('x-vercel-forwarded-for')) || h.get('x-real-ip') || null;
   return (
-    h.get('x-vercel-forwarded-for')?.split(',')[0].trim() ||
+    first(h.get('x-vercel-forwarded-for')) ||
     h.get('cf-connecting-ip') ||
     h.get('x-real-ip') ||
-    h.get('x-forwarded-for')?.split(',')[0].trim() ||
+    first(h.get('x-forwarded-for')) ||
     null
   );
 }
@@ -81,6 +99,7 @@ const json = (status, error) =>
  * @param {object|null} [opts.ban]            { threshold = 5, windowMs = 60000, ttlMs = 900000 }.
  * @param {object|null} [opts.rateLimit]      { perMinute } requests one address may send. Off by default.
  * @param {boolean} [opts.remotePolicy]       Take the settings from the Securovix dashboard (default true, needs apiKey).
+ * @param {'vercel'|'cloudflare'|'none'} [opts.platform]  Which host's client-address header to trust (see clientIp).
  * @param {(request: Request) => string|null} [opts.getIp]  Client address, if the defaults are wrong for your host.
  * @param {(d: object) => void} [opts.onDetection]  Local hook, called for every detection.
  * @returns {(request: Request, context?: {waitUntil?: Function}) => Promise<Response|null>}
@@ -256,7 +275,7 @@ export function createWebDefender(opts = {}) {
         : Number(cfg.rateLimit?.perMinute || 0);
       stats.requests++;
 
-      const ip = (cfg.getIp || clientIp)(request);
+      const ip = cfg.getIp ? cfg.getIp(request) : clientIp(request, cfg.platform);
       if (policy && activeMode === 'enforce' && ip && isBanned(ip)) {
         stats.banned++;
         return json(403, 'Blocked by Securovix Defender (repeat offender)');

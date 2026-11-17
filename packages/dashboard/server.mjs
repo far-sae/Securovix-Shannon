@@ -3,14 +3,15 @@ import { randomUUID } from 'node:crypto';
 import _crypto from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { SCAN_PHASES, createSeen, progressSince } from './scan-progress.mjs';
 import { DEFENDER_RULES, normalizePolicy, policyFor, sdkBundle } from './defender-policy.mjs';
 import { createOwnTestLedger, isOwnTest, signOwnTest, siteName, verifyOwnTest } from './defender-own-test.mjs';
+import { cleanDetection, createIntakeGate } from './defender-intake.mjs';
+import { isLocalHost, isPrivateAddress, publicOriginAllowed } from './public-address.mjs';
+import { refusedBy } from './site-firewall.mjs';
 import {
   CODE_SCAN_MAX_CHARS,
   FILE_IS_DATA_RULE,
@@ -22,7 +23,7 @@ import {
 } from './code-scan.mjs';
 import express from 'express';
 import QRCode from 'qrcode';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
 import { runDefender } from '../../defender/agent.mjs';
 import { httpProxyConnector } from '../../defender/connectors.mjs';
@@ -272,6 +273,9 @@ app.use((req, res, next) => {
   res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
   res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('cross-origin-opener-policy', 'same-origin');
+  // API answers carry account data. Neither a browser nor a proxy keeps a copy. (Event streams and
+  // downloads set their own value afterwards.)
+  if (req.path.startsWith('/api/')) res.setHeader('cache-control', 'no-store');
   // HTTPS only (trust proxy makes req.secure reflect the edge). Never sent over plain local http.
   if (req.secure) res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
   res.setHeader(
@@ -302,6 +306,11 @@ function rateLimit(key, { limit, windowMs }) {
   const now = Date.now();
   const rec = RATE_BUCKETS.get(key);
   if (!rec || now >= rec.resetAt) {
+    // Finished windows are dropped once the table grows, so many distinct addresses cannot fill memory.
+    if (RATE_BUCKETS.size >= 20_000) {
+      for (const [k, v] of RATE_BUCKETS) if (now >= v.resetAt) RATE_BUCKETS.delete(k);
+      while (RATE_BUCKETS.size >= 20_000) RATE_BUCKETS.delete(RATE_BUCKETS.keys().next().value);
+    }
     RATE_BUCKETS.set(key, { count: 1, resetAt: now + windowMs });
     return { ok: true };
   }
@@ -406,8 +415,7 @@ if (SELF_DEFENSE) {
       createdAt: Date.now(),
     };
     appendDefenseEvent(event);
-    queueIntegrationEvent(orgId, { id: `defender:${event.id}`, type: 'defender.detection', at: event.at, data: event }, null)
-      .catch((error) => console.error('[defender] self-defense integration event failed:', error.message));
+    sendDefenseAlert(orgId, event, null, 'self');
   });
   if (!process.env.SHANNON_PLATFORM_ORG_ID) {
     console.warn('[defender] SHANNON_PLATFORM_ORG_ID is not set — self-defense detections stream live to operators but are not persisted or sent to alert integrations');
@@ -595,6 +603,32 @@ function setSessionCookie(res, userId) {
 if (process.env.NODE_ENV === 'production' && (String(process.env.SHANNON_SESSION_SECRET).length < 32 || /replace-me|change-me/i.test(process.env.SHANNON_SESSION_SECRET))) {
   throw new Error('SHANNON_SESSION_SECRET must be a non-placeholder value of at least 32 characters');
 }
+// A request sent by another website's page (browsers label these). Used on the few GET routes that
+// start work, which the Origin check on POST/PUT/PATCH/DELETE does not cover.
+const fromAnotherSite = (req) => String(req.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site';
+// Tokens are handed back in an API answer only for automated tests, or when a developer asks for it
+// on a machine that is not production. A deployment that merely forgot NODE_ENV gets nothing.
+export function devTokensAllowed(env = process.env) {
+  if (env.NODE_ENV === 'production') return false;
+  return env.NODE_ENV === 'test' || env.SHANNON_DEV_TOKENS === '1';
+}
+const DEV_TOKENS = devTokensAllowed();
+// What a member sees of a queued job. An email's text can hold a one-time link (invitation,
+// password reset) meant for its recipient only, so the text never leaves the server.
+export function publicJob({ secretEnc: _secret, ...job }) {
+  if (job.type !== 'email') return job;
+  return { ...job, payload: { to: job.payload?.to, subject: job.payload?.subject }, result: null };
+}
+// The one way a sign-in is completed for an account that already exists. With two-step sign-in on,
+// a password or a link from the mailbox is only the first step: the answer is the code challenge,
+// never a session.
+function finishSignIn(res, user, extra = {}) {
+  if (user.mfaEnabled) {
+    return res.json({ ok: true, mfaRequired: true, challenge: signChallenge({ uid: user.id }, 'mfa-login') });
+  }
+  setSessionCookie(res, user.id);
+  return res.json({ ok: true, user: publicUser(user), ...extra });
+}
 function clearSessionCookie(res) {
   res.append(
     'Set-Cookie',
@@ -721,11 +755,19 @@ function requirePlatformOperator(req, res) {
     .split(',')
     .map((x) => x.trim().toLowerCase())
     .filter(Boolean);
-  if (!user || (!allowed.includes(user.email.toLowerCase()) && !(process.env.NODE_ENV !== 'production' && csIsLocalhost(req)))) {
+  if (!user || (!allowed.includes(user.email.toLowerCase()) && !(LOCAL_OPERATOR && csIsLocalhost(req)))) {
     res.status(403).json({ error: 'Platform operator permission required.' });
     return null;
   }
   return user;
+}
+// On a developer's own machine the person at the keyboard is the operator. That shortcut is on for
+// automated tests and by explicit choice, never in production, and never merely because NODE_ENV
+// was left unset behind a proxy on the same host (where every visitor looks local).
+const LOCAL_OPERATOR = process.env.NODE_ENV !== 'production' && (process.env.NODE_ENV === 'test' || process.env.SHANNON_LOCAL_OPERATOR === '1');
+function isPlatformOperator(req, user) {
+  const allowed = String(process.env.SHANNON_PLATFORM_ADMINS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  return !!user && (allowed.includes(String(user.email || '').toLowerCase()) || (LOCAL_OPERATOR && csIsLocalhost(req)));
 }
 
 const PUBLIC_API = new Set([
@@ -886,7 +928,7 @@ app.post('/api/auth/signup', async (req, res) => {
       termsVersion: '2026-05-04',
       privacyVersion: '2026-05-04',
       acceptedAt,
-      ip: (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim(),
+      ip: String(req.ip || req.socket?.remoteAddress || ''),
       userAgent: String(req.headers['user-agent'] || '').slice(0, 240),
     },
   };
@@ -913,7 +955,7 @@ app.post('/api/auth/signup', async (req, res) => {
     verificationRequired,
     user: publicUser(users[id]),
     organizations: listOrganizations(id),
-    ...(process.env.NODE_ENV !== 'production' && verification ? { developmentToken: verification.token } : {}),
+    ...(DEV_TOKENS && verification ? { developmentToken: verification.token } : {}),
   });
 });
 
@@ -961,11 +1003,7 @@ app.post('/api/auth/login', (req, res) => {
   if (process.env.SHANNON_REQUIRE_EMAIL_VERIFICATION === '1' && !u.emailVerifiedAt) {
     return res.status(403).json({ error: 'Verify your email before signing in.', emailVerificationRequired: true });
   }
-  if (u.mfaEnabled) {
-    return res.json({ ok: true, mfaRequired: true, challenge: signChallenge({ uid: u.id }, 'mfa-login') });
-  }
-  setSessionCookie(res, u.id);
-  res.json({ ok: true, user: publicUser(u) });
+  finishSignIn(res, u);
 });
 
 app.post('/api/auth/mfa/login', async (req, res) => {
@@ -1006,8 +1044,7 @@ app.post('/api/auth/email/verify', async (req, res) => {
   if (!user) return res.status(404).json({ error: 'Account not found.' });
   user.emailVerifiedAt = Date.now();
   saveUsers(loadUsers());
-  setSessionCookie(res, user.id);
-  res.json({ ok: true, user: publicUser(user) });
+  finishSignIn(res, user);
 });
 
 app.post('/api/auth/email/resend', async (req, res) => {
@@ -1015,7 +1052,8 @@ app.post('/api/auth/email/resend', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const user = findUserByEmail(email);
   let verification = null;
-  if (user && !user.emailVerifiedAt && !user.disabledAt) {
+  // Capped per mailbox as well as per sender, so rotating addresses cannot flood one inbox.
+  if (user && !user.emailVerifiedAt && !user.disabledAt && rateLimit(`mail-verify:${email}`, { limit: 3, windowMs: 60 * 60_000 }).ok) {
     try {
       verification = await issueAuthToken(req, {
         kind: 'email-verification', email, ttlMs: 24 * 60 * 60_000,
@@ -1029,7 +1067,7 @@ app.post('/api/auth/email/resend', async (req, res) => {
   res.json({
     ok: true,
     message: 'If that account requires verification, a new link has been sent.',
-    ...(process.env.NODE_ENV !== 'production' && verification ? { developmentToken: verification.token } : {}),
+    ...(DEV_TOKENS && verification ? { developmentToken: verification.token } : {}),
   });
 });
 
@@ -1049,7 +1087,9 @@ app.post('/api/auth/password/request', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const user = findUserByEmail(email);
   let reset = null;
-  if (user && !user.disabledAt) {
+  // Capped per mailbox as well as per sender, so rotating addresses cannot flood one inbox. Over the
+  // cap the answer is the same as always; no link is sent.
+  if (user && !user.disabledAt && rateLimit(`mail-reset:${email}`, { limit: 3, windowMs: 60 * 60_000 }).ok) {
     try {
       reset = await issueAuthToken(req, {
         kind: 'password-reset', email, userId: user.id, ttlMs: 30 * 60_000,
@@ -1063,7 +1103,7 @@ app.post('/api/auth/password/request', async (req, res) => {
   res.json({
     ok: true,
     message: 'If an account exists for that email, a reset link has been sent.',
-    ...(process.env.NODE_ENV !== 'production' && reset ? { developmentToken: reset.token } : {}),
+    ...(DEV_TOKENS && reset ? { developmentToken: reset.token } : {}),
   });
 });
 
@@ -1081,15 +1121,25 @@ app.post('/api/auth/password/reset', async (req, res) => {
   saveUsers(loadUsers());
   // The owner of the mailbox has proved who they are, so a lock caused by someone else's guesses ends.
   LOGIN_GUARD.succeed('password', user.email);
-  setSessionCookie(res, user.id);
-  res.json({ ok: true, user: publicUser(user) });
+  // The mailbox proves the first step only: an account with two-step sign-in is asked for its code.
+  finishSignIn(res, user);
 });
 
 app.post('/api/auth/invitations/accept', async (req, res) => {
   const password = String(req.body?.password || '');
   const tokenHash = hashToken(req.body?.token);
   const preview = await findAuthToken(tokenHash, 'invitation');
-  if (preview && !findUserByEmail(preview.email)) {
+  // An invitation adds a member; it is never a way in to an account. For an address that already
+  // has an account, the invited person signs in to it first (password, and code if they use one),
+  // and only that account may accept. Refusing here leaves the invitation unused.
+  const signInFirst = () =>
+    res.status(401).json({
+      error: 'This email address already has an account. Sign in to it and the invitation will be accepted.',
+      signInRequired: true,
+    });
+  const invited = preview ? findUserByEmail(preview.email) : null;
+  if (invited && getUser(req)?.id !== invited.id) return signInFirst();
+  if (preview && !invited) {
     if (password.length < 12) return res.status(400).json({ error: 'Choose a password with at least 12 characters.' });
     if (!req.body?.acceptedTerms) return res.status(400).json({ error: 'You must accept the Terms and Privacy Policy.' });
   }
@@ -1098,6 +1148,9 @@ app.post('/api/auth/invitations/accept', async (req, res) => {
     return res.status(400).json({ error: 'This invitation is invalid or expired.' });
   }
   let user = findUserByEmail(record.email);
+  // The account may have been created between the two lookups above: same rule.
+  if (user && getUser(req)?.id !== user.id) return signInFirst();
+  const created = !user;
   if (!user) {
     const id = _crypto.randomBytes(8).toString('hex');
     const passwordRecord = hashPassword(password);
@@ -1128,7 +1181,8 @@ app.post('/api/auth/invitations/accept', async (req, res) => {
     action: 'invitation.accepted', resourceType: 'membership', resourceId: user.id,
     metadata: { role: record.role }, createdAt: Date.now(),
   });
-  setSessionCookie(res, user.id);
+  // A session is issued only for the account this request created; an existing one is already signed in.
+  if (created) setSessionCookie(res, user.id);
   res.json({ ok: true, user: publicUser(user), organization: getOrganization(record.orgId) });
 });
 
@@ -1251,6 +1305,13 @@ app.delete('/api/auth/mfa', async (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
+  // The cookie is a signed token, so clearing it in this browser is not enough: a copy would keep
+  // working until it expired. Signing out ends every session of the account.
+  const user = getUser(req);
+  if (user) {
+    user.sessionInvalidBefore = Date.now();
+    saveUsers(loadUsers());
+  }
   clearSessionCookie(res);
   res.json({ ok: true });
 });
@@ -1320,6 +1381,7 @@ app.get('/auth/google/callback', async (req, res) => {
     });
     const profile = await userResp.json();
     if (!userResp.ok || !profile.email) throw new Error('userinfo failed');
+    if (profile.email_verified === false || profile.email_verified === 'false') throw new Error('this Google account has not verified its email address');
     const users = loadUsers();
     let user = Object.values(users).find((u) => u.googleId === profile.sub) || findUserByEmail(profile.email);
     if (!user) {
@@ -1349,7 +1411,7 @@ app.get('/auth/google/callback', async (req, res) => {
     setSessionCookie(res, user.id);
     res.redirect('/');
   } catch (e) {
-    res.status(500).send('Google sign-in failed: ' + e.message);
+    res.status(500).type('text/plain').send('Google sign-in failed: ' + e.message);
   }
 });
 
@@ -1358,17 +1420,19 @@ const OIDC_DISCOVERY_CACHE = new Map();
 async function oidcDiscovery(configuredIssuer = process.env.OIDC_ISSUER) {
   const issuer = String(configuredIssuer || '').replace(/\/$/, '');
   if (!issuer) throw new Error('OIDC_ISSUER is not configured');
-  if (!(await publicOriginAllowed(issuer))) throw new Error('OIDC issuer must be a public HTTPS origin');
+  if (!issuer.startsWith('https://') || !(await publicOriginAllowed(issuer))) throw new Error('OIDC issuer must be a public HTTPS origin');
   const cached = OIDC_DISCOVERY_CACHE.get(issuer);
   if (cached?.expiresAt > Date.now()) return cached.value;
-  const response = await fetch(`${issuer}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(10_000) });
+  const response = await fetch(`${issuer}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(10_000), redirect: 'error' });
   if (!response.ok) throw new Error(`OIDC discovery returned ${response.status}`);
   const value = await response.json();
   if (!value.authorization_endpoint || !value.token_endpoint || !value.userinfo_endpoint) {
     throw new Error('OIDC provider discovery is incomplete');
   }
   const endpointsArePublic = await Promise.all(
-    [value.authorization_endpoint, value.token_endpoint, value.userinfo_endpoint].map((endpoint) => publicOriginAllowed(endpoint)),
+    [value.authorization_endpoint, value.token_endpoint, value.userinfo_endpoint].map(
+      async (endpoint) => String(endpoint).startsWith('https://') && (await publicOriginAllowed(endpoint)),
+    ),
   );
   if (endpointsArePublic.some((allowed) => !allowed)) throw new Error('OIDC endpoints must use public HTTPS origins');
   OIDC_DISCOVERY_CACHE.set(issuer, { expiresAt: Date.now() + 60 * 60_000, value });
@@ -1474,7 +1538,7 @@ app.get('/auth/sso/org/:orgId/start', async (req, res) => {
     const target = new URL(discovery.authorization_endpoint);
     target.search = new URLSearchParams({ client_id: config.clientId, redirect_uri: redirectUri, response_type: 'code', scope: config.scopes || 'openid email profile', state, code_challenge: challenge, code_challenge_method: 'S256' });
     res.redirect(target.toString());
-  } catch (error) { res.status(502).send(`SSO initialization failed: ${error.message}`); }
+  } catch (error) { res.status(502).type('text/plain').send(`SSO initialization failed: ${error.message}`); }
 });
 
 app.get('/auth/sso/org/callback', async (req, res) => {
@@ -1509,7 +1573,7 @@ app.get('/auth/sso/org/callback', async (req, res) => {
     setSessionCookie(res, user.id);
     res.append('Set-Cookie', `shannon_org=${encodeURIComponent(flow.orgId)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}${COOKIE_SECURE ? '; Secure' : ''}`);
     res.redirect('/');
-  } catch (error) { res.status(502).send(`SSO sign-in failed: ${error.message}`); }
+  } catch (error) { res.status(502).type('text/plain').send(`SSO sign-in failed: ${error.message}`); }
 });
 
 app.get('/auth/sso', async (req, res) => {
@@ -1531,7 +1595,7 @@ app.get('/auth/sso', async (req, res) => {
     });
     res.redirect(target.toString());
   } catch (error) {
-    res.status(502).send(`SSO initialization failed: ${error.message}`);
+    res.status(502).type('text/plain').send(`SSO initialization failed: ${error.message}`);
   }
 });
 
@@ -1591,7 +1655,7 @@ app.get('/auth/sso/callback', async (req, res) => {
     setSessionCookie(res, user.id);
     res.redirect('/');
   } catch (error) {
-    res.status(502).send(`SSO sign-in failed: ${error.message}`);
+    res.status(502).type('text/plain').send(`SSO sign-in failed: ${error.message}`);
   }
 });
 
@@ -1679,6 +1743,10 @@ scimRouter.patch('/Users/:id', (req, res) => {
     if (path === 'active' || (!path && Object.hasOwn(operation.value || {}, 'active'))) {
       const active = path === 'active' ? operation.value : operation.value.active;
       if (req.scimTenantScoped) {
+        // The dashboard never lets an owner be removed this way; neither does provisioning.
+        if (active === false && membership.role === 'owner') {
+          return res.status(403).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '403', detail: 'The organization owner cannot be deactivated through provisioning.' });
+        }
         if (active === false) removeMembership(req.scimOrgId, user.id);
         else if (!getMembership(req.scimOrgId, user.id)) saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
       } else user.disabledAt = active === false ? Date.now() : null;
@@ -1692,6 +1760,9 @@ scimRouter.delete('/Users/:id', (req, res) => {
   const membership = getMembership(req.scimOrgId, req.params.id);
   const user = membership && loadUsers()[req.params.id];
   if (!user) return res.status(404).end();
+  if (req.scimTenantScoped && membership.role === 'owner') {
+    return res.status(403).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '403', detail: 'The organization owner cannot be removed through provisioning.' });
+  }
   if (req.scimTenantScoped) removeMembership(req.scimOrgId, user.id);
   else { user.disabledAt = Date.now(); saveUsers(loadUsers()); }
   res.status(204).end();
@@ -2128,7 +2199,7 @@ app.get('/share/:token', async (req, res) => {
   } else if (link.resourceType === 'scan-report' && getScanOwner(link.resourceId)?.orgId === link.orgId) {
     html = await readScanText(link.orgId, link.resourceId, ['purple/certification-report.html']);
     // Engine-generated HTML: render it sandboxed so no script can run on our origin.
-    if (html) res.setHeader('content-security-policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:");
+    if (html) res.setHeader('content-security-policy', REPORT_SANDBOX);
   }
   if (!html) return res.status(404).type('html').send(renderShareGone());
   shareLinks.save({ ...link, views: Number(link.views || 0) + 1 }).catch(() => {});
@@ -3105,12 +3176,20 @@ app.get('/api/settings', (req, res) => {
   });
 });
 
-app.post('/api/settings', (req, res) => {
+app.post('/api/settings', async (req, res) => {
   const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in first.' });
   const current = settingsFor(req);
   const updated = { ...current, ...req.body };
-  const sanitized = { provider: updated.provider, model: updated.model, baseUrl: updated.baseUrl };
-  saveUserSettings(user.id, sanitized);
+  const baseUrl = typeof updated.baseUrl === 'string' ? updated.baseUrl.trim().slice(0, 2048) : '';
+  // Scans send the organization's AI key to this address, so it is never an internal one.
+  if (baseUrl && (!/^https?:\/\//i.test(baseUrl) || (await privateTarget(baseUrl)))) {
+    return res.status(400).json({ error: 'The AI base address must be a public http(s) address.' });
+  }
+  const sanitized = { provider: String(updated.provider || '').slice(0, 40), model: String(updated.model || '').slice(0, 120), baseUrl };
+  // Only these three fields change; anything else stored for the account (such as the weekly
+  // summary choice) is kept.
+  saveUserSettings(user.id, { ...loadUserSettings(user.id), ...sanitized });
   res.json({ ok: true });
 });
 
@@ -3404,7 +3483,7 @@ app.post('/api/team/:orgId/invitations', async (req, res) => {
     audit(ctx, 'invitation.created', 'invitation', email, { role });
     res.status(201).json({
       ok: true, email, role, expiresInDays: 7,
-      ...(process.env.NODE_ENV !== 'production' ? { developmentToken: invitation.token } : {}),
+      ...(DEV_TOKENS ? { developmentToken: invitation.token } : {}),
     });
   } catch (error) {
     res.status(502).json({ error: `Unable to send invitation: ${error.message}` });
@@ -3531,6 +3610,9 @@ app.post('/api/team/:orgId/findings', (req, res) => {
 app.patch('/api/team/:orgId/findings/:findingId', (req, res) => {
   const ctx = orgContext(req, res, 'findings.read');
   if (!ctx) return;
+  if (!can(ctx.membership.role, 'findings.triage') && !can(ctx.membership.role, 'findings.remediate')) {
+    return res.status(403).json({ error: `Your ${ctx.membership.role} role cannot change findings.` });
+  }
   const finding = getFinding(ctx.org.id, req.params.findingId);
   if (!finding) return res.status(404).json({ error: 'Finding not found.' });
   const next = { ...finding, updatedAt: Date.now() };
@@ -3719,7 +3801,7 @@ app.get('/api/team/:orgId/jobs', async (req, res) => {
   const jobs = await listJobs(ctx.org.id, Number(req.query.limit) || 100);
   res.json({
     ok: true,
-    jobs: jobs.map(({ secretEnc: _secret, ...job }) => job),
+    jobs: jobs.map(publicJob),
   });
 });
 
@@ -3728,6 +3810,9 @@ app.post('/api/team/:orgId/jobs/:id/cancel', async (req, res) => {
   if (!ctx) return;
   const job = (await listJobs(ctx.org.id, 500)).find((item) => item.id === req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found.' });
+  if (job.type !== 'scan' && !can(ctx.membership.role, 'settings.manage')) {
+    return res.status(403).json({ error: `Your ${ctx.membership.role} role can cancel scans only.` });
+  }
   if (!['queued', 'running'].includes(job.status)) return res.status(409).json({ error: `Cannot cancel a ${job.status} job.` });
   await updateJob(job.id, { status: 'cancelled', error: 'Cancelled by user', lockedBy: null, lockedAt: null });
   audit(ctx, 'job.cancelled', 'job', job.id, { type: job.type });
@@ -3992,8 +4077,10 @@ app.get(['/api/scans/:id/report', '/api/v1/scans/:id/report'], async (req, res) 
     if (!artifact) return res.status(404).json({ error: 'No evidence report for this scan yet.' });
     res.setHeader('content-type', fmt === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
     res.setHeader('content-disposition', `inline; filename="shannon-pentest-${req.params.id}.${fmt}"`);
+    res.setHeader('content-security-policy', REPORT_SANDBOX);
     return res.end(await readArtifact(artifact));
   }
+  res.setHeader('content-security-policy', REPORT_SANDBOX);
   res.setHeader('content-type', fmt === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
   res.setHeader('content-disposition', `inline; filename="shannon-pentest-${req.params.id}.${fmt}"`);
   res.end(readFileSync(p, 'utf-8'));
@@ -4078,36 +4165,30 @@ function hostOf(u) {
     return '';
   }
 }
-function isLocalHost(h) {
-  return h === 'localhost' || h === '::1' || /^127\./.test(h) || h.endsWith('.local');
+// A target on this machine (localhost, 127.*, *.local) needs no proof of ownership when the
+// dashboard runs on someone's own computer. On the hosted service "this machine" is the service
+// itself, so there a local target is treated like any other: unproven, and refused.
+export function localTargetsAllowed(env = process.env) {
+  return env.NODE_ENV !== 'production' || env.SHANNON_ALLOW_LOCAL_TARGETS === '1';
 }
-function isPrivateAddress(address) {
-  const value = String(address || '').toLowerCase();
-  if (isIP(value) === 4) {
-    const [a, b] = value.split('.').map(Number);
-    return (
-      a === 10 ||
-      a === 127 ||
-      a === 0 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 100 && b >= 64 && b <= 127)
-    );
-  }
-  if (isIP(value) === 6) {
-    return value === '::1' || value === '::' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe8') || value.startsWith('fe9') || value.startsWith('fea') || value.startsWith('feb');
-  }
-  return false;
-}
-async function publicOriginAllowed(url) {
-  const parsed = url instanceof URL ? url : new URL(url);
-  if (!['http:', 'https:'].includes(parsed.protocol) || isLocalHost(parsed.hostname) || isPrivateAddress(parsed.hostname)) return false;
+const LOCAL_TARGETS = localTargetsAllowed();
+const localExempt = (h) => LOCAL_TARGETS && isLocalHost(h);
+// Engine-generated report HTML quotes what the scanned site answered. It is always shown sandboxed,
+// so nothing in it can run as script on this origin.
+const REPORT_SANDBOX = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:";
+// On the hosted service a test target must be on the public internet. Owning a domain name does not
+// make the address it points to yours: a name can be pointed at this server's own network, and the
+// checks would then be sent there. (Checked when a test is requested. The engine also refuses
+// internal addresses written out as such.)
+const PRIVATE_TARGET = 'This address points to a private or internal network, which the hosted service does not test.';
+export async function privateTarget(hostOrUrl, allowLocal = LOCAL_TARGETS) {
+  if (allowLocal) return false;
+  const given = String(hostOrUrl);
+  const url = given.startsWith('http://') || given.startsWith('https://') ? given : `https://${given}`;
   try {
-    const addresses = await lookup(parsed.hostname, { all: true, verbatim: true });
-    return addresses.length > 0 && addresses.every((x) => !isPrivateAddress(x.address));
+    return !(await publicOriginAllowed(url));
   } catch {
-    return false;
+    return true;
   }
 }
 // Deterministic per-(user,domain) token — recomputable, so we don't need to store the token itself.
@@ -4150,10 +4231,21 @@ app.post('/api/verify/check', async (req, res) => {
   const token = domainToken(user.id, domain);
   const tryFetch = async (url) => {
     try {
-      if (!(await publicOriginAllowed(url))) return '';
       const c = new AbortController();
       const t = setTimeout(() => c.abort(), 8000);
-      const r = await fetch(url, { redirect: 'follow', signal: c.signal });
+      let at = url;
+      let r;
+      // Followed by hand, at most four steps, each one checked: a site's own redirect (to "www",
+      // to https) is normal, a redirect into a private network is not.
+      for (let hop = 0; hop < 5; hop++) {
+        if (!(await publicOriginAllowed(at))) return '';
+        r = await fetch(at, { redirect: 'manual', signal: c.signal });
+        const next = r.status >= 300 && r.status < 400 ? r.headers.get('location') : null;
+        if (!next) break;
+        at = new URL(next, at).toString();
+        r = null;
+      }
+      if (!r) return '';
       const body = await r.text().catch(() => '');
       clearTimeout(t);
       return r.status === 200 ? body : '';
@@ -4239,6 +4331,7 @@ app.post('/api/verify/ip/check', async (req, res) => {
   const ip = String(req.body?.ip || '').trim();
   if (!parseCidr(cidr)) return res.status(400).json({ error: 'Invalid CIDR.' });
   if (!ipInCidr(ip, cidr)) return res.status(400).json({ error: 'The proof IP must be inside the range.' });
+  if (await privateTarget(ip)) return res.status(400).json({ error: PRIVATE_TARGET });
   const token = ipVerifyToken(SESSION_SECRET, user.id, cidr);
   const controlled = await checkIpControl(ip, token);
   if (!controlled)
@@ -4323,7 +4416,12 @@ function agentDeps(target, headers = {}) {
   };
   const fetchText = async (url) => (await fetchT(url)).body || ''; // host-gated to the target origin
   const fetchStatus = async (url) => (await fetchT(url)).status || 0;
-  return { probe, escalate, recrawl, fetchText, fetchStatus };
+  // The status of a plain request, and which protection sent it when it is a refusal.
+  const fetchAnswer = async (url) => {
+    const reply = await fetchT(url);
+    return { status: reply.status || 0, by: refusedBy(reply.headers, reply.body) };
+  };
+  return { probe, escalate, recrawl, fetchText, fetchStatus, fetchAnswer };
 }
 
 // The checking engine keeps the site it is aimed at, and that site's login session, in one shared
@@ -4414,7 +4512,8 @@ async function agentCampaign(target, surface, headers, { depth = 'quick', onStep
   const mapped = run.surface || surface;
   run.surface = undefined;
   // Did the site start refusing the requests while it was being checked?
-  const after = await deps.fetchStatus(target).catch(() => 0);
+  const answer = await deps.fetchAnswer(target).catch(() => ({ status: 0, by: null }));
+  const after = answer.status;
   const blocked = REFUSED.has(after) || after === 0;
   run.coverage = {
     depth: agentDepth(depth),
@@ -4425,6 +4524,8 @@ async function agentCampaign(target, surface, headers, { depth = 'quick', onStep
     checksFailed: run.stats.errors || 0,
     blocked,
     siteStatus: after,
+    // Whose firewall refused, when the refusal says: the owner needs to know where to allow the test.
+    refusedBy: blocked ? answer.by : null,
   };
   const note = (detail) => {
     const step = { phase: 'warning', detail, t: run.steps.length };
@@ -4433,7 +4534,7 @@ async function agentCampaign(target, surface, headers, { depth = 'quick', onStep
   };
   if (blocked)
     note(
-      `By the end the site answered ${after || 'nothing'} to a plain request. A firewall or rate limit was refusing these checks, so the result is incomplete: "nothing confirmed" here does not mean the site is clean.`,
+      `By the end the site answered ${after || 'nothing'} to a plain request. ${answer.by ? `The refusal came from ${answer.by}, which` : 'A firewall or rate limit'} was refusing these checks, so the result is incomplete: "nothing confirmed" here does not mean the site is clean.`,
     );
   if (run.coverage.checksPossible > run.coverage.checksRun)
     note(
@@ -4482,7 +4583,8 @@ async function resolveAuthHeaders(req, target) {
   try {
     const lh = hostOf(loginUrl);
     const th = hostOf(target);
-    if (!isLocalHost(lh) && registrable(lh) !== registrable(th)) return {}; // cross-domain login → refuse
+    if (!localExempt(lh) && registrable(lh) !== registrable(th)) return {}; // cross-domain login → refuse
+    if (await privateTarget(lh)) return {};
     const sess = await login({ loginUrl, username, password });
     return sess?.Cookie ? sess : {};
   } catch (error) {
@@ -4514,7 +4616,7 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
   } catch {
     return { status: 400, error: 'That does not look like a valid URL.' };
   }
-  if (!isLocalHost(host)) {
+  if (!localExempt(host)) {
     if (!isVerified(ctx.user.id, host))
       return {
         status: 403,
@@ -4522,6 +4624,7 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
         needsVerification: registrable(host),
       };
   }
+  if (await privateTarget(host)) return { status: 400, error: PRIVATE_TARGET };
   try {
     const headers = await resolveAuthHeaders(req, target);
     const quota = await consumeOrgAllowance(ctx.org.id, 'agentRuns', 1);
@@ -4551,7 +4654,7 @@ app.post('/api/agent/auth-grant', async (req, res) => {
     return res.status(400).json({ error: 'That does not look like a valid URL.' });
   }
   const host = target.hostname.toLowerCase();
-  if (!isLocalHost(host) && !isVerified(ctx.user.id, host)) {
+  if (!localExempt(host) && !isVerified(ctx.user.id, host)) {
     return res.status(403).json({ error: `Verify ownership of ${registrable(host)} first.`, needsVerification: registrable(host) });
   }
   const cookie = String(req.body?.cookie || '').trim();
@@ -4565,9 +4668,10 @@ app.post('/api/agent/auth-grant', async (req, res) => {
   if (loginUrl) {
     let loginHost;
     try { loginHost = hostOf(loginUrl); } catch { return res.status(400).json({ error: 'Login URL is invalid.' }); }
-    if (!isLocalHost(loginHost) && registrable(loginHost) !== registrable(host)) {
+    if (!localExempt(loginHost) && registrable(loginHost) !== registrable(host)) {
       return res.status(400).json({ error: 'The login URL must use the same registrable domain as the scan target.' });
     }
+    if (await privateTarget(loginHost)) return res.status(400).json({ error: PRIVATE_TARGET });
   }
   const now = Date.now();
   const id = `sag_${randomToken(32)}`;
@@ -4616,6 +4720,7 @@ app.post('/api/agent/run', async (req, res) => {
 // step-by-step. EventSource is GET-only and same-origin (cookies carry auth); the target is a query
 // param. Gate/crawl errors are delivered as an SSE `error` event (the stream itself is always 200).
 app.get('/api/agent/run/stream', async (req, res) => {
+  if (fromAnotherSite(req)) return res.status(403).json({ error: 'Cross-site request rejected.' });
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache, no-transform',
@@ -4688,6 +4793,7 @@ app.post('/api/agent/team', async (req, res) => {
 // Streamed live over SSE so the dashboard watches the team coordinate step by step (same transport
 // contract as /api/agent/run/stream: GET, same-origin cookie auth, target as a query param).
 app.get('/api/agent/team/stream', async (req, res) => {
+  if (fromAnotherSite(req)) return res.status(403).json({ error: 'Cross-site request rejected.' });
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache, no-transform',
@@ -4827,7 +4933,20 @@ async function runDueMonitors() {
       try {
         const prevSummary = listAgentRuns(m.userId, m.target)[0];
         const prev = prevSummary ? getAgentRun(m.userId, prevSummary.id) : null;
-        const org = listOrganizations(m.userId)[0];
+        const creator = loadUsers()[m.userId];
+        const org = creator && !creator.disabledAt ? listOrganizations(m.userId)[0] : null;
+        const role = org ? getMembership(org.id, m.userId)?.role : null;
+        let monitored = '';
+        try {
+          monitored = hostOf(m.target);
+        } catch {}
+        // The schedule outlives the click that made it. Each time, the person who made it must still
+        // be allowed to run tests, and must still hold the proof that the site is theirs.
+        if (!role || !can(role, 'scans.run') || !monitored || (!localExempt(monitored) && !isVerified(m.userId, monitored)) || (await privateTarget(monitored))) {
+          console.warn(`[monitor] skipped ${m.target}: its creator may no longer test this site`);
+          touchMonitor(m.userId, m.id, Date.now());
+          continue;
+        }
         const run = await executeAgentRun(m.target, org?.id);
         const runId = randomUUID().slice(0, 12);
         saveAgentRun(m.userId, {
@@ -4869,8 +4988,9 @@ async function runDueMonitors() {
             console.error('[monitor] could not record findings:', error.message);
           }
         }
-        if (run.coverage?.blocked) console.warn(`[monitor] ${m.target} refused the checks (answered ${run.coverage.siteStatus}); this run is incomplete`);
-        if (m.webhookUrl && prev) {
+        if (run.coverage?.blocked) console.warn(`[monitor] ${m.target} refused the checks (answered ${run.coverage.siteStatus}${run.coverage.refusedBy ? `, from ${run.coverage.refusedBy}` : ''}); this run is incomplete`);
+        // The alert address was typed by a user: it is only ever a public one.
+        if (m.webhookUrl && prev && (await publicOriginAllowed(m.webhookUrl).catch(() => false))) {
           const diff = diffRuns(prev, run);
           if (diff.summary.new > 0) {
             const previousScanAt = prev.createdAt ? new Date(prev.createdAt).toISOString().slice(0, 16) : null;
@@ -4891,7 +5011,7 @@ async function runDueMonitors() {
   }
 }
 
-app.post('/api/agent/monitors', (req, res) => {
+app.post('/api/agent/monitors', async (req, res) => {
   const ctx = requirePermission(req, res, 'scans.run');
   if (!ctx) return;
   const user = ctx.user;
@@ -4904,13 +5024,17 @@ app.post('/api/agent/monitors', (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
-  if (!isLocalHost(host) && !isVerified(user.id, host))
+  if (!localExempt(host) && !isVerified(user.id, host))
     return res.status(403).json({
       error: `Verify ownership of ${registrable(host)} first (Domains page).`,
       needsVerification: registrable(host),
     });
+  if (await privateTarget(host)) return res.status(400).json({ error: PRIVATE_TARGET });
   const intervalHours = Math.max(1, Math.min(168, Number(req.body?.intervalHours) || 24));
-  const webhookUrl = (req.body?.webhookUrl || '').trim() || null;
+  const webhookUrl = (typeof req.body?.webhookUrl === 'string' ? req.body.webhookUrl : '').trim() || null;
+  if (webhookUrl && !(await publicOriginAllowed(webhookUrl).catch(() => false))) {
+    return res.status(400).json({ error: 'The alert address must be a public http(s) address.' });
+  }
   const monitor = {
     id: randomUUID().slice(0, 12),
     target,
@@ -4963,7 +5087,8 @@ app.post('/api/agent/replay', async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
-  if (!isLocalHost(host)) {
+  if (await privateTarget(host)) return res.status(400).json({ error: PRIVATE_TARGET });
+  if (!localExempt(host)) {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Sign in first.' });
     if (!isVerified(user.id, host))
@@ -5026,7 +5151,8 @@ app.post('/api/agent/custom-check', async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
-  if (!isLocalHost(host)) {
+  if (await privateTarget(host)) return res.status(400).json({ error: PRIVATE_TARGET });
+  if (!localExempt(host)) {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Sign in first.' });
     if (!isVerified(user.id, host))
@@ -5118,7 +5244,8 @@ app.post('/api/agent/sandbox', async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
-  if (!isLocalHost(host)) {
+  if (await privateTarget(host)) return res.status(400).json({ error: PRIVATE_TARGET });
+  if (!localExempt(host)) {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Sign in first.' });
     if (!isVerified(user.id, host))
@@ -5223,6 +5350,7 @@ async function llmPatch({ snippet, cls, key }) {
 }
 
 app.post('/api/agent/patch', async (req, res) => {
+  if (!requirePermission(req, res, 'findings.remediate')) return;
   const { finding, snippet } = req.body || {};
   if (!finding || !snippet) return res.status(400).json({ error: 'Provide a finding and the code snippet.' });
   const cls = String(finding.cls || finding.tool || '')
@@ -5250,7 +5378,10 @@ app.post('/api/agent/pr', async (req, res) => {
   const provider = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
   let providerSecret = {};
   try { providerSecret = provider ? decryptSecret(provider.secretEnc) || {} : {}; } catch {}
-  const tok = String(token || providerSecret.token || process.env.GITHUB_TOKEN || '').trim();
+  // The server's own GITHUB_TOKEN belongs to whoever runs the service. Another organization uses
+  // the credential it saved, or one sent with the request, never the operator's.
+  const platformToken = process.env.NODE_ENV !== 'production' || ctx.org.id === process.env.SHANNON_PLATFORM_ORG_ID ? process.env.GITHUB_TOKEN : '';
+  const tok = String(token || providerSecret.token || platformToken || '').trim();
   const selectedRepo = String(repo || provider?.config?.repo || '').trim();
   if (!tok)
     return res.status(400).json({ error: 'Configure the organization GitHub credential in Settings before opening PRs.' });
@@ -5305,7 +5436,8 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
   // user, an explicit authorization attestation, AND proven domain ownership. Localhost is exempt
   // (built-in labs / self-demo). This is the safety boundary for multi-tenant / client use.
   const targetHost = hostOf(targetUrl);
-  if (!isLocalHost(targetHost)) {
+  if (await privateTarget(targetHost)) return res.status(400).json({ error: PRIVATE_TARGET });
+  if (!localExempt(targetHost)) {
     if (req.body.authorized !== true)
       return res
         .status(403)
@@ -5388,19 +5520,33 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
       return o;
     })
     .filter((o) => o.cookie || o.header || o.loginUrl);
+  for (const identity of cleanIds) {
+    if (!identity.loginUrl) continue;
+    let loginHost = '';
+    try {
+      loginHost = hostOf(identity.loginUrl);
+    } catch {}
+    if (!loginHost || (!localExempt(loginHost) && registrable(loginHost) !== registrable(targetHost)) || (await privateTarget(loginHost))) {
+      return res.status(400).json({ error: 'Each login URL must be on the same domain as the scan target.' });
+    }
+  }
   if (cleanIds.length >= 2) env.SHANNON_AC = JSON.stringify({ identities: cleanIds });
 
   // Advanced scan options. Continuous monitoring diffs against the last baseline; an alert webhook
   // pings on new exposures. Network scanning (unauth services on the verified host) requires an
   // explicit authorization acknowledgment in addition to the domain-ownership gate.
   if (req.body.monitor) env.SHANNON_MONITOR = '1';
-  if (typeof req.body.alertWebhook === 'string' && /^https:\/\//i.test(req.body.alertWebhook))
+  if (typeof req.body.alertWebhook === 'string' && /^https:\/\//i.test(req.body.alertWebhook)) {
+    if (!(await publicOriginAllowed(req.body.alertWebhook.slice(0, 2048)).catch(() => false))) {
+      return res.status(400).json({ error: 'The alert address must be a public https address.' });
+    }
     env.SHANNON_ALERT_WEBHOOK = req.body.alertWebhook.slice(0, 2048);
+  }
   if (req.body.networkScan && req.body.networkAuthorized === true) {
     // Authorization: a DOMAIN target already passed the domain-ownership gate (its host serves the
     // verified domain). A raw-IP target must fall inside a VERIFIED CIDR range. Localhost is exempt.
     const isRawIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(targetHost);
-    let netOk = isLocalHost(targetHost) || !isRawIp;
+    let netOk = localExempt(targetHost) || !isRawIp;
     if (isRawIp && !netOk) {
       const cidrs = Object.keys(listCidrs(getUser(req)?.id));
       netOk = cidrs.some((c) => ipInCidr(targetHost, c));
@@ -5448,7 +5594,7 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
   // Durable jobs already keep it in the encrypted job secret above.
   const scanTempDir = mkdtempSync(join(os.tmpdir(), 'shannon-dashboard-scan-'));
   const configPath = join(scanTempDir, 'scan.yaml');
-  writeFileSync(configPath, yamlDump(config, 0), { mode: 0o600 });
+  writeFileSync(configPath, stringifyYaml(config), { mode: 0o600 });
 
   const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], {
     cwd: ROOT,
@@ -5753,20 +5899,6 @@ app.get('/api/models', (req, res) => {
   ]);
 });
 
-function yamlDump(obj, indent = 0) {
-  const pad = '  '.repeat(indent);
-  let out = '';
-  for (const [k, v] of Object.entries(obj)) {
-    if (v == null) continue;
-    if (typeof v === 'object' && !Array.isArray(v)) out += `${pad}${k}:\n${yamlDump(v, indent + 1)}`;
-    else if (Array.isArray(v)) {
-      out += `${pad}${k}:\n`;
-      for (const i of v) out += `${pad}  - ${i}\n`;
-    } else out += `${pad}${k}: ${v}\n`;
-  }
-  return out;
-}
-
 // Health-check endpoint — Railway will hit this to confirm the container is alive.
 app.get('/healthz', (_req, res) =>
   res.json({ ok: true, service: 'dashboard', uptime: process.uptime() }),
@@ -5845,11 +5977,14 @@ app.get('/api/system/readiness', async (req, res) => {
   }
   const requiredKeys = new Set(['database', 'secrets', 'public-url', 'email', 'worker', 'browser', 'metrics', 'backups', 'alerts', 'incident-contact']);
   const required = checks.filter((item) => requiredKeys.has(item.key));
+  // Every organization's owner may see whether the service is ready. The details (addresses,
+  // contacts, which variables to set) describe the platform, so only its operator gets them.
+  const operator = isPlatformOperator(req, ctx.user);
   res.json({
     ok: required.every((item) => item.status === 'ready'),
     ready: required.filter((item) => item.status === 'ready').length,
     required: required.length,
-    checks,
+    checks: operator ? checks : checks.map(({ key, label, status }) => ({ key, label, status })),
     generatedAt: now,
     organization: { id: ctx.org.id, name: ctx.org.name },
   });
@@ -5950,7 +6085,7 @@ function verifyDefenderKey(key) {
     const membership = getMembership(payload.oid, payload.uid);
     const user = loadUsers()[payload.uid];
     const versionMatches = user && Number(payload.v || 0) === Number(user.defenderKeyVersion || 0);
-    return membership && versionMatches && can(membership.role, 'defender.manage') ? { userId: payload.uid, orgId: payload.oid } : null;
+    return membership && versionMatches && !user.disabledAt && can(membership.role, 'defender.manage') ? { userId: payload.uid, orgId: payload.oid } : null;
   } catch {
     return null;
   }
@@ -6032,54 +6167,68 @@ function defenderSeverity(cls) {
   return 'low';
 }
 
+// How many detections one organization may store per minute from each source, and one alert per
+// kind of attack per site per minute. A leaked site key, or a real flood, must not be able to push
+// an organization's whole history out, or send its owner a message per request.
+const INTAKE = createIntakeGate({ perMinute: Math.max(10, Number(process.env.SHANNON_DEFENDER_INTAKE_PER_MINUTE) || 300) });
+function sendDefenseAlert(orgId, event, userId, site) {
+  if (!INTAKE.alertOnce(orgId, `${event.source}|${site}|${event.cls}`)) return;
+  queueIntegrationEvent(orgId, { id: `defender:${event.id}`, type: 'defender.detection', at: event.at, data: event }, userId)
+    .catch((error) => console.error('[defender] integration event failed:', error.message));
+}
+// Stores one reported detection, or, once the minute's allowance is used, one notice that the rest
+// of the minute is not being kept. Returns whether the detection itself was stored.
+function storeDetection({ orgId, userId, source, site, detection, metadata = {} }) {
+  const turn = INTAKE.admit(orgId, source);
+  if (turn === 'drop') return false;
+  const flood = turn === 'overflow';
+  const event = {
+    id: randomUUID(),
+    orgId,
+    userId,
+    at: flood ? new Date().toISOString() : detection.at,
+    method: flood ? 'FLOOD' : detection.method,
+    url: flood ? `${site}: more than ${INTAKE.perMinute} detections in one minute. The rest of this minute is not stored.` : detection.url,
+    cls: flood ? 'report-flood' : detection.cls,
+    enforced: flood ? false : detection.enforced,
+    srcIp: flood ? null : detection.srcIp,
+    severity: flood ? 'high' : defenderSeverity(detection.cls),
+    source,
+    status: !flood && detection.enforced ? 'contained' : 'open',
+    metadata,
+    createdAt: Date.now(),
+  };
+  appendDefenseEvent(event);
+  sendDefenseAlert(orgId, event, userId, site);
+  return !flood;
+}
+
 app.post('/api/defender/report', (req, res) => {
   const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
   if (!principal) return res.status(401).json({ error: 'invalid api key' });
+  // Counted per organization, not per address: the sender is the customer's server.
+  if (!rateLimit(`defender-report:${principal.orgId}`, { limit: 240, windowMs: 60_000 }).ok) {
+    return res.status(429).json({ error: 'Too many reports. Send detections in batches.' });
+  }
   const incoming = Array.isArray(req.body?.detections) ? req.body.detections : [];
   if (!incoming.length) return res.json({ accepted: 0 });
 
   let accepted = 0;
   for (const raw of incoming.slice(0, SDK_REPORT_MAX)) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-    const d = raw;
-    const eventTime = typeof d.at === 'string' && Number.isFinite(Date.parse(d.at))
-      ? new Date(d.at).toISOString()
-      : new Date().toISOString();
+    const d = cleanDetection(raw);
     // The Express package reports a path, so it sends the site's name beside it.
-    const site = typeof d.host === 'string' && d.host ? d.host : d.url;
-    const own = ownTestOf(principal.orgId, d, site);
+    const site = typeof raw.host === 'string' && raw.host ? raw.host : d.url;
+    const own = ownTestOf(principal.orgId, raw, site);
     if (own) {
       OWN_TESTS.record({
-        orgId: principal.orgId, userId: principal.userId, source: 'sdk', token: d.test, kind: own.kind,
-        site: reportedHost(site), detection: d, at: eventTime,
+        orgId: principal.orgId, userId: principal.userId, source: 'sdk', token: raw.test, kind: own.kind,
+        site: reportedHost(site), detection: d, at: d.at,
       });
       accepted += 1;
       continue;
     }
-    const event = {
-      id: randomUUID(),
-      orgId: principal.orgId,
-      userId: principal.userId,
-      at: eventTime,
-      method: String(d.method || '').slice(0, 10),
-      url: String(d.url || '').slice(0, 300),
-      cls: String(d.cls || '').slice(0, 60),
-      enforced: d.enforced === true,
-      srcIp: d.srcIp ? String(d.srcIp).slice(0, 64) : null,
-      severity: defenderSeverity(d.cls),
-      source: 'sdk',
-      status: d.enforced === true ? 'contained' : 'open',
-      metadata: {},
-      createdAt: Date.now(),
-    };
-    appendDefenseEvent(event);
-    accepted += 1;
-    queueIntegrationEvent(principal.orgId, {
-      id: `defender:${event.id}`,
-      type: 'defender.detection',
-      at: event.at,
-      data: event,
-    }, principal.userId).catch((error) => console.error('[defender] integration event failed:', error.message));
+    if (storeDetection({ orgId: principal.orgId, userId: principal.userId, source: 'sdk', site: reportedHost(site), detection: d })) accepted += 1;
   }
   res.json({ accepted });
 });
@@ -6445,7 +6594,7 @@ app.post('/api/defender/assets', async (req, res) => {
   if (['web', 'api', 'domain'].includes(type)) {
     const host = hostOf(locator);
     if (!host) return res.status(400).json({ error: 'Provide a valid domain or URL.' });
-    if (!isLocalHost(host) && !isVerified(ctx.user.id, host)) return res.status(403).json({ error: 'Verify ownership of this domain before adding it to continuous defense.', host });
+    if (!localExempt(host) && !isVerified(ctx.user.id, host)) return res.status(403).json({ error: 'Verify ownership of this domain before adding it to continuous defense.', host });
     locator = type === 'domain' ? host : locator;
   }
   if (type === 'cidr') {
@@ -6544,33 +6693,23 @@ app.post('/api/platform/defender/edge/report', (req, res) => {
   const routesByHost = new Map(listEdgeRoutes().map((route) => [route.host, route]));
   const incoming = Array.isArray(req.body?.detections) ? req.body.detections : [];
   let accepted = 0;
-  for (const raw of incoming.slice(0, SDK_REPORT_MAX)) {
+  // The edge sends up to 500 detections at a time, for every organization it serves.
+  for (const raw of incoming.slice(0, 500)) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-    const host = String(raw.host || '').toLowerCase().split(':')[0];
+    const host = (typeof raw.host === 'string' ? raw.host : '').toLowerCase().split(':')[0];
     const route = routesByHost.get(host);
     if (!route) continue;
+    const d = cleanDetection(raw);
     const own = ownTestOf(route.orgId, raw, host);
     if (own) {
       OWN_TESTS.record({
         orgId: route.orgId, userId: route.userId, source: 'edge', token: raw.test, kind: own.kind,
-        site: host, detection: raw, metadata: { host },
+        site: host, detection: d, metadata: { host },
       });
       accepted += 1;
       continue;
     }
-    const event = {
-      id: randomUUID(), orgId: route.orgId, userId: route.userId,
-      at: typeof raw.at === 'string' && Number.isFinite(Date.parse(raw.at)) ? new Date(raw.at).toISOString() : new Date().toISOString(),
-      method: String(raw.method || '').slice(0, 10), url: String(raw.url || '').slice(0, 300),
-      cls: String(raw.cls || '').slice(0, 60), enforced: raw.enforced === true,
-      srcIp: raw.srcIp ? String(raw.srcIp).slice(0, 64) : null,
-      severity: defenderSeverity(raw.cls), source: 'edge', status: raw.enforced === true ? 'contained' : 'open',
-      metadata: { host }, createdAt: Date.now(),
-    };
-    appendDefenseEvent(event);
-    accepted += 1;
-    queueIntegrationEvent(route.orgId, { id: `defender:${event.id}`, type: 'defender.detection', at: event.at, data: event }, route.userId)
-      .catch((error) => console.error('[defender] integration event failed:', error.message));
+    if (storeDetection({ orgId: route.orgId, userId: route.userId, source: 'edge', site: host, detection: d, metadata: { host } })) accepted += 1;
   }
   res.json({ accepted });
 });
@@ -6630,7 +6769,7 @@ app.post('/api/defender/edge/routes', async (req, res) => {
   // proven you own, and you may not point one at an origin you do not own either.
   const h = hostOf(String(host));
   if (!h) return res.status(400).json({ error: 'invalid public hostname' });
-  if (!isLocalHost(h) && !isVerified(user.id, h)) {
+  if (!localExempt(h) && !isVerified(user.id, h)) {
     return res.status(403).json({ error: 'needsVerification', host: h });
   }
   if (!isVerified(user.id, parsed.hostname)) {
@@ -6728,7 +6867,7 @@ app.post('/api/defender/connect', async (req, res) => {
     return res.status(400).json({ error: 'local origins are disabled in production' });
   }
 
-  if (!isLocalHost(host) && !isVerified(user.id, host)) {
+  if (!localExempt(host) && !isVerified(user.id, host)) {
     return res.status(403).json({ error: 'needsVerification', host });
   }
 

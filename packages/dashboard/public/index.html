@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/components.css">
 <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js" integrity="sha384-Emf5ZVIUiarAdhkgtqK+5/Z5qIvM6QoVrS+qAVtfyZVuD5lIHrac0me485+Antp0" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"></script>
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -1794,6 +1794,9 @@ function parseHash(){
   const m=/^#([a-z]+)(?:\/(.*))?$/.exec(location.hash||'');
   if(!m||!PAGES[m[1]])return {p:'dash'};
   let d;try{d=m[2]!==undefined?decodeURIComponent(m[2]):undefined}catch{d=undefined}
+  // What follows the page name is an id (letters, digits, - _ . : @). The address bar is text a
+  // stranger can write into a link, so anything else is dropped here, before any page uses it.
+  if(d!==undefined&&!/^[\w.:@-]{1,160}$/.test(d))d=undefined;
   return {p:m[1],d};
 }
 function go(p,d){
@@ -2496,7 +2499,7 @@ function renderUnderstanding(u){
     ${rows||'<p style="color:var(--t2)">No obvious attack surface was discovered from the crawl. Try a deeper scan.</p>'}
     <div style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn btn-p" id="ag-run" onclick="agentRun()">&#9654; Run the agent — auto-test this plan</button>
-      <button class="btn btn-g" onclick="prefillScan('${H(u.origin||'')}')">Full proof-based scan &rarr;</button>
+      <button class="btn btn-g" data-v="${H(u.origin||'')}" onclick="prefillScan(this.dataset.v)">Full proof-based scan &rarr;</button>
     </div>
     <div id="ag-run-out" style="margin-top:22px"></div>`;
 }
@@ -2683,7 +2686,7 @@ function finishRun(run,el,withLocate){
   const cov=run.coverage||null;
   const incomplete=!!cov&&(cov.blocked||cov.checksFailed>0);
   const covLine=cov?`<div style="color:var(--t3);font-size:12px;margin:0 0 12px;line-height:1.6">Covered at <b style="color:var(--t1)">${H(cov.depth)}</b> depth: ${cov.pages} page${cov.pages===1?'':'s'}, ${cov.forms} form${cov.forms===1?'':'s'}, <b style="color:var(--t1)">${cov.checksRun} of ${cov.checksPossible}</b> possible checks run${cov.checksFailed?`, ${cov.checksFailed} could not run`:''}.${cov.checksPossible>cov.checksRun?' Choose a deeper run to cover the rest.':''}</div>`:'';
-  const warnBox=incomplete?`<div style="border:1px solid var(--ylw);background:var(--ylw-bg);border-radius:10px;padding:12px 14px;margin:0 0 14px;font-size:13px;line-height:1.55;color:var(--t1)"><b style="color:var(--ylw)">This result is incomplete.</b> ${cov.blocked?`By the end the website answered ${cov.siteStatus||'nothing'} to a plain request, which means a firewall or rate limit was refusing these checks. `:''}${cov.checksFailed?`${cov.checksFailed} check${cov.checksFailed===1?'':'s'} could not run. `:''}“Nothing proven” here does not mean the website is clean. Allow the checks through your firewall for the test, or run again later.</div>`:'';
+  const warnBox=incomplete?`<div style="border:1px solid var(--ylw);background:var(--ylw-bg);border-radius:10px;padding:12px 14px;margin:0 0 14px;font-size:13px;line-height:1.55;color:var(--t1)"><b style="color:var(--ylw)">This result is incomplete.</b> ${cov.blocked?`By the end the website answered ${cov.siteStatus||'nothing'} to a plain request, which means ${cov.refusedBy?`${H(cov.refusedBy)} was refusing these checks`:'a firewall or rate limit was refusing these checks'}. `:''}${cov.checksFailed?`${cov.checksFailed} check${cov.checksFailed===1?'':'s'} could not run. `:''}“Nothing proven” here does not mean the website is clean. Allow the checks through your firewall for the test, or run again later.</div>`:'';
   el.innerHTML=`
     ${warnBox}${covLine}
     <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px;flex-wrap:wrap"><span class="bx ${n?'bx-o':incomplete?'bx-o':'bx-g'}">${n} proven</span>${L.length?`<span class="bx" style="border-color:#f59e0b;color:#f59e0b">${L.length} potential</span>`:''}<span style="color:var(--t3);font-size:12px">${rounds} round${rounds>1?'s':''} &middot; ${tested} probes run</span>${withLocate?`<span style="margin-left:auto;display:flex;gap:6px"><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="downloadReport('md')">Download .md</button><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="downloadReport('json')">.json</button><button class="btn btn-g" style="padding:5px 10px;font-size:11px" onclick="downloadReport('sarif')">.sarif</button></span>`:''}</div>
@@ -2785,7 +2788,7 @@ async function agentOpenPR(i){
   try{ r=await fetch('/api/agent/pr',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repo,path,content,finding:f})}); j=await r.json().catch(()=>({})); }
   catch(e){ out.innerHTML=`<span style="color:var(--red)">${H(e.message||'PR failed.')}</span>`; return; }
   if(!r.ok){ out.innerHTML=`<span style="color:var(--red)">${H(j.error||('HTTP '+r.status))}</span>`; return; }
-  out.innerHTML=`<span style="color:var(--grn)">&#10003; PR opened:</span> <a href="${H(j.url)}" target="_blank" rel="noopener" style="color:var(--acc2)">${H(j.url)}</a>`;
+  out.innerHTML=`<span style="color:var(--grn)">&#10003; PR opened:</span> ${/^https:\/\/github\.com\//.test(String(j.url||''))?`<a href="${H(j.url)}" target="_blank" rel="noopener" style="color:var(--acc2)">${H(j.url)}</a>`:H(j.url)}`;
 }
 function copyPatched(i){
   const txt=AG_PATCHED[i];if(!txt)return;
@@ -2822,7 +2825,7 @@ async function pgDomains(){
         <div class="rd-row-main"><b>${ico('check',{cls:'ico-sm'})} ${H(d)}</b><small>verified via ${H(info.method||'?')} &middot; ${H((info.verifiedAt||'').slice(0,10))}</small></div>
         <div class="rd-row-actions">
           <button class="btn btn-p btn-sm" onclick="go('new')">Scan</button>
-          <button class="btn btn-g btn-sm" onclick="removeDomain('${H(d)}')">Remove</button>
+          <button class="btn btn-g btn-sm" data-v="${H(d)}" onclick="removeDomain(this.dataset.v)">Remove</button>
         </div>
       </div>`).join('')}</section>`:`<div class="rd-empty">No verified domains yet. Add one above, verify it, then launch a scan.</div>`}
 
@@ -2838,7 +2841,7 @@ async function pgDomains(){
     ${Object.keys(ranges).length?`<section class="rd-card rd-list" style="margin-top:16px">${Object.entries(ranges).map(([c,info])=>`
       <div class="rd-row">
         <div class="rd-row-main"><b>${ico('check',{cls:'ico-sm'})} ${H(c)}</b><small>verified ${H((info.verifiedAt||'').slice(0,10))}</small></div>
-        <div class="rd-row-actions"><button class="btn btn-g btn-sm" onclick="removeRange('${H(c)}')">Remove</button></div>
+        <div class="rd-row-actions"><button class="btn btn-g btn-sm" data-v="${H(c)}" onclick="removeRange(this.dataset.v)">Remove</button></div>
       </div>`).join('')}</section>`:''}
   </div>`;
 }
@@ -2850,7 +2853,7 @@ async function startIpVerify(){
     <div>1. Serve this token at <code>http://&lt;an IP in ${H(cidr)}&gt;/.well-known/shannon-verify.txt</code>:</div>
     <div style="margin:8px 0"><code style="user-select:all;background:var(--s2);padding:3px 6px;border-radius:4px">${H(r.token)}</code></div>
     <div>2. Enter that IP and check:</div>
-    <div class="rd-form-row" style="margin-top:8px"><input class="fi" id="ip-proof" placeholder="203.0.113.10"><button class="btn btn-p" onclick="checkIpVerify('${H(cidr)}')">Check →</button></div>
+    <div class="rd-form-row" style="margin-top:8px"><input class="fi" id="ip-proof" placeholder="203.0.113.10"><button class="btn btn-p" data-v="${H(cidr)}" onclick="checkIpVerify(this.dataset.v)">Check →</button></div>
     <div id="ip-result" style="margin-top:8px"></div>
   </div>`;
 }
@@ -3021,7 +3024,7 @@ async function defOverviewLoad() {
     bars.innerHTML = top.length ? top.map((row) => `<div><div class="def-bar-label"><span>${H(row.name)}</span><b>${Number(row.count || 0).toLocaleString()}</b></div><div class="def-bar-track"><div class="def-bar-fill" style="width:${Math.max(5, Math.round(Number(row.count || 0) / max * 100))}%"></div></div></div>`).join('') : '<div class="def-empty">No attack classes observed yet.</div>';
 
     const routeRows = DEF_OVERVIEW.routes || [];
-    routes.innerHTML = routeRows.length ? routeRows.map((route) => `<div class="def-row"><div class="def-row-main"><b>${H(route.host)}</b><small>${H(route.origin)} · ${route.createdAt ? H(fmtDate(route.createdAt)) : 'configured route'}</small></div><span class="bx ${route.mode === 'enforce' ? 'bx-r' : ''}">${H(route.mode)}</span><div class="def-row-actions"><button class="btn btn-g" onclick="defEdgeMode('${route.host}')">${route.mode === 'enforce' ? 'Monitor' : 'Enforce'}</button><button class="btn" onclick="defEdgeRemove('${route.host}')">Remove</button></div></div>`).join('') : '<div class="def-empty">No edge routes configured. Verify the public host and origin, then add the route here.</div>';
+    routes.innerHTML = routeRows.length ? routeRows.map((route) => `<div class="def-row"><div class="def-row-main"><b>${H(route.host)}</b><small>${H(route.origin)} · ${route.createdAt ? H(fmtDate(route.createdAt)) : 'configured route'}</small></div><span class="bx ${route.mode === 'enforce' ? 'bx-r' : ''}">${H(route.mode)}</span><div class="def-row-actions"><button class="btn btn-g" data-v="${H(route.host)}" onclick="defEdgeMode(this.dataset.v)">${route.mode === 'enforce' ? 'Monitor' : 'Enforce'}</button><button class="btn" data-v="${H(route.host)}" onclick="defEdgeRemove(this.dataset.v)">Remove</button></div></div>`).join('') : '<div class="def-empty">No edge routes configured. Verify the public host and origin, then add the route here.</div>';
   } catch (error) {
     const message = H(error.detail || error.message || 'failed to load Defender posture');
     kpis.innerHTML = `<div class="def-empty" style="grid-column:1/-1"><span class="err">${message}</span></div>`;
@@ -3039,7 +3042,7 @@ async function defIntelLoad(query='') {
     const released=data.dateReleased?fmtDate(data.dateReleased):'unknown release date';
     summary.innerHTML=`${Number(data.total||0).toLocaleString()} known exploited vulnerabilities · catalog ${H(data.catalogVersion||'current')} · released ${H(released)}${data.stale?' · <span class="err">cached copy</span>':''}`;
     const rows=data.vulnerabilities||[];DEF_INTEL_ITEMS=Object.fromEntries(rows.map(item=>[item.cveId,item]));
-    results.innerHTML=rows.length?rows.map(item=>`<article class="def-intel-item"><b>${H(item.cveId)} · ${H(item.vendor)} ${H(item.product)}</b><small>${H(item.name)}</small><small>Added ${H(item.dateAdded||'unknown')} · remediation due ${H(item.dueDate||'not specified')}${String(item.ransomwareUse).toLowerCase()==='known'?' · known ransomware use':''}</small><small>${H(item.action)}</small><div class="def-actions"><button class="btn btn-g" id="def-intel-add-${H(item.cveId)}" onclick="defIntelCreateFinding('${H(item.cveId)}')">Create finding + notify</button></div></article>`).join(''):`<div class="def-empty">No CISA KEV entries match “${H(query)}”. This does not prove the product is vulnerability-free.</div>`;
+    results.innerHTML=rows.length?rows.map(item=>`<article class="def-intel-item"><b>${H(item.cveId)} · ${H(item.vendor)} ${H(item.product)}</b><small>${H(item.name)}</small><small>Added ${H(item.dateAdded||'unknown')} · remediation due ${H(item.dueDate||'not specified')}${String(item.ransomwareUse).toLowerCase()==='known'?' · known ransomware use':''}</small><small>${H(item.action)}</small><div class="def-actions"><button class="btn btn-g" id="def-intel-add-${H(item.cveId)}" data-v="${H(item.cveId)}" onclick="defIntelCreateFinding(this.dataset.v)">Create finding + notify</button></div></article>`).join(''):`<div class="def-empty">No CISA KEV entries match “${H(query)}”. This does not prove the product is vulnerability-free.</div>`;
   }catch(error){
     summary.innerHTML=`<span class="err">${H(error.detail||error.message||'Threat intelligence is unavailable.')}</span>`;
     results.innerHTML='';
@@ -3320,7 +3323,7 @@ function defSelfRow(r) {
 }
 function defSelfBans(bans) {
   if (!bans || !bans.length) return '';
-  return `<div class="def-fine" style="margin:6px 0"><b>Banned IPs:</b> ${bans.map((b) => `<code>${H(b.ip)}</code> until ${new Date(b.until).toLocaleTimeString()} <button class="btn" style="padding:2px 8px;font-size:10.5px" onclick="defSelfUnban('${H(b.ip)}')">Unban</button>`).join(' · ')}</div>`;
+  return `<div class="def-fine" style="margin:6px 0"><b>Banned IPs:</b> ${bans.map((b) => `<code>${H(b.ip)}</code> until ${new Date(b.until).toLocaleTimeString()} <button class="btn" style="padding:2px 8px;font-size:10.5px" data-v="${H(b.ip)}" onclick="defSelfUnban(this.dataset.v)">Unban</button>`).join(' · ')}</div>`;
 }
 async function defSelfUnban(ip) {
   try {
@@ -3944,7 +3947,7 @@ function pgLive(sid){
   }).join('');
 
   M.innerHTML=`<div class="pg">
-    ${pageHead({eyebrow:'Live scan',title:`<span class="sp sp-l" id="lv-spin"></span><span id="lv-title">Scan Running</span>`,sub:`Scan <code>${sid}</code> &middot; <span id="lv-t" style="font-variant-numeric:tabular-nums;color:var(--t1);font-weight:500">0s</span> elapsed &middot; click any planet to inspect the agent`,actions:`<button class="btn btn-d" id="stop-btn" onclick="stopScan('${sid}')" aria-label="Stop scan">${ico('square',{cls:'ico-sm'})} Stop Scan</button>`})}
+    ${pageHead({eyebrow:'Live scan',title:`<span class="sp sp-l" id="lv-spin"></span><span id="lv-title">Scan Running</span>`,sub:`Scan <code>${H(sid)}</code> &middot; <span id="lv-t" style="font-variant-numeric:tabular-nums;color:var(--t1);font-weight:500">0s</span> elapsed &middot; click any planet to inspect the agent`,actions:`<button class="btn btn-d" id="stop-btn" data-v="${H(sid)}" onclick="stopScan(this.dataset.v)" aria-label="Stop scan">${ico('square',{cls:'ico-sm'})} Stop Scan</button>`})}
 
     <div class="cards">
       <div class="crd"><div class="crd-l">Status</div><div class="crd-v" style="font-size:18px" id="lv-s" data-pulse="1">Running</div></div>
@@ -4541,7 +4544,7 @@ function settleArena(){
 async function stopScan(sid){
   const btn=$('stop-btn');
   if(btn){btn.disabled=true;btn.innerHTML='<span class="sp"></span> Stopping…'}
-  try{await api('/scans/'+sid+'/stop',{method:'POST'})}
+  try{await api('/scans/'+encodeURIComponent(sid)+'/stop',{method:'POST'})}
   catch(e){alert('Error: '+e.message)}
 }
 
@@ -4614,11 +4617,11 @@ function pageLoadError(title,e,retryJs){
 async function pgScan(sid){
   M.innerHTML=`<div class="pg"><div class="rd-loading"><span class="sp sp-l"></span><span>Loading results…</span></div></div>`;
   let d;
-  try{ d=await api('/scans/'+sid); }
+  try{ d=await api('/scans/'+encodeURIComponent(sid)); }
   catch(e){ if(e.status===401)return; M.innerHTML=pageLoadError('this report',e,`go('scan','${H(sid)}')`); return; }
   const s=d.session,f=d.files;
   // Track B/C — broker-verified exploitation findings + compliance roll-up (may be empty).
-  const broker=await api('/scans/'+sid+'/broker').catch(()=>({findings:[],rows:[],owaspCoverage:{},cweCoverage:{}}));
+  const broker=await api('/scans/'+encodeURIComponent(sid)+'/broker').catch(()=>({findings:[],rows:[],owaspCoverage:{},cweCoverage:{}}));
   const hasBroker=(broker.findings?.length||0)>0||(broker.rows?.length||0)>0;
   const cost=Object.values(s.metrics||{}).reduce((a,m)=>a+(m.cost||0),0);
   const dur=s.completedAt?((new Date(s.completedAt)-new Date(s.startedAt))/1000|0):0;
@@ -4669,7 +4672,7 @@ async function pgScan(sid){
   window._agents=agents;window._cost=cost;window._sid=sid;window._s=s;window._f=f;window._rb=rb;window._score=score;window._grade=grade;window._broker=broker;
 
   M.innerHTML=`<div class="pg">
-    ${pageHead({eyebrow:'Scan report',title:H(s.target||sid),sub:`Scan <code>${sid}</code> &middot; <span class="bx ${s.status==='completed'?'bx-g':'bx-r'}">${s.status}</span> &middot; ${fmtDate(s.startedAt)}`,actions:`<button class="btn btn-g" onclick="go('dash')" aria-label="Back">${ico('arrow-left',{cls:'ico-sm'})} Back</button>`})}
+    ${pageHead({eyebrow:'Scan report',title:H(s.target||sid),sub:`Scan <code>${H(sid)}</code> &middot; <span class="bx ${s.status==='completed'?'bx-g':'bx-r'}">${H(s.status)}</span> &middot; ${fmtDate(s.startedAt)}`,actions:`<button class="btn btn-g" onclick="go('dash')" aria-label="Back">${ico('arrow-left',{cls:'ico-sm'})} Back</button>`})}
     <div class="cards">
       <div class="crd"><div class="crd-l">Posture Score</div><div class="crd-v" style="color:${score>=80?'var(--grn)':score>=60?'var(--ylw)':'var(--red)'}">${score}</div></div>
       <div class="crd"><div class="crd-l">Grade</div><div class="crd-v" style="color:${score>=80?'var(--grn)':score>=60?'var(--ylw)':'var(--red)'}">${grade}</div></div>
@@ -4744,9 +4747,9 @@ function renderVerified(){
       <h3 class="h-display" style="font-size:22px;color:var(--t0)">Tool-Verified Exploits</h3>
       <span class="bx bx-g" style="font-size:11px">${findings.length} confirmed</span>
       <span style="flex:1"></span>
-      <a class="btn btn-p" style="padding:6px 12px;font-size:12px;display:inline-flex;align-items:center;gap:6px" href="/api/scans/${window._sid}/report?format=html" target="_blank" rel="noopener" title="CVSS 3.1 + OWASP WSTG/ASVS + framework-mapping report — open and Print → Save as PDF">${ico('file-text',{cls:'ico-sm'})} Evidence report</a>
-      <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${window._sid}/report?format=md" target="_blank" rel="noopener">Markdown</a>
-      <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${window._sid}/report?format=sarif" target="_blank" rel="noopener" title="SARIF 2.1.0 — import into CI / GitHub code scanning">SARIF</a>
+      <a class="btn btn-p" style="padding:6px 12px;font-size:12px;display:inline-flex;align-items:center;gap:6px" href="/api/scans/${encodeURIComponent(window._sid)}/report?format=html" target="_blank" rel="noopener" title="CVSS 3.1 + OWASP WSTG/ASVS + framework-mapping report — open and Print → Save as PDF">${ico('file-text',{cls:'ico-sm'})} Evidence report</a>
+      <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${encodeURIComponent(window._sid)}/report?format=md" target="_blank" rel="noopener">Markdown</a>
+      <a class="btn btn-g" style="padding:6px 12px;font-size:12px" href="/api/scans/${encodeURIComponent(window._sid)}/report?format=sarif" target="_blank" rel="noopener" title="SARIF 2.1.0 — import into CI / GitHub code scanning">SARIF</a>
     </div>
     <p style="color:var(--t2);margin-bottom:18px;line-height:1.6;max-width:760px">Findings here were exercised through the scope-locked tool broker and supported by a benign proof marker (arithmetic eval, planted canary, or cross-identity read). Inferred or unverified observations are kept separate${classes.length?` — across ${classes.length} vuln class${classes.length>1?'es':''}: ${classes.map(H).join(', ')}.`:'.'}</p>
 
@@ -5673,7 +5676,7 @@ async function asRenderChat(){
   const pane=$('as-pane');if(!pane)return;
   const msgs=(convo?.messages||[]).map(m=>m.role==='user'
     ?`<div style="align-self:flex-end;max-width:85%;background:var(--s2);border:1px solid var(--brd2);border-radius:12px;padding:10px 14px;white-space:pre-wrap">${H(m.content)}</div>`
-    :`<div class="as-md" style="max-width:100%;background:var(--s1);border:1px solid var(--brd);border-radius:12px;padding:10px 16px;${m.refusal?'border-color:rgba(255,90,90,.4)':''}">${m.html||H(m.content)}${m.truncated?'<p style="color:var(--t3);font-size:12px">Answer cut off at the length limit.</p>':''}</div>`).join('');
+    :`<div class="as-md" style="max-width:100%;background:var(--s1);border:1px solid var(--brd);border-radius:12px;padding:10px 16px;${m.refusal?'border-color:rgba(255,90,90,.4)':''}">${m.html?safeHtml(m.html):H(m.content)}${m.truncated?'<p style="color:var(--t3);font-size:12px">Answer cut off at the length limit.</p>':''}</div>`).join('');
   pane.innerHTML=`<div style="display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:16px;align-items:start" class="as-grid">
     <aside class="sec-card" style="margin:0;padding:12px"><button class="btn btn-p" style="width:100%;margin-bottom:10px" onclick="AS_CONV=null;pgAssistant('chat')">+ New conversation</button>
       ${list.conversations.length?list.conversations.map(c=>`<button class="btn" style="display:block;width:100%;text-align:left;margin:0 0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${c.id===AS_CONV?'border-color:rgba(212,247,69,.5)':''}" onclick="AS_CONV='${c.id}';pgAssistant('chat')" title="${HA(c.title)}">${H(c.title)}</button>`).join(''):'<p style="font-size:12px;color:var(--t3);margin:0">No conversations yet.</p>'}</aside>
@@ -5708,7 +5711,7 @@ async function asRenderResearch(view){
   const pane=$('as-pane');if(!pane)return;
   const badge=r=>r.status==='completed'?'<span class="sev sev-info">Ready</span>':r.status==='running'?'<span class="sev sev-medium">Writing…</span>':`<span class="sev sev-high" title="${HA(r.error||'')}">Failed</span>`;
   let detail='';
-  if(view){try{const r=(await api(`/assistant/research/${encodeURIComponent(view)}`)).report;detail=r.html?`<section class="sec-card as-md" style="margin-top:16px"><div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:6px"><button class="btn" onclick="asShare('research','${r.id}')">Share</button></div>${r.html}</section>`:''}catch{}}
+  if(view){try{const r=(await api(`/assistant/research/${encodeURIComponent(view)}`)).report;detail=r.html?`<section class="sec-card as-md" style="margin-top:16px"><div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:6px"><button class="btn" onclick="asShare('research','${r.id}')">Share</button></div>${safeHtml(r.html)}</section>`:''}catch{}}
   pane.innerHTML=`<section class="sec-card" style="margin:0 0 16px"><div class="sec-card-head"><h2>New assessment report</h2><small>uses 1 agent run · domains you have verified only</small></div>
       <form onsubmit="event.preventDefault();asStartResearch()" style="display:flex;gap:8px;flex-wrap:wrap"><input id="as-domain" placeholder="example.com" style="flex:1;min-width:200px;padding:10px 12px;background:var(--bg);border:1px solid var(--brd2);border-radius:10px;color:var(--t0);font:inherit"><button class="btn btn-p" type="submit">Write report</button></form>
       <p style="font-size:12px;color:var(--t3);margin:10px 0 0">The assistant reads this domain's findings and scan reports and writes an executive summary, confirmed findings, a remediation plan and the gaps still to test. It only uses evidence Securovix collected.</p></section>
@@ -6016,8 +6019,8 @@ async function guardIncidentView(id){
     <p style="margin:0 0 10px"><a href="#guard" style="color:var(--acc2)">← All incidents</a></p>
     ${pageHead({eyebrow:'Guard incident',title:H(i.title),sub:`<span style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${sevBadge(i.severity)} ${guardChip(i.status)} <small style="color:var(--t3)">first seen ${asWhen(i.firstSeenAt)} · detected ${asWhen(i.detectedAt)}${i.timeToDetectMs!=null?' ('+guardDur(i.timeToDetectMs)+' later)':''}${i.containedAt?' · contained '+guardDur(i.timeToContainMs)+' after detection':''}${i.reopened?' · reopened '+i.reopened+'×':''}</small></span>`})}
     <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>What happened</h2><small><button class="btn" onclick="guardExplain('${i.id}')">${i.aiSummaryHtml?'Ask the AI analyst again':'Explain with the AI analyst'}</button></small></div>
-      <div class="md" style="font-size:13.5px;line-height:1.6">${i.summaryHtml}</div>
-      <div id="g-ai">${i.aiSummaryHtml?`<div style="border-top:1px solid var(--brd);margin-top:12px;padding-top:12px"><div class="section-eyebrow">AI analyst</div><div class="md" style="font-size:13.5px;line-height:1.6">${i.aiSummaryHtml}</div></div>`:''}</div></section>
+      <div class="md" style="font-size:13.5px;line-height:1.6">${safeHtml(i.summaryHtml||'')}</div>
+      <div id="g-ai">${i.aiSummaryHtml?`<div style="border-top:1px solid var(--brd);margin-top:12px;padding-top:12px"><div class="section-eyebrow">AI analyst</div><div class="md" style="font-size:13.5px;line-height:1.6">${safeHtml(i.aiSummaryHtml)}</div></div>`:''}</div></section>
     <section class="sec-card" style="margin-bottom:18px"><div class="sec-card-head"><h2>Respond</h2><small>${canAct?'one click each':i.status==='closed'?'closed':'read only for your role'}</small></div>
       ${(i.actions||[]).length?i.actions.map(actBtn).join(''):'<p style="color:var(--t3);font-size:13px;margin:0">No automatic response applies; follow the steps above.</p>'}
       ${canAct?`<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="guardClose('${i.id}')">Close incident</button></div>`:''}</section>
@@ -6139,7 +6142,7 @@ async function billOrder(itemId,method){
 function billShowInstructions(ins,orderId){
   const lines=[`<p>Amount: <b>${billMoney(ins.amount,ins.currency)}</b> · Reference: <code>${H(ins.reference)}</code></p>`];
   if(ins.wallets)lines.push(ins.wallets.map(w=>`<p><b>${H(w.asset)}</b><br><code style="word-break:break-all">${H(w.address)}</code></p>`).join(''));
-  if(ins.imageUrl)lines.push(`<p><img src="${encodeURI(ins.imageUrl)}" alt="Payment QR code" style="max-width:220px;border-radius:10px;background:#fff;padding:8px"></p>`);
+  if(ins.imageUrl&&/^(https:\/\/|data:image\/)/.test(String(ins.imageUrl)))lines.push(`<p><img src="${H(ins.imageUrl)}" alt="Payment QR code" style="max-width:220px;border-radius:10px;background:#fff;padding:8px"></p>`);
   if(ins.details)lines.push(`<p style="white-space:pre-wrap">${H(ins.details)}</p>`);
   if(ins.note)lines.push(`<p style="color:var(--t2)">${H(ins.note)}</p>`);
   showNotice('How to pay',lines.join(''),{actions:`<button class="btn btn-g" onclick="document.getElementById('sx-notice').remove();billEvidence('${orderId}')">I have paid</button>`});
@@ -6377,7 +6380,7 @@ function csRenderProjectMode(pane){
 }
 
 async function csIngestZip(file){
-  csProjStatus(`Reading ${file.name} (${(file.size/1024/1024).toFixed(1)}MB)…`);
+  csProjStatus(`Reading ${H(file.name)} (${(file.size/1024/1024).toFixed(1)}MB)…`);
   try{
     const zip=await JSZip.loadAsync(file);
     const entries=[];
@@ -7096,9 +7099,23 @@ function mountApp(){
   API_AUTH_SHOWN=false; // a fresh session may expire again later; re-arm the global 401 handler
   // Inject the user pill into the sidebar (above logo's bottom border)
   injectUserPill();
-  load().then(()=>{const r=parseHash();go(r.p,r.d)});
+  load().then(()=>{const r=parseHash();go(r.p,r.d)}).then(acceptPendingInvite);
 }
 
+// An invitation link opened by someone who already has an account: it is accepted for the account
+// they are signed in to, and never signs anyone in by itself.
+async function acceptPendingInvite(){
+  const token=new URLSearchParams(location.search).get('invite');if(!token)return;
+  history.replaceState({},'',location.pathname+location.hash);
+  try{
+    const r=await fetch('/api/auth/invitations/accept',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token})});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok){showNotice('Invitation accepted',`You are now a member of <b>${H(d.organization?.name||'the organization')}</b>. Use the organization switcher to open it.`);load()}
+    else showNotice('Invitation not accepted',H(d.signInRequired?'This invitation was sent to a different email address. Sign in with that address and open the link again.':(d.error||'This invitation is invalid or expired.')));
+  }catch{}
+}
+
+function userPicture(){const p=String(CURRENT_USER?.picture||'');return /^https:\/\/[^\s"'()\\<>]+$/.test(p)?p:''}
 function injectUserPill(){
   const old=document.getElementById('user-pill');if(old)old.remove();
   if(!CURRENT_USER)return;
@@ -7110,7 +7127,7 @@ function injectUserPill(){
   // Styles for the user block (.up-*) live in redesign.css.
   pill.innerHTML=`
     <div class="up-row">
-      <div class="up-av"${CURRENT_USER.picture?` style="background-image:url(${H(CURRENT_USER.picture)})"`:''}>${CURRENT_USER.picture?'':H(initial)}</div>
+      <div class="up-av"${userPicture()?` style="background-image:url('${H(userPicture())}')"`:''}>${userPicture()?'':H(initial)}</div>
       <div class="up-who">
         <div class="up-name">${H(CURRENT_USER.name||CURRENT_USER.email.split('@')[0])}</div>
         <div class="up-mail">${H(CURRENT_USER.email)}</div>
@@ -7290,8 +7307,10 @@ function renderAuthScreen(){
   const params=new URLSearchParams(location.search);
   if(params.get('verify'))authVerify(params.get('verify'));
   else if(params.get('reset'))authTokenForm('reset',params.get('reset'));
-  else if(params.get('invite'))authTokenForm('invite',params.get('invite'));
+  else if(params.get('invite')&&!INVITE_SIGN_IN)authTokenForm('invite',params.get('invite'));
+  else if(params.get('invite')){const err=document.getElementById('auth-err');err.style.color='var(--t1)';err.textContent='This email address already has an account. Sign in and the invitation will be accepted.'}
 }
+let INVITE_SIGN_IN=false;
 
 let AUTH_MODE='signin';
 function authSwitch(mode){
@@ -7351,11 +7370,14 @@ async function authForgot(){
   err.style.color='var(--grn)';err.textContent=d.message||'Check your email.';
 }
 
+let AUTH_CHALLENGE='';
 function authMfaPrompt(challenge){
-  const pane=document.getElementById('auth-pane');pane.innerHTML=`<h2 class="auth-h">Two-factor authentication</h2><p class="auth-sub">Enter your authenticator code or a recovery code.</p><input class="auth-input" id="auth-mfa-code" autocomplete="one-time-code" placeholder="123456"><button class="auth-btn auth-btn-p" onclick="authMfaFinish('${H(challenge)}')">Verify →</button><div class="auth-err" id="auth-err"></div>`;
+  AUTH_CHALLENGE=String(challenge||'');
+  const pane=document.getElementById('auth-pane');pane.innerHTML=`<h2 class="auth-h">Two-factor authentication</h2><p class="auth-sub">Enter your authenticator code or a recovery code.</p><input class="auth-input" id="auth-mfa-code" autocomplete="one-time-code" placeholder="123456"><button class="auth-btn auth-btn-p" onclick="authMfaFinish()">Verify →</button><div class="auth-err" id="auth-err"></div>`;
   document.getElementById('auth-mfa-code').focus();
 }
-async function authMfaFinish(challenge){
+async function authMfaFinish(){
+  const challenge=AUTH_CHALLENGE;
   const code=document.getElementById('auth-mfa-code').value.trim(),err=document.getElementById('auth-err');
   const r=await fetch('/api/auth/mfa/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({challenge,code})});const d=await r.json();
   if(!r.ok){err.textContent=d.error||'Invalid code.';return}CURRENT_USER=d.user;document.getElementById('auth-root')?.remove();document.querySelector('.app').style.display='';mountApp();
@@ -7364,18 +7386,27 @@ async function authMfaFinish(challenge){
 async function authVerify(token){
   const err=document.getElementById('auth-err');err.textContent='Verifying email…';
   const r=await fetch('/api/auth/email/verify',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token})});const d=await r.json();
-  if(!r.ok){err.textContent=d.error||'Verification failed.';return}history.replaceState({},'',location.pathname);CURRENT_USER=d.user;document.getElementById('auth-root')?.remove();document.querySelector('.app').style.display='';mountApp();
+  if(!r.ok){err.textContent=d.error||'Verification failed.';return}history.replaceState({},'',location.pathname);
+  if(d.mfaRequired){return authMfaPrompt(d.challenge)}
+  CURRENT_USER=d.user;document.getElementById('auth-root')?.remove();document.querySelector('.app').style.display='';mountApp();
 }
 
+let AUTH_LINK={kind:'',token:''};
+function authInviteSignIn(){INVITE_SIGN_IN=true;renderAuthScreen()}
 function authTokenForm(kind,token){
+  AUTH_LINK={kind:kind==='invite'?'invite':'reset',token:String(token||'')};
   const pane=document.getElementById('auth-pane'),invite=kind==='invite';
-  pane.innerHTML=`<h2 class="auth-h">${invite?'Accept invitation':'Reset password'}</h2><p class="auth-sub">${invite?'Join your security team workspace. Existing users can leave the password blank.':'Choose a new password with at least 12 characters.'}</p>${invite?'<input class="auth-input" id="auth-token-name" placeholder="Your name">':''}<input class="auth-input" id="auth-token-password" type="password" placeholder="New password (12+ characters)">${invite?'<label class="auth-consent"><input type="checkbox" id="auth-token-consent"><span>I agree to the Terms and Privacy Policy.</span></label>':''}<button class="auth-btn auth-btn-p" onclick="authTokenSubmit('${kind}','${H(token)}')">Continue →</button><div class="auth-err" id="auth-err"></div>`;
+  pane.innerHTML=`<h2 class="auth-h">${invite?'Accept invitation':'Reset password'}</h2><p class="auth-sub">${invite?'Join your security team workspace. Choose a password to create your account.':'Choose a new password with at least 12 characters.'}</p>${invite?'<input class="auth-input" id="auth-token-name" placeholder="Your name">':''}<input class="auth-input" id="auth-token-password" type="password" placeholder="New password (12+ characters)">${invite?'<label class="auth-consent"><input type="checkbox" id="auth-token-consent"><span>I agree to the Terms and Privacy Policy.</span></label>':''}<button class="auth-btn auth-btn-p" onclick="authTokenSubmit()">Continue →</button>${invite?'<button class="auth-btn" style="background:transparent;color:var(--t2);font-weight:500;font-size:13px" onclick="authInviteSignIn()">I already have an account</button>':''}<div class="auth-err" id="auth-err"></div>`;
 }
-async function authTokenSubmit(kind,token){
+async function authTokenSubmit(){
+  const {kind,token}=AUTH_LINK;
   const body={token,password:document.getElementById('auth-token-password').value};
   if(kind==='invite'){body.name=document.getElementById('auth-token-name').value.trim();body.acceptedTerms=document.getElementById('auth-token-consent').checked}
   const r=await fetch(kind==='invite'?'/api/auth/invitations/accept':'/api/auth/password/reset',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const d=await r.json();
-  if(!r.ok){document.getElementById('auth-err').textContent=d.error||'Unable to continue.';return}history.replaceState({},'',location.pathname);CURRENT_USER=d.user;document.getElementById('auth-root')?.remove();document.querySelector('.app').style.display='';mountApp();
+  if(kind==='invite'&&d.signInRequired){INVITE_SIGN_IN=true;return renderAuthScreen()}
+  if(!r.ok){document.getElementById('auth-err').textContent=d.error||'Unable to continue.';return}history.replaceState({},'',location.pathname);
+  if(d.mfaRequired){return authMfaPrompt(d.challenge)}
+  CURRENT_USER=d.user;document.getElementById('auth-root')?.remove();document.querySelector('.app').style.display='';mountApp();
 }
 
 authBoot();

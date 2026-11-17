@@ -16,7 +16,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { lookup as dnsLookup } from 'node:dns';
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspect } from '../defender-sdk/signatures.mjs';
@@ -53,15 +53,20 @@ export const routes = new Map();
 const stats = { requests: 0, detections: 0, blocked: 0, unknownHost: 0 };
 const pending = [];
 
+// Addresses that are not on the public internet. A block list (not string prefixes) so that every
+// way of writing an address is covered, including an IPv4 address wrapped in IPv6
+// (::ffff:169.254.169.254) and the NAT64 range, which reach the same private hosts.
+const PRIVATE_ADDRESSES = new BlockList();
+for (const [network, prefix] of [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
+  ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3],
+]) PRIVATE_ADDRESSES.addSubnet(network, prefix, 'ipv4');
+for (const [network, prefix] of [['::', 128], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]])
+  PRIVATE_ADDRESSES.addSubnet(network, prefix, 'ipv6');
 export function isPrivateAddress(address) {
-  const value = String(address || '').toLowerCase();
-  if (isIP(value) === 4) {
-    const [a, b] = value.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
-  }
-  if (isIP(value) === 6)
-    return value === '::' || value === '::1' || /^(fc|fd|fe8|fe9|fea|feb)/.test(value);
-  return false;
+  const value = String(address || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const family = isIP(value);
+  return family ? PRIVATE_ADDRESSES.check(value, family === 6 ? 'ipv6' : 'ipv4') : false;
 }
 
 function publicLookup(hostname, options, callback) {
@@ -200,7 +205,10 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
         (up) => {
           up.on('error', () => res.destroy());
           try {
-            res.writeHead(up.statusCode || 502, up.headers);
+            // The origin's per-connection headers describe its connection to us, not ours to the visitor.
+            const named = String(up.headers.connection || '').toLowerCase().split(',').map((x) => x.trim()).filter(Boolean);
+            const headers = Object.fromEntries(Object.entries(up.headers).filter(([k]) => !HOP_BY_HOP.has(k.toLowerCase()) && !named.includes(k.toLowerCase())));
+            res.writeHead(up.statusCode || 502, headers);
             up.pipe(res);
           } catch {
             up.destroy();

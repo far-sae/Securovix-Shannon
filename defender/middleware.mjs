@@ -33,7 +33,7 @@ import { makeRateLimiter } from './respond.mjs';
 // these would flag the dashboard's own features and, in enforce mode, break them outright.
 export const SELF_SKIP = [
   /^\/api\/agent\//,
-  /^\/api\/scans/,
+  /^\/api\/scans(?:\/|$)/,
   /^\/api\/defender\//,
   // The edge proxy reports the attacks it saw, with their URLs, to this path.
   /^\/api\/platform\/defender\//,
@@ -43,11 +43,22 @@ export const SELF_SKIP = [
   // to ask how to fix them, and scan evidence quotes the payload that proved a finding.
   /^\/api\/assistant\//,
   /^\/api\/team\/[^/]+\/findings/,
-  /^\/api\/v1\/scans/,
+  /^\/api\/v1\/scans(?:\/|$)/,
   // The Guard endpoint agent uploads the command lines it saw on a machine (vssadmin delete
   // shadows, mimikatz, encoded PowerShell): evidence, not an attack on the dashboard.
   /^\/api\/endpoint-agent\//,
 ];
+
+// Signed machine traffic: a customer's web server reporting attacks, a protected machine checking
+// in. A ban on an address never cuts these off (an office and its attacker can share one address),
+// and each carries its own key.
+export const BAN_EXEMPT = [
+  /^\/api\/defender\/(?:report|sdk\/policy|sensors\/)/,
+  /^\/api\/platform\/defender\//,
+  /^\/api\/endpoint-agent\//,
+];
+// How many addresses are remembered at once. Past it the oldest entries go first.
+const MAX_ADDRESSES = 20_000;
 
 const MAX_RECENT = 50;
 
@@ -128,6 +139,14 @@ export function createSelfDefense({
     const t = nowMs();
     const list = (offences.get(ip) || []).filter((x) => t - x <= policy.windowMs);
     for (let i = 0; i < weight; i++) list.push(t);
+    // Bounded: many distinct addresses cannot grow these tables without limit.
+    if (!offences.has(ip) && offences.size >= MAX_ADDRESSES) {
+      for (const [key, times] of offences) if (!times.some((x) => t - x <= policy.windowMs)) offences.delete(key);
+      while (offences.size >= MAX_ADDRESSES) offences.delete(offences.keys().next().value);
+    }
+    if (banned.size >= MAX_ADDRESSES) {
+      for (const [key, until] of banned) if (until <= t) banned.delete(key);
+    }
     offences.set(ip, list);
     if (list.length >= policy.threshold && !isBanned(ip)) {
       const until = t + policy.ttlMs;
@@ -181,14 +200,15 @@ export function createSelfDefense({
   function middleware(req, res, next) {
     try {
       const path = req.path || (req.url || '').split('?')[0];
-      if (skip.some((r) => r.test(path))) return next();
-
+      // A banned address is refused before anything else, including the paths that are never
+      // inspected: being banned is about who is asking, not about what this one request contains.
       const ip = req.ip || req.socket?.remoteAddress || null;
-      if (policy.enabled && policy.enforce && ip && isBanned(ip)) {
+      if (policy.enabled && policy.enforce && ip && isBanned(ip) && !BAN_EXEMPT.some((r) => r.test(path))) {
         counters.banned++;
         res.status(403).json({ error: 'Blocked by Securovix Defender (repeat offender)' });
         return;
       }
+      if (skip.some((r) => r.test(path))) return next();
 
       // Two signals that need no payload inspection and are never ordinary traffic. Each counts as a
       // full ban threshold at once.
@@ -277,7 +297,11 @@ export function createSelfDefense({
   return {
     middleware,
     blackboard: bb,
-    stats: () => ({ ...counters, activeBans: [...banned.keys()].filter(isBanned).length }),
+    stats: () => ({
+      ...counters,
+      activeBans: [...banned.keys()].filter(isBanned).length,
+      trackedAddresses: offences.size,
+    }),
     recent: () => recent.slice(),
     getMode: () => current,
     setMode: (m) => {
