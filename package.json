@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",
-    "undici": "^8.10.2",
+    "undici": "^8.12.2",
     "yaml": "^2.4.0"
   },
   "optionalDependencies": {
@@ -36,14 +36,15 @@
   },
   "pnpm": {
     "overrides": {
-      "@grpc/grpc-js": "^1.14.4",
+      "@grpc/grpc-js": "^1.14.5",
       "baseline-browser-mapping": "^2.11.0",
       "browserslist": "^4.29.0",
-      "fast-uri": "^3.1.6",
+      "fast-uri": "^3.1.9",
       "nanoid": "^3.3.18",
       "postcss": "^8.5.18",
       "protobufjs": "^7.6.5",
-      "vite": "^6.4.3"
+      "vite": "^6.4.3",
+      "source-map-js": "^1.2.2"
     }
   }
 }
