@@ -53,6 +53,21 @@ let SCAN_ORIGIN = null;
 export function setSessionHeaders(h) {
   SESSION_HEADERS = h || {};
 }
+// The signed "this is the owner's own test" mark: one header, sent only to the site under test
+// (mark.applies(url) decides), so Defender on that site can file the request as a test instead of an
+// attack. Unlike the session it is not a credential: the site inspects and blocks a marked request
+// like any other. Set by the dashboard for the length of one run; null means no mark.
+let TEST_MARK = null;
+export function setTestMark(mark) {
+  TEST_MARK = mark && mark.header && mark.value && typeof mark.applies === 'function' ? mark : null;
+}
+function markHeaders(url) {
+  try {
+    return TEST_MARK?.applies(url) ? { [TEST_MARK.header]: TEST_MARK.value } : {};
+  } catch {
+    return {};
+  }
+}
 export function setScanOrigin(o) {
   try {
     SCAN_ORIGIN = o ? new URL(o).origin : null;
@@ -296,7 +311,7 @@ async function fetchT(url, opts = {}, timeoutMs = 8000, hop = 0) {
   try {
     sameOrigin = !!SCAN_ORIGIN && new URL(url).origin === SCAN_ORIGIN;
   } catch {}
-  const sendHeaders = sameOrigin ? { ...SESSION_HEADERS, ...headers } : { ...headers };
+  const sendHeaders = { ...markHeaders(url), ...(sameOrigin ? { ...SESSION_HEADERS, ...headers } : { ...headers }) };
   const c = new AbortController();
   const t = setTimeout(() => c.abort(), timeoutMs);
   try {
@@ -334,7 +349,7 @@ function rawGetWithHost(url, hostHeader, timeoutMs = 8000) {
     try {
       sameOrigin = !!SCAN_ORIGIN && u.origin === SCAN_ORIGIN;
     } catch {}
-    const headers = { ...(sameOrigin ? SESSION_HEADERS : {}) };
+    const headers = { ...markHeaders(url), ...(sameOrigin ? SESSION_HEADERS : {}) };
     if (hostHeader) headers.Host = hostHeader;
     const agent = u.protocol === 'https:' ? https : http;
     const req = agent.request(

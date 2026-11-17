@@ -180,3 +180,15 @@ settings it received; if it never reached it, the options given in code apply. P
 The settings belong to the organization: every site that carries that organization's key shares
 them. The same page offers the adapter as one file to download, for projects that do not install
 the package.
+
+## Your own tests
+
+When the Securovix AI Agent (or its scheduled monitor) tests a site that carries this adapter, its
+attack-shaped requests are detected like anyone else's. So they are not filed as attacks, each of
+those requests carries a signed, short-lived mark in the `x-securovix-test` header, and the adapter
+passes the mark on with its report. The dashboard checks the signature and files a run that carries
+a valid mark as one "own test" entry, apart from the incidents.
+
+The mark is not a pass. The adapter never reads it: a marked request is inspected, banned and
+blocked exactly like an unmarked one. A mark that is made up, out of date, or signed for another
+organization or another site is ignored, and the report is an attack.

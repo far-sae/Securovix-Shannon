@@ -249,6 +249,8 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
               cls: verdict.cls,
               enforced: blocked,
               srcIp: req.socket?.remoteAddress || null,
+              // The owner's own test carries a signed mark; the dashboard checks it. It changes nothing here.
+              test: typeof req.headers['x-securovix-test'] === 'string' ? req.headers['x-securovix-test'].slice(0, 200) : undefined,
             });
           }
         }
