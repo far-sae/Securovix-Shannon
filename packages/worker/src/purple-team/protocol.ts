@@ -1,15 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  PurpleAgentRole,
-  PurpleChannel,
-  PurpleMessage,
-  PurpleMessageType,
-  Team,
-} from './types.js';
+import type { PurpleAgentRole, PurpleChannel, PurpleMessage, PurpleMessageType, Team } from './types.js';
 
 export class PurpleProtocol {
   private messages: PurpleMessage[] = [];
-  private round: number = 1;
+  private round = 1;
 
   send(args: {
     channel: PurpleChannel;
@@ -55,10 +49,7 @@ export class PurpleProtocol {
     const visible = this.visibleTo(role, findingRef);
     if (visible.length === 0) return '';
     return visible
-      .map(
-        (m) =>
-          `[Round ${m.round} | ${m.channel} | ${m.from} -> ${m.to} | ${m.type}]\n${m.content}`,
-      )
+      .map((m) => `[Round ${m.round} | ${m.channel} | ${m.from} -> ${m.to} | ${m.type}]\n${m.content}`)
       .join('\n\n---\n\n');
   }
 

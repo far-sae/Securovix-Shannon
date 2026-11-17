@@ -9,40 +9,12 @@ const DETECTION_PATTERNS: Record<DetectionType, RegExp[]> = {
     /request blocked/i,
     /security policy/i,
   ],
-  'rate-limit': [
-    /rate limit/i,
-    /too many requests/i,
-    /throttl/i,
-    /retry.after/i,
-    /slow down/i,
-  ],
-  'captcha': [
-    /captcha/i,
-    /recaptcha/i,
-    /hcaptcha/i,
-    /challenge/i,
-    /verify.*human/i,
-    /turnstile/i,
-  ],
-  'ip-block': [
-    /ip.*blocked/i,
-    /banned/i,
-    /blacklist/i,
-    /your ip/i,
-  ],
-  'session-invalidation': [
-    /session.*expired/i,
-    /session.*invalid/i,
-    /logged out/i,
-    /re.?authenticate/i,
-  ],
-  'tarpit': [],
-  'fingerprint-challenge': [
-    /browser.*check/i,
-    /checking your browser/i,
-    /just a moment/i,
-    /enable javascript/i,
-  ],
+  'rate-limit': [/rate limit/i, /too many requests/i, /throttl/i, /retry.after/i, /slow down/i],
+  captcha: [/captcha/i, /recaptcha/i, /hcaptcha/i, /challenge/i, /verify.*human/i, /turnstile/i],
+  'ip-block': [/ip.*blocked/i, /banned/i, /blacklist/i, /your ip/i],
+  'session-invalidation': [/session.*expired/i, /session.*invalid/i, /logged out/i, /re.?authenticate/i],
+  tarpit: [],
+  'fingerprint-challenge': [/browser.*check/i, /checking your browser/i, /just a moment/i, /enable javascript/i],
 };
 
 const WAF_SIGNATURES: Record<string, RegExp[]> = {
@@ -57,11 +29,7 @@ const WAF_SIGNATURES: Record<string, RegExp[]> = {
 };
 
 export class DetectionDetector {
-  analyzeResponse(
-    status: number,
-    headers: Record<string, string>,
-    body: string,
-  ): DetectionSignal | null {
+  analyzeResponse(status: number, headers: Record<string, string>, body: string): DetectionSignal | null {
     // Status-based detection
     if (status === 403 || status === 429 || status === 503) {
       const detectionType = this.classifyByStatus(status, body);
@@ -108,7 +76,7 @@ export class DetectionDetector {
     }
 
     // Check server header
-    const server = headers['server'] ?? '';
+    const server = headers.server ?? '';
     for (const [waf, patterns] of Object.entries(WAF_SIGNATURES)) {
       for (const pattern of patterns) {
         if (pattern.test(server)) {

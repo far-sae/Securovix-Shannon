@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DetectionSignal, EvasionProfile, EvasionStrategy, EvasionTechnique } from './types.js';
 import { PayloadEncoder } from './payload-encoder.js';
 import { TimingController } from './timing-controller.js';
+import type { DetectionSignal, EvasionProfile, EvasionStrategy, EvasionTechnique } from './types.js';
 
 const DEFAULT_STRATEGIES: EvasionStrategy[] = [
   {
@@ -59,7 +59,7 @@ export class EvasionStrategyEngine {
   private profile: EvasionProfile;
   private encoder: PayloadEncoder;
   private timing: TimingController;
-  private currentStrategyIndex: number = 0;
+  private currentStrategyIndex = 0;
 
   constructor(targetHost: string) {
     this.profile = {
@@ -161,7 +161,7 @@ export class EvasionStrategyEngine {
       if (segments.length > 0) {
         const randomIndex = Math.floor(Math.random() * segments.length);
         segments.splice(randomIndex, 0, '.', '.');
-        urlObj.pathname = '/' + segments.join('/');
+        urlObj.pathname = `/${segments.join('/')}`;
       }
       return urlObj.toString();
     }

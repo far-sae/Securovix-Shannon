@@ -13,8 +13,13 @@ import { buildOracles, candidateParams, detectBoundary, genNonce } from './llm-s
 import { fetchT, setScanOrigin } from './purple-engine.mjs';
 
 const servers = [];
-after(() => servers.forEach((s) => s.close()));
-const send = (res, body, ct = 'text/plain') => (res.writeHead(200, { 'content-type': ct }), res.end(body));
+after(() => {
+  for (const s of servers) s.close();
+});
+const send = (res, body, ct = 'text/plain') => {
+  res.writeHead(200, { 'content-type': ct });
+  res.end(body);
+};
 function mkHttp(handler) {
   const s = http.createServer(handler);
   servers.push(s);

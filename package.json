@@ -19,7 +19,7 @@
     "smoke:production": "node scripts/production-smoke.mjs",
     "test:continuous-defense": "node --test ./continuous-defense.test.mjs",
     "pretest": "npm run test:continuous-defense",
-    "test": "node --test ./engine.test.mjs ./templates.test.mjs ./crawler.test.mjs ./cvss.test.mjs ./cert-report.test.mjs ./advanced.test.mjs ./probers.test.mjs ./flows.test.mjs ./tls.test.mjs ./agent-understand.test.mjs ./agent-loop.test.mjs ./leads.test.mjs ./code-locate.test.mjs ./patch.test.mjs ./github-pr.test.mjs ./templates-files.test.mjs ./agent-report.test.mjs ./agent-history.test.mjs ./monitor-schedule.test.mjs ./custom-check.test.mjs ./sandbox.test.mjs ./personal-shield.test.mjs ./llm.test.mjs ./agent-team.test.mjs ./defender.test.mjs ./team-access.test.mjs ./defender-edge.test.mjs ./dashboard-team.test.mjs ./enterprise-platform.test.mjs ./vulnerability-management.test.mjs ./defender-self.test.mjs ./commerce.test.mjs ./security-pages.test.mjs ./commerce-api.test.mjs ./assistant.test.mjs ./assistant-api.test.mjs ./defender-hardening.test.mjs ./defender-live.test.mjs ./defender-rules.test.mjs ./defender-web.test.mjs ./login-guard.test.mjs ./defender-digest.test.mjs ./guard.test.mjs ./guard-api.test.mjs ./guard-endpoint.test.mjs ./guard-accuracy.test.mjs ./scan-worker.test.mjs ./scan-durable.test.mjs ./code-scan.test.mjs ./code-scan-api.test.mjs ./defender-accuracy.test.mjs ./defender-shapes.test.mjs ./defender-policy.test.mjs ./agent-run.test.mjs defender-own-test.test.mjs auth-hardening.test.mjs defender-intake.test.mjs"
+    "test": "node --test ./engine.test.mjs ./templates.test.mjs ./crawler.test.mjs ./cvss.test.mjs ./cert-report.test.mjs ./advanced.test.mjs ./probers.test.mjs ./flows.test.mjs ./tls.test.mjs ./agent-understand.test.mjs ./agent-loop.test.mjs ./leads.test.mjs ./code-locate.test.mjs ./patch.test.mjs ./github-pr.test.mjs ./templates-files.test.mjs ./agent-report.test.mjs ./agent-history.test.mjs ./monitor-schedule.test.mjs ./custom-check.test.mjs ./sandbox.test.mjs ./personal-shield.test.mjs ./llm.test.mjs ./agent-team.test.mjs ./defender.test.mjs ./team-access.test.mjs ./defender-edge.test.mjs ./dashboard-team.test.mjs ./enterprise-platform.test.mjs ./vulnerability-management.test.mjs ./defender-self.test.mjs ./commerce.test.mjs ./security-pages.test.mjs ./commerce-api.test.mjs ./assistant.test.mjs ./assistant-api.test.mjs ./defender-hardening.test.mjs ./defender-live.test.mjs ./defender-rules.test.mjs ./defender-web.test.mjs ./login-guard.test.mjs ./defender-digest.test.mjs ./guard.test.mjs ./guard-api.test.mjs ./guard-endpoint.test.mjs ./guard-accuracy.test.mjs ./scan-worker.test.mjs ./scan-durable.test.mjs ./code-scan.test.mjs ./code-scan-api.test.mjs ./defender-accuracy.test.mjs ./defender-shapes.test.mjs ./defender-policy.test.mjs ./agent-run.test.mjs defender-own-test.test.mjs auth-hardening.test.mjs defender-intake.test.mjs email-verification.test.mjs guard-enrol.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
@@ -39,11 +39,11 @@
       "@grpc/grpc-js": "^1.14.4",
       "baseline-browser-mapping": "^2.11.0",
       "browserslist": "^4.29.0",
-    "fast-uri": "^3.1.6",
-    "nanoid": "^3.3.18",
-    "postcss": "^8.5.18",
-    "protobufjs": "^7.6.5",
-    "vite": "^6.4.3"
+      "fast-uri": "^3.1.6",
+      "nanoid": "^3.3.18",
+      "postcss": "^8.5.18",
+      "protobufjs": "^7.6.5",
+      "vite": "^6.4.3"
     }
   }
 }

@@ -15,14 +15,15 @@ export function resolveModel(tier: ModelTier, overrides?: Partial<Record<ModelTi
   if (envOverride) return envOverride;
 
   // Config overrides
-  if (overrides?.[tier]) return overrides[tier]!;
+  const override = overrides?.[tier];
+  if (override) return override;
 
   return DEFAULT_MODELS[tier];
 }
 
 export const AGENT_TIERS: Record<string, ModelTier> = {
   'pre-recon': 'medium',
-  'recon': 'large',
+  recon: 'large',
   'vuln-sqli': 'large',
   'vuln-xss': 'large',
   'vuln-auth-bypass': 'large',
@@ -33,7 +34,7 @@ export const AGENT_TIERS: Record<string, ModelTier> = {
   'exploit-auth-bypass': 'large',
   'exploit-authz-bypass': 'large',
   'exploit-ssrf': 'large',
-  'report': 'medium',
+  report: 'medium',
 
   // Module 1: Attack Chain Graph
   'chain-analysis': 'large',

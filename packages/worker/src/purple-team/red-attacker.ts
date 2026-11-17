@@ -7,11 +7,7 @@ export class RedAttacker {
     private model: string,
   ) {}
 
-  async execute(
-    finding: PurpleFinding,
-    history: string,
-    strategistPlan: string,
-  ): Promise<string> {
+  async execute(finding: PurpleFinding, history: string, strategistPlan: string): Promise<string> {
     const prompt = [
       'You are the RED TEAM ATTACKER (operator). You take the strategist plan and translate it into concrete exploit steps.',
       '',
@@ -41,11 +37,7 @@ export class RedAttacker {
     return runText(this.client, this.model, prompt);
   }
 
-  async crossTeamReply(
-    finding: PurpleFinding,
-    history: string,
-    blueDetection: string,
-  ): Promise<string> {
+  async crossTeamReply(finding: PurpleFinding, history: string, blueDetection: string): Promise<string> {
     const prompt = [
       'You are the RED TEAM ATTACKER speaking directly to the Blue IR analyst.',
       'They have proposed detections. Tell them honestly which would have caught your steps and which would not.',

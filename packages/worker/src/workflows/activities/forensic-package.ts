@@ -1,15 +1,15 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { heartbeat } from '@temporalio/activity';
-import { hostname } from 'node:os';
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import type { Container } from '../../di/container.js';
-import type { ForensicPackageInput } from './index.js';
-import { unwrap } from '../../result.js';
 import { ForensicPackageBuilder } from '../../forensic/package-builder.js';
 import type { CustodyMetadata } from '../../forensic/types.js';
+import { unwrap } from '../../result.js';
 import { toTemporalError } from '../../temporal/error-classification.js';
+import type { ForensicPackageInput } from './index.js';
 
 export async function forensicPackageActivity(container: Container, input: ForensicPackageInput): Promise<void> {
   const config = unwrap(container.configLoader.load(input.configPath));

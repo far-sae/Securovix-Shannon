@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-import { brokerCapableCategories } from '../scan/broker-scope.js';
 import { type Result, err, ok } from '../result.js';
+import { brokerCapableCategories } from '../scan/broker-scope.js';
 import type { ShannonConfig } from './schema.js';
 import { isValidCidr } from './scope-rules.js';
 

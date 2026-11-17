@@ -2,17 +2,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { heartbeat } from '@temporalio/activity';
 import type { Container } from '../../di/container.js';
-import type { PurpleTeamInput, PurpleTeamOutput } from './index.js';
 import { PurpleTeamModerator } from '../../purple-team/moderator.js';
 import type { PurpleFinding, PurpleTeamResult } from '../../purple-team/types.js';
 import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
+import type { PurpleTeamInput, PurpleTeamOutput } from './index.js';
 
 const CATEGORIES = ['sqli', 'xss', 'auth-bypass', 'authz-bypass', 'ssrf', 'business-logic'] as const;
 
-export async function purpleTeamActivity(
-  container: Container,
-  input: PurpleTeamInput,
-): Promise<PurpleTeamOutput> {
+export async function purpleTeamActivity(container: Container, input: PurpleTeamInput): Promise<PurpleTeamOutput> {
   const outputDir = join(input.workspaceDir, 'purple-team');
   mkdirSync(outputDir, { recursive: true });
 
@@ -38,10 +35,7 @@ export async function purpleTeamActivity(
     const conclusionsPath = join(outputDir, 'conclusions.json');
     writeFileSync(conclusionsPath, truncateForSerialization(JSON.stringify(result, null, 2)));
 
-    writeFileSync(
-      join(outputDir, 'transcript.md'),
-      truncateForSerialization(renderTranscript(result)),
-    );
+    writeFileSync(join(outputDir, 'transcript.md'), truncateForSerialization(renderTranscript(result)));
 
     const reportPath = join(outputDir, 'purple-report.md');
     writeFileSync(reportPath, truncateForSerialization(renderReport(result, findings)));
@@ -122,9 +116,7 @@ function buildVulnIndex(workspaceDir: string): Map<string, RawFinding & { id: st
     if (!queue.findings) continue;
 
     const exploitPath = join(workspaceDir, 'exploit', category, 'exploit-report.md');
-    const exploitEvidence = existsSync(exploitPath)
-      ? readFileSync(exploitPath, 'utf-8').slice(0, 2000)
-      : undefined;
+    const exploitEvidence = existsSync(exploitPath) ? readFileSync(exploitPath, 'utf-8').slice(0, 2000) : undefined;
 
     for (const f of queue.findings) {
       const id = `finding-${++counter}`;

@@ -1,11 +1,11 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { heartbeat } from '@temporalio/activity';
 import type { Container } from '../../di/container.js';
-import type { ReportInput } from './index.js';
-import { unwrap } from '../../result.js';
 import { loadPrompt } from '../../prompts/loader.js';
+import { unwrap } from '../../result.js';
 import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
+import type { ReportInput } from './index.js';
 
 export async function reportActivity(container: Container, input: ReportInput): Promise<string> {
   const config = unwrap(container.configLoader.load(input.configPath));
@@ -19,11 +19,13 @@ export async function reportActivity(container: Container, input: ReportInput): 
       evidence.purpleTeam = safeRead(input.purpleTeamReportPath);
     }
 
-    const prompt = unwrap(loadPrompt('report', {
-      targetUrl: config.target.url,
-      repoPath: config.target.repoPath,
-      configContext: JSON.stringify(evidence, null, 2),
-    }));
+    const prompt = unwrap(
+      loadPrompt('report', {
+        targetUrl: config.target.url,
+        repoPath: config.target.repoPath,
+        configContext: JSON.stringify(evidence, null, 2),
+      }),
+    );
 
     const model = container.llmClientFactory.resolveModelForAgent('report');
     const client = container.llmClientFactory.createClient();

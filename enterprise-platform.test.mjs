@@ -23,7 +23,9 @@ test('enterprise secrets, signed challenges, TOTP and recovery codes are verifia
   // Change a character in the middle of the ciphertext. (The last character of a base64 group
   // carries spare bits, so changing that one sometimes changes nothing and the test failed at random.)
   const at = encrypted.length - 12;
-  assert.throws(() => security.decryptSecret(`${encrypted.slice(0, at)}${encrypted[at] === 'A' ? 'B' : 'A'}${encrypted.slice(at + 1)}`));
+  assert.throws(() =>
+    security.decryptSecret(`${encrypted.slice(0, at)}${encrypted[at] === 'A' ? 'B' : 'A'}${encrypted.slice(at + 1)}`),
+  );
 
   const challenge = security.signChallenge({ uid: 'user-1' }, 'test', 60_000);
   assert.equal(security.verifyChallenge(challenge, 'test').uid, 'user-1');
@@ -62,8 +64,15 @@ test('one-time auth tokens are consumed once', async () => {
 test('organization secrets stay encrypted and scan-auth grants are single use', async () => {
   const secretEnc = security.encryptSecret({ apiKey: 'customer-ai-key-value' });
   await database.saveOrgSecret({
-    id: 'secret-1', orgId: 'org-1', kind: 'ai-provider', name: 'claude', config: {}, secretEnc,
-    createdBy: 'user-1', createdAt: Date.now(), updatedAt: Date.now(),
+    id: 'secret-1',
+    orgId: 'org-1',
+    kind: 'ai-provider',
+    name: 'claude',
+    config: {},
+    secretEnc,
+    createdBy: 'user-1',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
   });
   const publicRows = await database.listOrgSecrets('org-1', 'ai-provider');
   assert.equal(publicRows[0].configured, true);
@@ -73,8 +82,13 @@ test('organization secrets stay encrypted and scan-auth grants are single use', 
 
   const grantSecret = security.encryptSecret({ cookie: 'session=private' });
   await database.createScanAuthGrant({
-    id: 'grant-1', userId: 'user-1', orgId: 'org-1', targetOrigin: 'https://app.example.test',
-    secretEnc: grantSecret, expiresAt: Date.now() + 60_000, createdAt: Date.now(),
+    id: 'grant-1',
+    userId: 'user-1',
+    orgId: 'org-1',
+    targetOrigin: 'https://app.example.test',
+    secretEnc: grantSecret,
+    expiresAt: Date.now() + 60_000,
+    createdAt: Date.now(),
   });
   assert.equal(await database.consumeScanAuthGrant('grant-1', 'user-1', 'org-1', 'https://wrong.example.test'), null);
   const consumed = await database.consumeScanAuthGrant('grant-1', 'user-1', 'org-1', 'https://app.example.test');
@@ -83,15 +97,37 @@ test('organization secrets stay encrypted and scan-auth grants are single use', 
 });
 
 test('organization usage limits are durable and enforced atomically', async () => {
-  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 2, 3, '2026-09-18'), { allowed: true, used: 2, limit: 3, day: '2026-09-18' });
-  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 1, 3, '2026-09-18'), { allowed: true, used: 3, limit: 3, day: '2026-09-18' });
-  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 1, 3, '2026-09-18'), { allowed: false, used: 3, limit: 3, day: '2026-09-18' });
+  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 2, 3, '2026-09-18'), {
+    allowed: true,
+    used: 2,
+    limit: 3,
+    day: '2026-09-18',
+  });
+  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 1, 3, '2026-09-18'), {
+    allowed: true,
+    used: 3,
+    limit: 3,
+    day: '2026-09-18',
+  });
+  assert.deepEqual(await database.consumeUsage('org-quota', 'scans', 1, 3, '2026-09-18'), {
+    allowed: false,
+    used: 3,
+    limit: 3,
+    day: '2026-09-18',
+  });
   assert.equal((await database.listUsage('org-quota', '2026-09-18'))[0].quantity, 3);
 });
 
 test('continuous defense programs, assets and cycles are tenant scoped and durable', async () => {
   const now = Date.now();
-  const program = await database.saveDefenseProgram({ orgId: 'org-defense', enabled: true, cadenceHours: 24, responseMode: 'bounded-auto', createdBy: 'user-1', nextRunAt: now });
+  const program = await database.saveDefenseProgram({
+    orgId: 'org-defense',
+    enabled: true,
+    cadenceHours: 24,
+    responseMode: 'bounded-auto',
+    createdBy: 'user-1',
+    nextRunAt: now,
+  });
   assert.equal(program.enabled, true);
   assert.equal(program.responseMode, 'bounded-auto');
   const due = await database.claimDueDefensePrograms(5, now);
@@ -99,37 +135,86 @@ test('continuous defense programs, assets and cycles are tenant scoped and durab
   assert.ok(due[0].nextRunAt > now);
   assert.equal((await database.claimDueDefensePrograms(5, now)).length, 0);
 
-  const asset = await database.saveDefenseAsset({ orgId: 'org-defense', type: 'cloud', name: 'Production AWS', locator: 'aws:123456789012', criticality: 'critical', status: 'active', coverage: 'inventory', createdBy: 'user-1' });
+  const asset = await database.saveDefenseAsset({
+    orgId: 'org-defense',
+    type: 'cloud',
+    name: 'Production AWS',
+    locator: 'aws:123456789012',
+    criticality: 'critical',
+    status: 'active',
+    coverage: 'inventory',
+    createdBy: 'user-1',
+  });
   assert.equal((await database.listDefenseAssets('org-defense'))[0].id, asset.id);
   assert.equal((await database.listDefenseAssets('another-org')).length, 0);
 
-  const cycle = await database.saveDefenseCycle({ id: 'cycle-1', orgId: 'org-defense', status: 'completed', snapshot: { postureScore: 42 }, learning: { model: 'bounded-outcome-learning-v1' }, actions: {}, startedAt: now, completedAt: now + 1, createdAt: now });
+  const cycle = await database.saveDefenseCycle({
+    id: 'cycle-1',
+    orgId: 'org-defense',
+    status: 'completed',
+    snapshot: { postureScore: 42 },
+    learning: { model: 'bounded-outcome-learning-v1' },
+    actions: {},
+    startedAt: now,
+    completedAt: now + 1,
+    createdAt: now,
+  });
   assert.equal(cycle.snapshot.postureScore, 42);
   assert.equal((await database.getDefenseProgram('org-defense')).lastCycleId, 'cycle-1');
   assert.equal(await database.deleteDefenseAsset('another-org', asset.id), false);
   assert.equal(await database.deleteDefenseAsset('org-defense', asset.id), true);
-  const executed = await worker.executeDefenseCycle({ id: 'job-defense-cycle', orgId: 'org-defense', userId: 'user-1', payload: { cycleId: 'cycle-2' } });
+  const executed = await worker.executeDefenseCycle({
+    id: 'job-defense-cycle',
+    orgId: 'org-defense',
+    userId: 'user-1',
+    payload: { cycleId: 'cycle-2' },
+  });
   assert.equal(executed.status, 'completed');
   assert.equal(executed.learning.changesEnforcementAutomatically, false);
 });
 
 test('software inventory and vulnerability patch states are tenant scoped', async () => {
-  const components = await database.upsertSoftwareComponents({ orgId: 'org-vuln', components: [{
-    fingerprint: 'fingerprint-1', source: 'sbom', sourceRef: 'app.cdx.json', name: 'lodash', version: '4.17.20',
-    ecosystem: 'npm', purl: 'pkg:npm/lodash@4.17.20', cpe: '', licenses: ['MIT'], metadata: {},
-  }] });
+  const components = await database.upsertSoftwareComponents({
+    orgId: 'org-vuln',
+    components: [
+      {
+        fingerprint: 'fingerprint-1',
+        source: 'sbom',
+        sourceRef: 'app.cdx.json',
+        name: 'lodash',
+        version: '4.17.20',
+        ecosystem: 'npm',
+        purl: 'pkg:npm/lodash@4.17.20',
+        cpe: '',
+        licenses: ['MIT'],
+        metadata: {},
+      },
+    ],
+  });
   assert.equal(components.length, 1);
   assert.equal((await database.listSoftwareComponents('another-org')).length, 0);
-  const saved = await database.upsertVulnerabilityMatches('org-vuln', [{
-    componentId: components[0].id, vulnerabilityId: 'CVE-2021-0001', aliases: ['CVE-2021-0001'], source: 'osv+cisa-kev',
-    severity: 'critical', summary: 'Known exploit', details: { kev: { cveId: 'CVE-2021-0001' } },
-    dueAt: Date.now() + 86400000, discoveredAt: Date.now(), updatedAt: Date.now(),
-  }]);
+  const saved = await database.upsertVulnerabilityMatches('org-vuln', [
+    {
+      componentId: components[0].id,
+      vulnerabilityId: 'CVE-2021-0001',
+      aliases: ['CVE-2021-0001'],
+      source: 'osv+cisa-kev',
+      severity: 'critical',
+      summary: 'Known exploit',
+      details: { kev: { cveId: 'CVE-2021-0001' } },
+      dueAt: Date.now() + 86400000,
+      discoveredAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+  ]);
   assert.equal(saved.created.length, 1);
   assert.equal((await database.listVulnerabilityMatches('org-vuln'))[0].status, 'new');
   const updated = await database.updateVulnerabilityMatch('org-vuln', saved.matches[0].id, { status: 'patching' });
   assert.equal(updated.status, 'patching');
-  assert.equal(await database.updateVulnerabilityMatch('another-org', saved.matches[0].id, { status: 'resolved' }), null);
+  assert.equal(
+    await database.updateVulnerabilityMatch('another-org', saved.matches[0].id, { status: 'resolved' }),
+    null,
+  );
 });
 
 test('durable jobs are idempotent, claimed once and recovered after a stale lease', async () => {

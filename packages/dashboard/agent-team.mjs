@@ -79,7 +79,7 @@ export function coordinatorTasks(bb, { surface, maxTasks = 40 } = {}) {
 // escalate each hit into an impact demonstration. Bounded concurrency via runConcurrent.
 export async function runExploitPool(bb, { deps, agents = 4, onEvent } = {}) {
   const tasks = bb.all('task').map((e) => e.data);
-  const emit = (e) => onEvent && onEvent(e);
+  const emit = (e) => onEvent?.(e);
   await runConcurrent(
     tasks,
     async (task, i) => {

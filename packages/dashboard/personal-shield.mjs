@@ -15,7 +15,10 @@ const SHORTENERS = new Set([
 ]);
 
 function snippet(value, max = 120) {
-  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
 }
 
 function evidenceFor(text, pattern) {
@@ -62,7 +65,8 @@ export function analyzePersonalThreat({ message = '', link = '' } = {}) {
       severity: 'high',
       weight: 35,
       evidence: credentialEvidence,
-      explanation: 'Legitimate support teams should not ask for passwords, MFA codes, recovery codes, seed phrases, private keys, or API keys.',
+      explanation:
+        'Legitimate support teams should not ask for passwords, MFA codes, recovery codes, seed phrases, private keys, or API keys.',
     });
   }
 
@@ -77,25 +81,41 @@ export function analyzePersonalThreat({ message = '', link = '' } = {}) {
       severity: 'critical',
       weight: 40,
       evidence: exfilEvidence,
-      explanation: 'The message combines a disclosure action with sensitive information, a common account-takeover and data-theft pattern.',
+      explanation:
+        'The message combines a disclosure action with sensitive information, a common account-takeover and data-theft pattern.',
     });
   }
 
-  const urgency = /(?:act now|immediately|urgent|within \d+ (?:minutes?|hours?)|account (?:will be )?(?:closed|locked|suspended)|final warning|do not delay)/i.test(text);
-  const payment = /(?:gift cards?|wire transfer|bank transfer|crypto(?:currency)?|bitcoin|wallet address|payment|invoice|refund|send money)/i.test(text);
+  const urgency =
+    /(?:act now|immediately|urgent|within \d+ (?:minutes?|hours?)|account (?:will be )?(?:closed|locked|suspended)|final warning|do not delay)/i.test(
+      text,
+    );
+  const payment =
+    /(?:gift cards?|wire transfer|bank transfer|crypto(?:currency)?|bitcoin|wallet address|payment|invoice|refund|send money)/i.test(
+      text,
+    );
   if (urgency && payment) {
     add({
       id: 'urgent-payment',
       title: 'Urgent or unusual payment pressure',
       severity: 'high',
       weight: 30,
-      evidence: evidenceFor(text, /(?:act now|immediately|urgent|gift cards?|wire transfer|crypto(?:currency)?|send money)/i),
-      explanation: 'Urgency combined with payment instructions is a strong social-engineering signal. Verify through a known contact method.',
+      evidence: evidenceFor(
+        text,
+        /(?:act now|immediately|urgent|gift cards?|wire transfer|crypto(?:currency)?|send money)/i,
+      ),
+      explanation:
+        'Urgency combined with payment instructions is a strong social-engineering signal. Verify through a known contact method.',
     });
   }
 
-  const impersonation = /(?:i am|this is|on behalf of|from).{0,35}(?:your boss|ceo|director|bank|support|microsoft|google|apple|police|tax|government)/i.test(text)
-    || /(?:ceo|director|bank|support team|security team).{0,45}(?:urgent|confidential|secret|do not call|do not tell)/i.test(text);
+  const impersonation =
+    /(?:i am|this is|on behalf of|from).{0,35}(?:your boss|ceo|director|bank|support|microsoft|google|apple|police|tax|government)/i.test(
+      text,
+    ) ||
+    /(?:ceo|director|bank|support team|security team).{0,45}(?:urgent|confidential|secret|do not call|do not tell)/i.test(
+      text,
+    );
   if (impersonation) {
     add({
       id: 'impersonation',
@@ -103,7 +123,8 @@ export function analyzePersonalThreat({ message = '', link = '' } = {}) {
       severity: payment ? 'high' : 'medium',
       weight: payment ? 25 : 18,
       evidence: evidenceFor(text, /(?:boss|ceo|director|bank|support|microsoft|google|apple|police|tax|government)/i),
-      explanation: 'The sender claims authority or trusted support status. Confirm the request using a phone number or account portal you already know.',
+      explanation:
+        'The sender claims authority or trusted support status. Confirm the request using a phone number or account portal you already know.',
     });
   }
 
@@ -118,7 +139,8 @@ export function analyzePersonalThreat({ message = '', link = '' } = {}) {
       severity: 'high',
       weight: 35,
       evidence: injectionEvidence,
-      explanation: 'The content attempts to override AI rules or reveal hidden instructions. Treat it as untrusted data and do not give it tool access.',
+      explanation:
+        'The content attempts to override AI rules or reveal hidden instructions. Treat it as untrusted data and do not give it tool access.',
     });
   }
 
@@ -133,7 +155,8 @@ export function analyzePersonalThreat({ message = '', link = '' } = {}) {
       severity: 'high',
       weight: 28,
       evidence: covertEvidence,
-      explanation: 'Requests to hide activity or bypass safeguards should never be executed by an assistant or trusted automation.',
+      explanation:
+        'Requests to hide activity or bypass safeguards should never be executed by an assistant or trusted automation.',
     });
   }
 
@@ -145,7 +168,8 @@ export function analyzePersonalThreat({ message = '', link = '' } = {}) {
       severity: 'high',
       weight: 35,
       evidence: attachmentEvidence,
-      explanation: 'The content references a file type commonly used for malware delivery. Do not open it on a normal device.',
+      explanation:
+        'The content references a file type commonly used for malware delivery. Do not open it on a normal device.',
     });
   }
 
@@ -153,47 +177,79 @@ export function analyzePersonalThreat({ message = '', link = '' } = {}) {
   for (const item of urls) {
     if (!item.url) {
       add({
-        id: 'invalid-link', title: 'Malformed link', severity: 'medium', weight: 15,
-        evidence: item.raw, explanation: 'The submitted link could not be parsed safely. Do not open or repair it by guessing.',
+        id: 'invalid-link',
+        title: 'Malformed link',
+        severity: 'medium',
+        weight: 15,
+        evidence: item.raw,
+        explanation: 'The submitted link could not be parsed safely. Do not open or repair it by guessing.',
       });
       continue;
     }
     const host = item.url.hostname.toLowerCase();
     if (item.url.protocol !== 'https:') {
       add({
-        id: 'unencrypted-link', title: 'Link does not use HTTPS', severity: 'medium', weight: 12,
-        evidence: item.url.href, explanation: 'An unencrypted link can expose or alter traffic and should not be used for sign-in or sensitive data.',
+        id: 'unencrypted-link',
+        title: 'Link does not use HTTPS',
+        severity: 'medium',
+        weight: 12,
+        evidence: item.url.href,
+        explanation:
+          'An unencrypted link can expose or alter traffic and should not be used for sign-in or sensitive data.',
       });
     }
     if (item.url.username || item.url.password) {
       add({
-        id: 'embedded-link-credentials', title: 'Link contains embedded credentials', severity: 'high', weight: 30,
+        id: 'embedded-link-credentials',
+        title: 'Link contains embedded credentials',
+        severity: 'high',
+        weight: 30,
         evidence: `${item.url.protocol}//***@${host}${item.url.pathname}`,
-        explanation: 'User information before the @ sign can hide the real destination and is unsafe in an unsolicited link.',
+        explanation:
+          'User information before the @ sign can hide the real destination and is unsafe in an unsolicited link.',
       });
     }
     if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':')) {
       add({
-        id: 'ip-address-link', title: 'Link uses a raw IP address', severity: 'medium', weight: 18,
-        evidence: host, explanation: 'Unsolicited login or payment links rarely need a raw IP address; verify the destination independently.',
+        id: 'ip-address-link',
+        title: 'Link uses a raw IP address',
+        severity: 'medium',
+        weight: 18,
+        evidence: host,
+        explanation:
+          'Unsolicited login or payment links rarely need a raw IP address; verify the destination independently.',
       });
     }
     if (host.includes('xn--')) {
       add({
-        id: 'punycode-link', title: 'Internationalized/punycode hostname', severity: 'medium', weight: 18,
-        evidence: host, explanation: 'Punycode may be legitimate, but it is also used for look-alike domains. Verify the brand domain manually.',
+        id: 'punycode-link',
+        title: 'Internationalized/punycode hostname',
+        severity: 'medium',
+        weight: 18,
+        evidence: host,
+        explanation:
+          'Punycode may be legitimate, but it is also used for look-alike domains. Verify the brand domain manually.',
       });
     }
     if (SHORTENERS.has(host)) {
       add({
-        id: 'shortened-link', title: 'Shortened destination hides the final site', severity: 'medium', weight: 16,
-        evidence: host, explanation: 'The final destination is hidden. Do not open it until the sender and destination are independently verified.',
+        id: 'shortened-link',
+        title: 'Shortened destination hides the final site',
+        severity: 'medium',
+        weight: 16,
+        evidence: host,
+        explanation:
+          'The final destination is hidden. Do not open it until the sender and destination are independently verified.',
       });
     }
     if (host.split('.').length > 5) {
       add({
-        id: 'deep-subdomain-link', title: 'Unusually deep hostname', severity: 'low', weight: 8,
-        evidence: host, explanation: 'Long subdomain chains can be used to make an unrelated destination look trusted at a glance.',
+        id: 'deep-subdomain-link',
+        title: 'Unusually deep hostname',
+        severity: 'low',
+        weight: 8,
+        evidence: host,
+        explanation: 'Long subdomain chains can be used to make an unrelated destination look trusted at a glance.',
       });
     }
   }
@@ -205,7 +261,8 @@ export function analyzePersonalThreat({ message = '', link = '' } = {}) {
       severity: 'high',
       weight: 15,
       evidence: 'Payment or sensitive request combined with urgency/authority',
-      explanation: 'AI-generated voice, video, and writing can imitate trusted people. Call them using a known number and use a pre-agreed verification phrase.',
+      explanation:
+        'AI-generated voice, video, and writing can imitate trusted people. Call them using a known number and use a pre-agreed verification phrase.',
     });
   }
 

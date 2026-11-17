@@ -33,7 +33,10 @@ test('buildDockerArgs: --rm and interactive stdin so the container is ephemeral 
 
 test('sandbox runner: accepts only bounded Python or Node jobs', () => {
   assert.deepEqual(validateRunRequest({ lang: 'python', code: 'print(1)', input: 'safe' }), {
-    lang: 'python', code: 'print(1)', input: 'safe', timeoutSecs: 20,
+    lang: 'python',
+    code: 'print(1)',
+    input: 'safe',
+    timeoutSecs: 20,
   });
   assert.equal(validateRunRequest({ lang: 'bash', code: 'echo bad' }).error, 'lang must be python or node');
   assert.equal(validateRunRequest({ lang: 'node', code: '' }).error, 'code must be between 1 and 65536 characters');
@@ -54,12 +57,12 @@ test('sandbox runner: production Docker invocation preserves every isolation bou
 
 test('sandboxImage: hosted SHANNON_SANDBOX_IMAGE wins; per-language public fallback otherwise', () => {
   const saved = process.env.SHANNON_SANDBOX_IMAGE;
-  delete process.env.SHANNON_SANDBOX_IMAGE;
+  Reflect.deleteProperty(process.env, 'SHANNON_SANDBOX_IMAGE');
   assert.equal(sandboxImage('python'), 'python:3-slim');
   assert.equal(sandboxImage('node'), 'node:20-slim');
   process.env.SHANNON_SANDBOX_IMAGE = 'ghcr.io/me/shannon-sandbox:1';
   assert.equal(sandboxImage('python'), 'ghcr.io/me/shannon-sandbox:1', 'one hosted image serves both runtimes');
   assert.equal(sandboxImage('node'), 'ghcr.io/me/shannon-sandbox:1');
-  if (saved === undefined) delete process.env.SHANNON_SANDBOX_IMAGE;
+  if (saved === undefined) Reflect.deleteProperty(process.env, 'SHANNON_SANDBOX_IMAGE');
   else process.env.SHANNON_SANDBOX_IMAGE = saved;
 });

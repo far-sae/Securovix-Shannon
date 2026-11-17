@@ -1,3 +1,4 @@
+import { lookup as dnsLookup } from 'node:dns';
 // defender-edge — a PUBLIC, multi-tenant filtering reverse proxy.
 //
 // The dashboard's inline proxy binds loopback and hands out a random port, which is fine for a
@@ -15,7 +16,6 @@
 // carries no such risk.
 import http from 'node:http';
 import https from 'node:https';
-import { lookup as dnsLookup } from 'node:dns';
 import { BlockList, isIP } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,13 +58,32 @@ const pending = [];
 // (::ffff:169.254.169.254) and the NAT64 range, which reach the same private hosts.
 const PRIVATE_ADDRESSES = new BlockList();
 for (const [network, prefix] of [
-  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
-  ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3],
-]) PRIVATE_ADDRESSES.addSubnet(network, prefix, 'ipv4');
-for (const [network, prefix] of [['::', 128], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]])
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['224.0.0.0', 3],
+])
+  PRIVATE_ADDRESSES.addSubnet(network, prefix, 'ipv4');
+for (const [network, prefix] of [
+  ['::', 128],
+  ['::1', 128],
+  ['64:ff9b::', 96],
+  ['64:ff9b:1::', 48],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['ff00::', 8],
+])
   PRIVATE_ADDRESSES.addSubnet(network, prefix, 'ipv6');
 export function isPrivateAddress(address) {
-  const value = String(address || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const value = String(address || '')
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
   const family = isIP(value);
   return family ? PRIVATE_ADDRESSES.check(value, family === 6 ? 'ipv6' : 'ipv4') : false;
 }
@@ -162,7 +181,10 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
     }
 
     const o = new URL(route.origin);
-    if (!allowPrivateOrigins && (isPrivateAddress(o.hostname) || o.hostname === 'localhost' || o.hostname.endsWith('.local'))) {
+    if (
+      !allowPrivateOrigins &&
+      (isPrivateAddress(o.hostname) || o.hostname === 'localhost' || o.hostname.endsWith('.local'))
+    ) {
       res.writeHead(502, { 'content-type': 'text/plain' });
       res.end('Unsafe upstream rejected');
       return;
@@ -206,8 +228,16 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
           up.on('error', () => res.destroy());
           try {
             // The origin's per-connection headers describe its connection to us, not ours to the visitor.
-            const named = String(up.headers.connection || '').toLowerCase().split(',').map((x) => x.trim()).filter(Boolean);
-            const headers = Object.fromEntries(Object.entries(up.headers).filter(([k]) => !HOP_BY_HOP.has(k.toLowerCase()) && !named.includes(k.toLowerCase())));
+            const named = String(up.headers.connection || '')
+              .toLowerCase()
+              .split(',')
+              .map((x) => x.trim())
+              .filter(Boolean);
+            const headers = Object.fromEntries(
+              Object.entries(up.headers).filter(
+                ([k]) => !HOP_BY_HOP.has(k.toLowerCase()) && !named.includes(k.toLowerCase()),
+              ),
+            );
             res.writeHead(up.statusCode || 502, headers);
             up.pipe(res);
           } catch {
@@ -258,7 +288,10 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
               enforced: blocked,
               srcIp: req.socket?.remoteAddress || null,
               // The owner's own test carries a signed mark; the dashboard checks it. It changes nothing here.
-              test: typeof req.headers['x-securovix-test'] === 'string' ? req.headers['x-securovix-test'].slice(0, 200) : undefined,
+              test:
+                typeof req.headers['x-securovix-test'] === 'string'
+                  ? req.headers['x-securovix-test'].slice(0, 200)
+                  : undefined,
             });
           }
         }
@@ -326,7 +359,9 @@ if (isDirectExecution()) {
         '[edge] SHANNON_DASHBOARD_URL / SHANNON_EDGE_PLATFORM_TOKEN unset — routes come from SHANNON_EDGE_ROUTES only, and detections are not reported',
       );
     } else if (!PLATFORM_TOKEN) {
-      console.warn('[edge] SHANNON_EDGE_API_KEY is legacy single-organization mode; set SHANNON_EDGE_PLATFORM_TOKEN for shared multi-tenant routing');
+      console.warn(
+        '[edge] SHANNON_EDGE_API_KEY is legacy single-organization mode; set SHANNON_EDGE_PLATFORM_TOKEN for shared multi-tenant routing',
+      );
     }
   });
 }

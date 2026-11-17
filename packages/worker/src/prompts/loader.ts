@@ -1,6 +1,6 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Result, ok, err } from '../result.js';
+import { type Result, err, ok } from '../result.js';
 
 const PROMPTS_DIR = process.env.SHANNON_PROMPTS_DIR ?? '/app/prompts';
 

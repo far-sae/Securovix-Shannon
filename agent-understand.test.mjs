@@ -75,8 +75,13 @@ test('analyzeSurface: an inert brochure site yields an (almost) empty plan — n
 
 test('analyzeSurface: over a REAL crawl of a mock target, the plan reflects the live surface', async () => {
   const servers = [];
-  after(() => servers.forEach((s) => s.close()));
-  const html = (res, body) => (res.writeHead(200, { 'content-type': 'text/html' }), res.end(body));
+  after(() => {
+    for (const s of servers) s.close();
+  });
+  const html = (res, body) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(body);
+  };
   const s = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/') {

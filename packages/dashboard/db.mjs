@@ -48,6 +48,12 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABA
 const USE_SUPABASE = process.env.SHANNON_FORCE_LOCAL_DB !== '1' && !!(SUPABASE_URL && SUPABASE_KEY);
 
 // In-memory caches — loaded by initDb()
+// The list kept for one owner (a user or an organization), created the first time it is needed.
+function listOf(map, key) {
+  if (!map[key]) map[key] = [];
+  return map[key];
+}
+
 let _users = {};
 let _lb = {};
 let _verified = {}; // { [userId]: { [domain]: { verifiedAt, method } } }
@@ -74,12 +80,12 @@ function ensureHome() {
 
 // ---- Tiny PostgREST helper. No third-party SDK required. ----
 async function sb(path, opts = {}) {
-  const r = await fetch(SUPABASE_URL + '/rest/v1' + path, {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...opts,
     signal: opts.signal || AbortSignal.timeout(Number(process.env.SHANNON_DB_TIMEOUT_MS || 15_000)),
     headers: {
       apikey: SUPABASE_KEY,
-      authorization: 'Bearer ' + SUPABASE_KEY,
+      authorization: `Bearer ${SUPABASE_KEY}`,
       'content-type': 'application/json',
       prefer: opts.prefer || 'return=representation',
       ...(opts.headers || {}),
@@ -182,7 +188,7 @@ export async function initDb() {
       }
       _runs = {};
       for (const r of runRows || []) {
-        (_runs[r.user_id] ||= []).push({
+        listOf(_runs, r.user_id).push({
           id: r.id,
           target: r.target,
           createdAt: r.created_at ? Number(r.created_at) : Date.now(),
@@ -201,7 +207,7 @@ export async function initDb() {
       }
       _monitors = {};
       for (const r of monRows || []) {
-        (_monitors[r.user_id] ||= []).push({
+        listOf(_monitors, r.user_id).push({
           id: r.id,
           target: r.target,
           intervalHours: r.interval_hours ? Number(r.interval_hours) : 24,
@@ -219,19 +225,23 @@ export async function initDb() {
           return [];
         }
       };
-      const [orgRows, memberRows, projectRows, findingRows, auditRows, settingRows, ownerRows, edgeRows, defenseRows] = await Promise.all([
-        teamTable('/shannon_organizations?select=*', 'organizations'),
-        teamTable('/shannon_memberships?select=*', 'memberships'),
-        teamTable('/shannon_projects?select=*', 'projects'),
-        teamTable('/shannon_findings?select=*&order=updated_at.desc&limit=5000', 'findings'),
-        teamTable('/shannon_audit_events?select=*&order=created_at.desc&limit=5000', 'audit_events'),
-        teamTable('/shannon_user_settings?select=*', 'user_settings'),
-        teamTable('/shannon_scan_owners?select=*', 'scan_owners'),
-        teamTable('/shannon_edge_routes?select=*', 'edge_routes'),
-        teamTable('/shannon_defense_events?select=*&order=created_at.desc&limit=5000', 'defense_events'),
-      ]);
+      const [orgRows, memberRows, projectRows, findingRows, auditRows, settingRows, ownerRows, edgeRows, defenseRows] =
+        await Promise.all([
+          teamTable('/shannon_organizations?select=*', 'organizations'),
+          teamTable('/shannon_memberships?select=*', 'memberships'),
+          teamTable('/shannon_projects?select=*', 'projects'),
+          teamTable('/shannon_findings?select=*&order=updated_at.desc&limit=5000', 'findings'),
+          teamTable('/shannon_audit_events?select=*&order=created_at.desc&limit=5000', 'audit_events'),
+          teamTable('/shannon_user_settings?select=*', 'user_settings'),
+          teamTable('/shannon_scan_owners?select=*', 'scan_owners'),
+          teamTable('/shannon_edge_routes?select=*', 'edge_routes'),
+          teamTable('/shannon_defense_events?select=*&order=created_at.desc&limit=5000', 'defense_events'),
+        ]);
       _orgs = Object.fromEntries(
-        orgRows.map((r) => [r.id, { id: r.id, name: r.name, slug: r.slug, createdBy: r.created_by, createdAt: Number(r.created_at) }]),
+        orgRows.map((r) => [
+          r.id,
+          { id: r.id, name: r.name, slug: r.slug, createdBy: r.created_by, createdAt: Number(r.created_at) },
+        ]),
       );
       _memberships = memberRows.map((r) => ({
         orgId: r.org_id,
@@ -241,7 +251,7 @@ export async function initDb() {
       }));
       _projects = {};
       for (const r of projectRows) {
-        (_projects[r.org_id] ||= []).push({
+        listOf(_projects, r.org_id).push({
           id: r.id,
           orgId: r.org_id,
           name: r.name,
@@ -253,7 +263,7 @@ export async function initDb() {
       }
       _findings = {};
       for (const r of findingRows) {
-        (_findings[r.org_id] ||= []).push({
+        listOf(_findings, r.org_id).push({
           id: r.id,
           orgId: r.org_id,
           projectId: r.project_id || null,
@@ -271,7 +281,7 @@ export async function initDb() {
       }
       _audit = {};
       for (const r of auditRows) {
-        (_audit[r.org_id] ||= []).push({
+        listOf(_audit, r.org_id).push({
           id: r.id,
           orgId: r.org_id,
           actorUserId: r.actor_user_id || null,
@@ -284,20 +294,33 @@ export async function initDb() {
       }
       _userSettings = Object.fromEntries(settingRows.map((r) => [r.user_id, r.settings || {}]));
       _scanOwners = Object.fromEntries(
-        ownerRows.map((r) => [r.scan_id, {
-          scanId: r.scan_id,
-          orgId: r.org_id,
-          userId: r.user_id,
-          projectId: r.project_id || null,
-          createdAt: Number(r.created_at),
-        }]),
+        ownerRows.map((r) => [
+          r.scan_id,
+          {
+            scanId: r.scan_id,
+            orgId: r.org_id,
+            userId: r.user_id,
+            projectId: r.project_id || null,
+            createdAt: Number(r.created_at),
+          },
+        ]),
       );
       _edgeRoutes = Object.fromEntries(
-        edgeRows.map((r) => [r.host, { host: r.host, orgId: r.org_id, userId: r.user_id, origin: r.origin, mode: r.mode, createdAt: Number(r.created_at) }]),
+        edgeRows.map((r) => [
+          r.host,
+          {
+            host: r.host,
+            orgId: r.org_id,
+            userId: r.user_id,
+            origin: r.origin,
+            mode: r.mode,
+            createdAt: Number(r.created_at),
+          },
+        ]),
       );
       _defenseEvents = {};
       for (const r of defenseRows) {
-        (_defenseEvents[r.org_id] ||= []).push({
+        listOf(_defenseEvents, r.org_id).push({
           id: r.id,
           orgId: r.org_id,
           userId: r.user_id,
@@ -380,7 +403,9 @@ export async function refreshDbIfStale(maxAgeMs = 5000) {
   if (!_refreshPromise) {
     _refreshPromise = Promise.all([_userWriteReady, ..._orgReady.values()])
       .then(() => initDb())
-      .finally(() => { _refreshPromise = null; });
+      .finally(() => {
+        _refreshPromise = null;
+      });
   }
   await _refreshPromise;
 }
@@ -409,7 +434,7 @@ function monitorToRow(userId, m) {
 }
 export function saveMonitor(userId, m) {
   if (!userId || !m?.id) return;
-  (_monitors[userId] ||= []).unshift(m);
+  listOf(_monitors, userId).unshift(m);
   if (USE_SUPABASE) {
     sb('/shannon_monitors', {
       method: 'POST',
@@ -456,7 +481,7 @@ export function allMonitors() {
 // rec = { id, target, createdAt, stats, findings, leads }. Newest-first, capped per user.
 export function saveAgentRun(userId, rec) {
   if (!userId || !rec?.id) return;
-  const list = (_runs[userId] ||= []);
+  const list = listOf(_runs, userId);
   list.unshift(rec);
   if (list.length > MAX_RUNS_PER_USER) list.length = MAX_RUNS_PER_USER;
   if (USE_SUPABASE) {
@@ -634,27 +659,34 @@ export function createOrganization(org, ownerMembership) {
   _memberships = _memberships.filter((m) => !(m.orgId === org.id && m.userId === ownerMembership.userId));
   _memberships.push(ownerMembership);
   if (USE_SUPABASE) {
-    const ready = _userWriteReady.then(() => sb('/shannon_organizations', {
-      method: 'POST',
-      headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify([{
-        id: org.id,
-        name: org.name,
-        slug: org.slug,
-        created_by: org.createdBy,
-        created_at: org.createdAt,
-      }]),
-    }))
+    const ready = _userWriteReady
+      .then(() =>
+        sb('/shannon_organizations', {
+          method: 'POST',
+          headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify([
+            {
+              id: org.id,
+              name: org.name,
+              slug: org.slug,
+              created_by: org.createdBy,
+              created_at: org.createdAt,
+            },
+          ]),
+        }),
+      )
       .then(() =>
         sb('/shannon_memberships', {
           method: 'POST',
           headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify([{
-            org_id: ownerMembership.orgId,
-            user_id: ownerMembership.userId,
-            role: ownerMembership.role,
-            created_at: ownerMembership.createdAt || Date.now(),
-          }]),
+          body: JSON.stringify([
+            {
+              org_id: ownerMembership.orgId,
+              user_id: ownerMembership.userId,
+              role: ownerMembership.role,
+              created_at: ownerMembership.createdAt || Date.now(),
+            },
+          ]),
         }),
       )
       .catch((e) => console.error('[db] organization save failed:', e.message));
@@ -693,16 +725,22 @@ export function saveMembership(membership) {
   _memberships = _memberships.filter((m) => !(m.orgId === membership.orgId && m.userId === membership.userId));
   _memberships.push(membership);
   if (USE_SUPABASE) {
-    const ready = Promise.all([_userWriteReady, _orgReady.get(membership.orgId) || Promise.resolve()]).then(() => sb('/shannon_memberships', {
-      method: 'POST',
-      headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify([{
-        org_id: membership.orgId,
-        user_id: membership.userId,
-        role: membership.role,
-        created_at: membership.createdAt || Date.now(),
-      }]),
-    })).catch((e) => console.error('[db] membership save failed:', e.message));
+    const ready = Promise.all([_userWriteReady, _orgReady.get(membership.orgId) || Promise.resolve()])
+      .then(() =>
+        sb('/shannon_memberships', {
+          method: 'POST',
+          headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify([
+            {
+              org_id: membership.orgId,
+              user_id: membership.userId,
+              role: membership.role,
+              created_at: membership.createdAt || Date.now(),
+            },
+          ]),
+        }),
+      )
+      .catch((e) => console.error('[db] membership save failed:', e.message));
     _orgReady.set(membership.orgId, ready);
   } else persistTeam();
 }
@@ -723,7 +761,7 @@ export function listProjects(orgId) {
 
 export function saveProject(project) {
   if (!project?.orgId || !project?.id) return;
-  const list = (_projects[project.orgId] ||= []);
+  const list = listOf(_projects, project.orgId);
   const at = list.findIndex((p) => p.id === project.id);
   if (at >= 0) list[at] = project;
   else list.unshift(project);
@@ -731,22 +769,25 @@ export function saveProject(project) {
     sb('/shannon_projects', {
       method: 'POST',
       headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify([{
-        id: project.id,
-        org_id: project.orgId,
-        name: project.name,
-        description: project.description || null,
-        environment: project.environment || 'production',
-        criticality: project.criticality || 'medium',
-        created_at: project.createdAt || Date.now(),
-      }]),
+      body: JSON.stringify([
+        {
+          id: project.id,
+          org_id: project.orgId,
+          name: project.name,
+          description: project.description || null,
+          environment: project.environment || 'production',
+          criticality: project.criticality || 'medium',
+          created_at: project.createdAt || Date.now(),
+        },
+      ]),
     }).catch((e) => console.error('[db] project save failed:', e.message));
   } else persistTeam();
 }
 
 export function listFindings(orgId, filters = {}) {
   return (_findings[orgId] || []).filter(
-    (f) => (!filters.projectId || f.projectId === filters.projectId) && (!filters.status || f.status === filters.status),
+    (f) =>
+      (!filters.projectId || f.projectId === filters.projectId) && (!filters.status || f.status === filters.status),
   );
 }
 
@@ -756,8 +797,10 @@ export function getFinding(orgId, findingId) {
 
 export function saveFinding(finding) {
   if (!finding?.orgId || !finding?.id) return null;
-  const list = (_findings[finding.orgId] ||= []);
-  const same = list.findIndex((f) => f.id === finding.id || (finding.fingerprint && f.fingerprint === finding.fingerprint));
+  const list = listOf(_findings, finding.orgId);
+  const same = list.findIndex(
+    (f) => f.id === finding.id || (finding.fingerprint && f.fingerprint === finding.fingerprint),
+  );
   if (same >= 0) list[same] = { ...list[same], ...finding, id: list[same].id };
   else list.unshift(finding);
   const saved = same >= 0 ? list[same] : finding;
@@ -765,21 +808,23 @@ export function saveFinding(finding) {
     sb('/shannon_findings', {
       method: 'POST',
       headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify([{
-        id: saved.id,
-        org_id: saved.orgId,
-        project_id: saved.projectId || null,
-        fingerprint: saved.fingerprint || saved.id,
-        title: saved.title,
-        severity: saved.severity || 'medium',
-        status: saved.status || 'new',
-        assignee_user_id: saved.assigneeUserId || null,
-        source: saved.source || 'manual',
-        details: saved.details || {},
-        decision: saved.decision || null,
-        created_at: saved.createdAt || Date.now(),
-        updated_at: saved.updatedAt || Date.now(),
-      }]),
+      body: JSON.stringify([
+        {
+          id: saved.id,
+          org_id: saved.orgId,
+          project_id: saved.projectId || null,
+          fingerprint: saved.fingerprint || saved.id,
+          title: saved.title,
+          severity: saved.severity || 'medium',
+          status: saved.status || 'new',
+          assignee_user_id: saved.assigneeUserId || null,
+          source: saved.source || 'manual',
+          details: saved.details || {},
+          decision: saved.decision || null,
+          created_at: saved.createdAt || Date.now(),
+          updated_at: saved.updatedAt || Date.now(),
+        },
+      ]),
     }).catch((e) => console.error('[db] finding save failed:', e.message));
   } else persistTeam();
   return saved;
@@ -787,7 +832,7 @@ export function saveFinding(finding) {
 
 export function appendAudit(event) {
   if (!event?.orgId || !event?.id) return;
-  const list = (_audit[event.orgId] ||= []);
+  const list = listOf(_audit, event.orgId);
   list.unshift(event);
   if (list.length > 2000) list.length = 2000;
   if (USE_SUPABASE) {
@@ -796,16 +841,18 @@ export function appendAudit(event) {
         sb('/shannon_audit_events', {
           method: 'POST',
           headers: { prefer: 'return=minimal' },
-          body: JSON.stringify([{
-            id: event.id,
-            org_id: event.orgId,
-            actor_user_id: event.actorUserId || null,
-            action: event.action,
-            resource_type: event.resourceType,
-            resource_id: event.resourceId || null,
-            metadata: event.metadata || {},
-            created_at: event.createdAt || Date.now(),
-          }]),
+          body: JSON.stringify([
+            {
+              id: event.id,
+              org_id: event.orgId,
+              actor_user_id: event.actorUserId || null,
+              action: event.action,
+              resource_type: event.resourceType,
+              resource_id: event.resourceId || null,
+              metadata: event.metadata || {},
+              created_at: event.createdAt || Date.now(),
+            },
+          ]),
         }),
       )
       .catch((e) => console.error('[db] audit save failed:', e.message));
@@ -838,13 +885,15 @@ export function saveScanOwner(owner) {
     sb('/shannon_scan_owners', {
       method: 'POST',
       headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify([{
-        scan_id: owner.scanId,
-        org_id: owner.orgId,
-        user_id: owner.userId,
-        project_id: owner.projectId || null,
-        created_at: owner.createdAt || Date.now(),
-      }]),
+      body: JSON.stringify([
+        {
+          scan_id: owner.scanId,
+          org_id: owner.orgId,
+          user_id: owner.userId,
+          project_id: owner.projectId || null,
+          created_at: owner.createdAt || Date.now(),
+        },
+      ]),
     }).catch((e) => console.error('[db] scan owner save failed:', e.message));
   } else persistTeam();
 }
@@ -860,14 +909,16 @@ export function saveEdgeRoute(route) {
     sb('/shannon_edge_routes', {
       method: 'POST',
       headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify([{
-        host: route.host,
-        org_id: route.orgId,
-        user_id: route.userId,
-        origin: route.origin,
-        mode: route.mode,
-        created_at: route.createdAt || Date.now(),
-      }]),
+      body: JSON.stringify([
+        {
+          host: route.host,
+          org_id: route.orgId,
+          user_id: route.userId,
+          origin: route.origin,
+          mode: route.mode,
+          created_at: route.createdAt || Date.now(),
+        },
+      ]),
     }).catch((e) => console.error('[db] edge route save failed:', e.message));
   } else persistTeam();
 }
@@ -891,29 +942,31 @@ export function removeEdgeRoute(host, orgId) {
 
 export function appendDefenseEvent(event) {
   if (!event?.orgId || !event?.id) return;
-  const list = (_defenseEvents[event.orgId] ||= []);
+  const list = listOf(_defenseEvents, event.orgId);
   list.unshift(event);
   if (list.length > 2000) list.length = 2000;
   if (USE_SUPABASE) {
     sb('/shannon_defense_events', {
       method: 'POST',
       headers: { prefer: 'return=minimal' },
-      body: JSON.stringify([{
-        id: event.id,
-        org_id: event.orgId,
-        user_id: event.userId,
-        at: event.at,
-        method: event.method,
-        url: event.url,
-        cls: event.cls,
-        enforced: event.enforced === true,
-        src_ip: event.srcIp || null,
-        severity: event.severity || 'medium',
-        source: event.source || 'sdk',
-        status: event.status || 'open',
-        metadata: event.metadata || {},
-        created_at: event.createdAt || Date.now(),
-      }]),
+      body: JSON.stringify([
+        {
+          id: event.id,
+          org_id: event.orgId,
+          user_id: event.userId,
+          at: event.at,
+          method: event.method,
+          url: event.url,
+          cls: event.cls,
+          enforced: event.enforced === true,
+          src_ip: event.srcIp || null,
+          severity: event.severity || 'medium',
+          source: event.source || 'sdk',
+          status: event.status || 'open',
+          metadata: event.metadata || {},
+          created_at: event.createdAt || Date.now(),
+        },
+      ]),
     }).catch((e) => console.error('[db] defense event save failed:', e.message));
   } else persistTeam();
 }

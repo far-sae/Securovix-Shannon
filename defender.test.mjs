@@ -500,14 +500,20 @@ test('connector: a body over the 1 MB cap is judged on its first part, then stre
   assert.equal(res.status, 200);
   assert.equal(seen.length, 1, 'the URL and the first part of the body are judged once');
   assert.equal(seen[0].url, '/upload?q=1');
-  assert.ok(seen[0].body.length > 1024 * 1024 && seen[0].body.length < 2 * 1024 * 1024, 'only the first part was buffered');
+  assert.ok(
+    seen[0].body.length > 1024 * 1024 && seen[0].body.length < 2 * 1024 * 1024,
+    'only the first part was buffered',
+  );
   assert.equal(got, big.length, 'the full body still reached the upstream app byte-for-byte');
   await c.stop();
 
   // An attack in the URL of a large upload used to pass because nothing was looked at.
   const strict = await httpProxyConnector({ origin: app.origin, onEvent: () => ({ block: true }) });
   got = 0;
-  const refused = await fetch(`${strict.meta.url}/upload`, { method: 'POST', body: big }).catch((error) => ({ status: 0, error }));
+  const refused = await fetch(`${strict.meta.url}/upload`, { method: 'POST', body: big }).catch((error) => ({
+    status: 0,
+    error,
+  }));
   assert.ok(refused.status === 403 || refused.status === 0, 'refused before reaching the upstream app');
   assert.equal(got, 0, 'nothing was forwarded');
   await strict.stop();
@@ -857,7 +863,9 @@ test('sdk: an inventoried asset reports a fail-open coverage heartbeat', async (
   try {
     const d = shannonDefender({ apiKey: 'sk_test', endpoint: 'https://dashboard.example', assetId: 'asset-1' });
     await d.heartbeat();
-    assert.ok(requests.some((item) => item.url.endsWith('/api/defender/sensors/heartbeat') && item.body.assetId === 'asset-1'));
+    assert.ok(
+      requests.some((item) => item.url.endsWith('/api/defender/sensors/heartbeat') && item.body.assetId === 'asset-1'),
+    );
     assert.ok(d.stats().heartbeats >= 1);
     d.stop();
   } finally {

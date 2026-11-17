@@ -1,7 +1,7 @@
-import { execaCommand, execa } from 'execa';
-import { join } from 'node:path';
-import { mkdirSync, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { execa, execaCommand } from 'execa';
 import type { RuntimeMode } from '../modes/detect.js';
 
 export interface ScanOptions {

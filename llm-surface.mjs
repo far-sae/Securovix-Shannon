@@ -54,7 +54,7 @@ function hnum(s, mod) {
   return h % mod;
 }
 function operands(nonce, salt) {
-  return [1000 + hnum(nonce + salt + 'a', 8999), 1000 + hnum(nonce + salt + 'b', 8999)];
+  return [1000 + hnum(`${nonce + salt}a`, 8999), 1000 + hnum(`${nonce + salt}b`, 8999)];
 }
 
 // Build the oracle battery for a nonce. Each: { name, payload, marker, confirm(body, control) }.
@@ -138,7 +138,7 @@ export function reqFor(target, param, payload) {
 export async function detectBoundary({ target, params, fetchT, nonce }) {
   const n = nonce || genNonce();
   const oracle = buildOracles(n)[0]; // arithmetic-product is the most model-agnostic
-  const cand = params && params.length ? params : candidateParams(target);
+  const cand = params?.length ? params : candidateParams(target);
   for (const p of cand) {
     const ctlReq = reqFor(target, p, `sxctl${n}`);
     const ctl = await fetchT(ctlReq.url, ctlReq.opts);

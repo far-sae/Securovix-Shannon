@@ -4,16 +4,16 @@ import type { FindingInput, MitreMapping } from './types.js';
 // MITRE ATT&CK Enterprise Tactics
 const MITRE_TACTICS: Record<string, { id: string; name: string }> = {
   'initial-access': { id: 'TA0001', name: 'Initial Access' },
-  'execution': { id: 'TA0002', name: 'Execution' },
-  'persistence': { id: 'TA0003', name: 'Persistence' },
+  execution: { id: 'TA0002', name: 'Execution' },
+  persistence: { id: 'TA0003', name: 'Persistence' },
   'privilege-escalation': { id: 'TA0004', name: 'Privilege Escalation' },
   'defense-evasion': { id: 'TA0005', name: 'Defense Evasion' },
   'credential-access': { id: 'TA0006', name: 'Credential Access' },
-  'discovery': { id: 'TA0007', name: 'Discovery' },
+  discovery: { id: 'TA0007', name: 'Discovery' },
   'lateral-movement': { id: 'TA0008', name: 'Lateral Movement' },
-  'collection': { id: 'TA0009', name: 'Collection' },
-  'exfiltration': { id: 'TA0010', name: 'Exfiltration' },
-  'impact': { id: 'TA0040', name: 'Impact' },
+  collection: { id: 'TA0009', name: 'Collection' },
+  exfiltration: { id: 'TA0010', name: 'Exfiltration' },
+  impact: { id: 'TA0040', name: 'Impact' },
 };
 
 // Common techniques by vulnerability category
@@ -53,7 +53,10 @@ export class AdversarySimAgent {
     private model: string,
   ) {}
 
-  async analyze(finding: FindingInput, debateHistory: string): Promise<{ assessment: string; mappings: MitreMapping[] }> {
+  async analyze(
+    finding: FindingInput,
+    debateHistory: string,
+  ): Promise<{ assessment: string; mappings: MitreMapping[] }> {
     // First, get static MITRE mappings
     const staticMappings = this.getStaticMappings(finding);
 

@@ -46,8 +46,8 @@ export async function proveSystemPromptLeak({ target, param = 'q', fetchT }) {
         'llm-sysprompt-probe',
         'high',
         target,
-        `System prompt / context leakage: the model disclosed a stable, non-supplied instruction ` +
-          `context across two independent requests. Read-only proof (OWASP LLM07).`,
+        'System prompt / context leakage: the model disclosed a stable, non-supplied instruction ' +
+          'context across two independent requests. Read-only proof (OWASP LLM07).',
       ),
     ];
   return [];

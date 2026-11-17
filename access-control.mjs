@@ -46,7 +46,9 @@ export function guardedFetch(url, { origin, headers = {}, method = 'GET', body, 
       },
       (res) => {
         let b = '';
-        res.on('data', (d) => (b += d));
+        res.on('data', (d) => {
+          b += d;
+        });
         res.on('end', () => resolve({ status: res.statusCode || 0, body: b, headers: res.headers || {} }));
       },
     );

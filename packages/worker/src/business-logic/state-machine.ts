@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import type { DomainEntity, WorkflowState, StateMachine, WorkflowTransition } from './types.js';
-import { type Result, ok, err } from '../result.js';
+import { type Result, err, ok } from '../result.js';
+import type { DomainEntity, StateMachine, WorkflowState, WorkflowTransition } from './types.js';
 
 export class StateMachineBuilder {
   async inferStateMachines(
@@ -38,7 +38,9 @@ export class StateMachineBuilder {
       ...entities.map((e) => `- ${e.name}: ${e.fields.map((f) => f.name).join(', ')}`),
       '',
       '## API Routes',
-      ...routes.map((r) => `- ${r.name} (${r.endpoint}) [preconditions: ${r.expectedPreconditions.join(', ') || 'none'}]`),
+      ...routes.map(
+        (r) => `- ${r.name} (${r.endpoint}) [preconditions: ${r.expectedPreconditions.join(', ') || 'none'}]`,
+      ),
       '',
       '## Instructions',
       'Identify all business workflows (e.g., checkout flow, registration, password reset, order processing).',

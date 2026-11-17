@@ -1,9 +1,9 @@
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
-import { parse as parseToml } from 'toml';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import Ajv from 'ajv';
+import { parse as parseToml } from 'toml';
+import { parse as parseYaml } from 'yaml';
 import type { ScanConfig } from '../docker/orchestrator.js';
 
 const ajv = new Ajv({ allErrors: true });

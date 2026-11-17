@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { ForensicEntry, ForensicPayload, CustodyMetadata } from './types.js';
+import type { CustodyMetadata, ForensicEntry, ForensicPayload } from './types.js';
 
 export class EvidenceChainHasher {
   private previousHash: string = '0'.repeat(64);
-  private sequenceNumber: number = 0;
+  private sequenceNumber = 0;
 
   computeHash(
     agentName: string,

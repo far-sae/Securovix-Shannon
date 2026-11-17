@@ -34,7 +34,8 @@ export class PayloadEncoder {
 
   private caseVariation(payload: string): string {
     // SQL keyword case variation: SELECT -> SeLeCt
-    const sqlKeywords = /\b(SELECT|INSERT|UPDATE|DELETE|UNION|FROM|WHERE|AND|OR|DROP|TABLE|ALTER|CREATE|EXEC|EXECUTE)\b/gi;
+    const sqlKeywords =
+      /\b(SELECT|INSERT|UPDATE|DELETE|UNION|FROM|WHERE|AND|OR|DROP|TABLE|ALTER|CREATE|EXEC|EXECUTE)\b/gi;
     return payload.replace(sqlKeywords, (match) => {
       return match
         .split('')

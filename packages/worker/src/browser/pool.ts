@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext } from 'playwright';
+import { type Browser, type BrowserContext, chromium } from 'playwright';
 
 export interface BrowserSession {
   label: string;
@@ -10,13 +10,14 @@ export class BrowserPool {
   private sessions = new Map<string, BrowserSession>();
   private maxSessions: number;
 
-  constructor(maxSessions: number = 5) {
+  constructor(maxSessions = 5) {
     this.maxSessions = maxSessions;
   }
 
   async acquire(label: string): Promise<BrowserSession> {
-    if (this.sessions.has(label)) {
-      return this.sessions.get(label)!;
+    const existing = this.sessions.get(label);
+    if (existing) {
+      return existing;
     }
 
     if (this.sessions.size >= this.maxSessions) {

@@ -21,8 +21,8 @@ import http from 'node:http';
 import https from 'node:https';
 import { join } from 'node:path';
 import { LLM_COMPLIANCE } from './llm-compliance.mjs';
-import { probeDirect, probeIndirect } from './llm-inject.mjs';
 import { proveSystemPromptLeak } from './llm-impact.mjs';
+import { probeDirect, probeIndirect } from './llm-inject.mjs';
 import { candidateParams } from './llm-surface.mjs';
 // Linear-time equivalents of /\{\{.*\}\}/, /<[a-z][^>]*>/ and /union.*select/. The regex forms are
 // quadratic on hostile input, and these filters also run on live traffic inside the Defender.
@@ -59,7 +59,7 @@ export function setSessionHeaders(h) {
 // like any other. Set by the dashboard for the length of one run; null means no mark.
 let TEST_MARK = null;
 export function setTestMark(mark) {
-  TEST_MARK = mark && mark.header && mark.value && typeof mark.applies === 'function' ? mark : null;
+  TEST_MARK = mark?.header && mark.value && typeof mark.applies === 'function' ? mark : null;
 }
 function markHeaders(url) {
   try {
@@ -1757,7 +1757,18 @@ export async function runExploitDefend({ target, classes, label, workspaceDir })
 
 export const ALL_CLASSES = Object.keys(PROBERS);
 // Exported for unit tests (pure helpers).
-export { buildCompositeFilter, COMPLIANCE, detectionRule, fetchT, injectParam, injReq, mergeCookies, PROBERS, setParam, targetUrlOf };
+export {
+  buildCompositeFilter,
+  COMPLIANCE,
+  detectionRule,
+  fetchT,
+  injectParam,
+  injReq,
+  mergeCookies,
+  PROBERS,
+  setParam,
+  targetUrlOf,
+};
 
 // WHOLE-APP: crawl the target to discover pages/params/forms/APIs, then run every prober
 // across the discovered surface (auth headers applied to all requests), aggregate, defend, report.

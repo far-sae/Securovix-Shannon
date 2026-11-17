@@ -3,7 +3,7 @@ import type { AgentRole, WarRoomMessage } from './types.js';
 
 export class DebateProtocol {
   private messages: WarRoomMessage[] = [];
-  private currentRound: number = 1;
+  private currentRound = 1;
 
   createMessage(
     from: AgentRole,
@@ -46,9 +46,7 @@ export class DebateProtocol {
   }
 
   getLastMessageFrom(role: AgentRole, findingRef: string): WarRoomMessage | undefined {
-    return [...this.messages]
-      .reverse()
-      .find((m) => m.from === role && m.findingRef === findingRef);
+    return [...this.messages].reverse().find((m) => m.from === role && m.findingRef === findingRef);
   }
 
   buildContextForAgent(role: AgentRole, findingRef: string): string {

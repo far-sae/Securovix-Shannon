@@ -1,4 +1,4 @@
-import { signScopeToken, type ScopeConfig } from '@shannon/tool-broker';
+import { type ScopeConfig, signScopeToken } from '@shannon/tool-broker';
 import { CLASS_CONFIGS } from '../agents/class-configs.js';
 import type { ShannonConfig } from '../config/schema.js';
 

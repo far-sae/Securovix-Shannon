@@ -25,7 +25,8 @@ const pathOf = (u) => {
 
 // Bounded-concurrency runner: run worker(item, index) over items with at most `limit` in flight (the
 // "parallel agents"). Results are returned in the ORIGINAL order regardless of completion order.
-export async function runConcurrent(items = [], worker, limit = 4) {
+export async function runConcurrent(list, worker, limit = 4) {
+  const items = list ?? [];
   const results = new Array(items.length);
   let next = 0;
   const lane = async () => {
@@ -99,7 +100,16 @@ export function countProbeTasks(surface = {}) {
   return buildProbeTasks(surface, { maxTasks: 1_000_000, maxPer: 1_000_000 }).length;
 }
 
-export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 30, maxPer = 6, concurrency = 4, onStep } = {}) {
+export async function runAgentLoop({
+  surface,
+  probe,
+  escalate,
+  skip,
+  maxTasks = 30,
+  maxPer = 6,
+  concurrency = 4,
+  onStep,
+} = {}) {
   const understanding = analyzeSurface(surface);
   const steps = [];
   const emit = (phase, detail) => {
@@ -121,7 +131,7 @@ export async function runAgentLoop({ surface, probe, escalate, skip, maxTasks = 
   // Checks that could not run are counted apart, so a site that refuses the requests is never
   // reported as clean.
   let errors = 0;
-  const tasks = buildProbeTasks(surface, { maxTasks, maxPer }).filter((t) => !(skip && skip.has(taskId(t))));
+  const tasks = buildProbeTasks(surface, { maxTasks, maxPer }).filter((t) => !skip?.has(taskId(t)));
   const lanes = Math.max(1, Math.min(Number(concurrency) || 4, 8));
   emit(
     'act',

@@ -1,8 +1,8 @@
-import Database from 'better-sqlite3';
-import { join } from 'node:path';
-import type { ForensicEntry, CustodyMetadata, EvidencePackage } from './types.js';
-import { EvidenceChainHasher } from './hasher.js';
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
+import { EvidenceChainHasher } from './hasher.js';
+import type { CustodyMetadata, EvidencePackage, ForensicEntry } from './types.js';
 
 export class EvidenceStore {
   private db: Database.Database;
@@ -34,9 +34,7 @@ export class EvidenceStore {
   }
 
   private restoreHasherState(): void {
-    const last = this.db
-      .prepare('SELECT * FROM evidence_chain ORDER BY sequence_number DESC LIMIT 1')
-      .get() as
+    const last = this.db.prepare('SELECT * FROM evidence_chain ORDER BY sequence_number DESC LIMIT 1').get() as
       | {
           sequence_number: number;
           timestamp: string;
@@ -70,8 +68,7 @@ export class EvidenceStore {
 
     if (recomputed !== last.current_hash) {
       throw new Error(
-        `Evidence chain integrity error: last entry (seq ${last.sequence_number}) hash ` +
-          'does not recompute on restore. evidence.db may be corrupted or tampered with.',
+        `Evidence chain integrity error: last entry (seq ${last.sequence_number}) hash does not recompute on restore. evidence.db may be corrupted or tampered with.`,
       );
     }
 
@@ -80,19 +77,21 @@ export class EvidenceStore {
   }
 
   private append(entry: ForensicEntry): void {
-    this.db.prepare(`
+    this.db
+      .prepare(`
       INSERT INTO evidence_chain (sequence_number, timestamp, previous_hash, current_hash, agent_name, action_type, payload, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      entry.sequenceNumber,
-      entry.timestamp,
-      entry.previousHash,
-      entry.currentHash,
-      entry.agentName,
-      entry.actionType,
-      JSON.stringify(entry.payload),
-      JSON.stringify(entry.metadata),
-    );
+    `)
+      .run(
+        entry.sequenceNumber,
+        entry.timestamp,
+        entry.previousHash,
+        entry.currentHash,
+        entry.agentName,
+        entry.actionType,
+        JSON.stringify(entry.payload),
+        JSON.stringify(entry.metadata),
+      );
   }
 
   // INVARIANT (chain integrity): record() must remain fully synchronous — no `await`
@@ -138,7 +137,9 @@ export class EvidenceStore {
   }
 
   getByAgent(agentName: string): ForensicEntry[] {
-    const rows = this.db.prepare('SELECT * FROM evidence_chain WHERE agent_name = ? ORDER BY sequence_number').all(agentName) as Array<{
+    const rows = this.db
+      .prepare('SELECT * FROM evidence_chain WHERE agent_name = ? ORDER BY sequence_number')
+      .all(agentName) as Array<{
       sequence_number: number;
       timestamp: string;
       previous_hash: string;
@@ -162,7 +163,9 @@ export class EvidenceStore {
   }
 
   getByType(actionType: ForensicEntry['actionType']): ForensicEntry[] {
-    const rows = this.db.prepare('SELECT * FROM evidence_chain WHERE action_type = ? ORDER BY sequence_number').all(actionType) as Array<{
+    const rows = this.db
+      .prepare('SELECT * FROM evidence_chain WHERE action_type = ? ORDER BY sequence_number')
+      .all(actionType) as Array<{
       sequence_number: number;
       timestamp: string;
       previous_hash: string;

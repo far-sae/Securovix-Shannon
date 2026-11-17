@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify as stringifyYaml } from 'yaml';
-import { publicOriginAllowed } from './public-address.mjs';
+import { buildDefenseCycle } from './continuous-defense.mjs';
 import {
   appendOperationalEvent,
   claimDueDefensePrograms,
@@ -29,7 +29,7 @@ import {
 } from './enterprise-db.mjs';
 import { deliverIntegrationJob, queueIntegrationEvent, sendEmail } from './enterprise-integrations.mjs';
 import { decryptSecret } from './enterprise-security.mjs';
-import { buildDefenseCycle } from './continuous-defense.mjs';
+import { publicOriginAllowed } from './public-address.mjs';
 import { createProgress, feedProgress } from './scan-progress.mjs';
 import { buildVulnerabilityMatches, loadCisaKev, queryOsvComponents } from './vulnerability-management.mjs';
 
@@ -299,7 +299,14 @@ async function executeScan(job) {
 export async function executeDefenseCycle(job) {
   const startedAt = Date.now();
   const cycleId = String(job.payload?.cycleId || `dcy_${randomUUID()}`);
-  await saveDefenseCycle({ id: cycleId, orgId: job.orgId, jobId: job.id, status: 'running', startedAt, createdAt: startedAt });
+  await saveDefenseCycle({
+    id: cycleId,
+    orgId: job.orgId,
+    jobId: job.id,
+    status: 'running',
+    startedAt,
+    createdAt: startedAt,
+  });
   try {
     const [assets, previous, telemetry] = await Promise.all([
       listDefenseAssets(job.orgId),
@@ -309,21 +316,37 @@ export async function executeDefenseCycle(job) {
     const priorCompleted = previous.find((item) => item.id !== cycleId && item.status === 'completed') || null;
     const result = buildDefenseCycle({ assets, previousCycle: priorCompleted, ...telemetry, now: Date.now() });
     const completed = await saveDefenseCycle({
-      id: cycleId, orgId: job.orgId, jobId: job.id, status: 'completed', startedAt,
-      completedAt: Date.now(), createdAt: startedAt, ...result,
+      id: cycleId,
+      orgId: job.orgId,
+      jobId: job.id,
+      status: 'completed',
+      startedAt,
+      completedAt: Date.now(),
+      createdAt: startedAt,
+      ...result,
     });
     const escalate = job.payload?.responseMode === 'bounded-auto' && result.actions.escalations.length > 0;
-    await queueIntegrationEvent(job.orgId, {
-      id: `defense-cycle:${cycleId}`,
-      type: escalate ? 'defender.cycle.escalated' : 'defender.cycle.completed',
-      at: new Date().toISOString(),
-      data: { cycleId, ...result.snapshot, escalations: result.actions.escalations },
-    }, job.userId || null);
+    await queueIntegrationEvent(
+      job.orgId,
+      {
+        id: `defense-cycle:${cycleId}`,
+        type: escalate ? 'defender.cycle.escalated' : 'defender.cycle.completed',
+        at: new Date().toISOString(),
+        data: { cycleId, ...result.snapshot, escalations: result.actions.escalations },
+      },
+      job.userId || null,
+    );
     return completed;
   } catch (error) {
     await saveDefenseCycle({
-      id: cycleId, orgId: job.orgId, jobId: job.id, status: 'failed', startedAt,
-      completedAt: Date.now(), createdAt: startedAt, error: String(error?.message || error).slice(0, 2000),
+      id: cycleId,
+      orgId: job.orgId,
+      jobId: job.id,
+      status: 'failed',
+      startedAt,
+      completedAt: Date.now(),
+      createdAt: startedAt,
+      error: String(error?.message || error).slice(0, 2000),
     }).catch(() => {});
     throw error;
   }
@@ -334,14 +357,16 @@ export async function scheduleDueDefenseCycles(now = Date.now()) {
   const jobs = [];
   for (const program of programs) {
     const slot = new Date(now).toISOString().slice(0, 13);
-    jobs.push(await enqueueJob({
-      orgId: program.orgId,
-      userId: program.createdBy,
-      type: 'defense-cycle',
-      payload: { cycleId: `dcy_${randomUUID()}`, trigger: 'schedule', responseMode: program.responseMode },
-      idempotencyKey: `defense-cycle:${slot}`,
-      maxAttempts: 3,
-    }));
+    jobs.push(
+      await enqueueJob({
+        orgId: program.orgId,
+        userId: program.createdBy,
+        type: 'defense-cycle',
+        payload: { cycleId: `dcy_${randomUUID()}`, trigger: 'schedule', responseMode: program.responseMode },
+        idempotencyKey: `defense-cycle:${slot}`,
+        maxAttempts: 3,
+      }),
+    );
   }
   return jobs;
 }
@@ -352,38 +377,61 @@ export async function executeVulnerabilityRefresh(job) {
   const [osv, kev] = await Promise.all([queryOsvComponents(components), loadCisaKev()]);
   const matches = buildVulnerabilityMatches(components, osv, kev, Date.now());
   const saved = await upsertVulnerabilityMatches(job.orgId, matches);
-  const newOpen = [...saved.created, ...saved.newKev].filter((item, index, rows) =>
-    !['resolved', 'accepted'].includes(item.status) && rows.findIndex((row) => row.id === item.id) === index,
+  const newOpen = [...saved.created, ...saved.newKev].filter(
+    (item, index, rows) =>
+      !['resolved', 'accepted'].includes(item.status) && rows.findIndex((row) => row.id === item.id) === index,
   );
   if (newOpen.length) {
     const rank = { low: 1, medium: 2, high: 3, critical: 4 };
     const severity = [...newOpen].sort((a, b) => rank[b.severity] - rank[a.severity])[0]?.severity || 'medium';
     const kevCount = newOpen.filter((item) => item.details?.kev).length;
-    await queueIntegrationEvent(job.orgId, {
-      id: `vulnerability-refresh:${job.id}`,
-      type: kevCount ? 'vulnerability.kev.detected' : 'vulnerability.detected',
-      at: new Date().toISOString(),
-      data: {
-        title: kevCount
-          ? `${kevCount} newly relevant CISA KEV ${kevCount === 1 ? 'vulnerability' : 'vulnerabilities'}`
-          : `${newOpen.length} new dependency ${newOpen.length === 1 ? 'vulnerability' : 'vulnerabilities'}`,
-        severity, count: newOpen.length, kevCount,
-        vulnerabilities: newOpen.slice(0, 25).map((item) => ({
-          id: item.vulnerabilityId, aliases: item.aliases, severity: item.severity, dueAt: item.dueAt,
-        })),
+    await queueIntegrationEvent(
+      job.orgId,
+      {
+        id: `vulnerability-refresh:${job.id}`,
+        type: kevCount ? 'vulnerability.kev.detected' : 'vulnerability.detected',
+        at: new Date().toISOString(),
+        data: {
+          title: kevCount
+            ? `${kevCount} newly relevant CISA KEV ${kevCount === 1 ? 'vulnerability' : 'vulnerabilities'}`
+            : `${newOpen.length} new dependency ${newOpen.length === 1 ? 'vulnerability' : 'vulnerabilities'}`,
+          severity,
+          count: newOpen.length,
+          kevCount,
+          vulnerabilities: newOpen.slice(0, 25).map((item) => ({
+            id: item.vulnerabilityId,
+            aliases: item.aliases,
+            severity: item.severity,
+            dueAt: item.dueAt,
+          })),
+        },
       },
-    }, job.userId || null);
+      job.userId || null,
+    );
   }
-  return { components: components.length, matches: saved.matches.length, created: saved.created.length, newlyRelevantKev: saved.newKev.length, kev: saved.matches.filter((item) => item.details?.kev).length };
+  return {
+    components: components.length,
+    matches: saved.matches.length,
+    created: saved.created.length,
+    newlyRelevantKev: saved.newKev.length,
+    kev: saved.matches.filter((item) => item.details?.kev).length,
+  };
 }
 
 export async function scheduleDailyVulnerabilityRefreshes(now = Date.now()) {
   const organizations = await listInventoryOrganizations();
   const day = new Date(now).toISOString().slice(0, 10);
-  return Promise.all(organizations.map((orgId) => enqueueJob({
-    orgId, type: 'vulnerability-refresh', payload: { trigger: 'daily' },
-    idempotencyKey: `vulnerability-refresh:daily:${day}`, maxAttempts: 4,
-  })));
+  return Promise.all(
+    organizations.map((orgId) =>
+      enqueueJob({
+        orgId,
+        type: 'vulnerability-refresh',
+        payload: { trigger: 'daily' },
+        idempotencyKey: `vulnerability-refresh:daily:${day}`,
+        maxAttempts: 4,
+      }),
+    ),
+  );
 }
 
 async function execute(job) {
@@ -489,8 +537,12 @@ export async function drain() {
 export async function runWorker() {
   workerStatus.database = await enterpriseHealth();
   await requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000));
-  await scheduleDueDefenseCycles().catch((error) => console.error('[worker] defense scheduling failed:', error.message));
-  await scheduleDailyVulnerabilityRefreshes().catch((error) => console.error('[worker] vulnerability scheduling failed:', error.message));
+  await scheduleDueDefenseCycles().catch((error) =>
+    console.error('[worker] defense scheduling failed:', error.message),
+  );
+  await scheduleDailyVulnerabilityRefreshes().catch((error) =>
+    console.error('[worker] vulnerability scheduling failed:', error.message),
+  );
   const retention = {
     authTokenDays: Number(process.env.SHANNON_AUTH_TOKEN_RETENTION_DAYS || 7),
     deliveryDays: Number(process.env.SHANNON_DELIVERY_RETENTION_DAYS || 90),
@@ -498,9 +550,7 @@ export async function runWorker() {
     completedJobDays: Number(process.env.SHANNON_JOB_RETENTION_DAYS || 30),
     artifactDays: Number(process.env.SHANNON_ARTIFACT_RETENTION_DAYS || 90),
   };
-  purgeExpiredEnterpriseData(retention).catch((error) =>
-    console.error('[worker] retention failed:', error.message),
-  );
+  purgeExpiredEnterpriseData(retention).catch((error) => console.error('[worker] retention failed:', error.message));
   await appendOperationalEvent({
     service: 'worker',
     instanceId: INSTANCE,
@@ -528,8 +578,12 @@ export async function runWorker() {
     }
     if (Date.now() - lastMaintenance > 60_000) {
       await requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000)).catch(() => {});
-      await scheduleDueDefenseCycles().catch((error) => console.error('[worker] defense scheduling failed:', error.message));
-      await scheduleDailyVulnerabilityRefreshes().catch((error) => console.error('[worker] vulnerability scheduling failed:', error.message));
+      await scheduleDueDefenseCycles().catch((error) =>
+        console.error('[worker] defense scheduling failed:', error.message),
+      );
+      await scheduleDailyVulnerabilityRefreshes().catch((error) =>
+        console.error('[worker] vulnerability scheduling failed:', error.message),
+      );
       lastMaintenance = Date.now();
     }
     if (Date.now() - lastRetention > 24 * 60 * 60_000) {
@@ -563,15 +617,17 @@ export function createWorkerHealthServer() {
     const stale = !workerStatus.lastPollAt || Date.now() - workerStatus.lastPollAt > Math.max(30_000, POLL_MS * 5);
     const ready = workerStatus.ready && !stale;
     res.writeHead(req.url === '/readyz' && !ready ? 503 : 200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({
-      ok: req.url === '/healthz' ? true : ready,
-      service: 'worker',
-      instance: INSTANCE,
-      uptime: Math.floor((Date.now() - workerStatus.startedAt) / 1000),
-      lastPollAt: workerStatus.lastPollAt,
-      activeJobs: workerStatus.activeJobs,
-      database: workerStatus.database,
-    }));
+    res.end(
+      JSON.stringify({
+        ok: req.url === '/healthz' ? true : ready,
+        service: 'worker',
+        instance: INSTANCE,
+        uptime: Math.floor((Date.now() - workerStatus.startedAt) / 1000),
+        lastPollAt: workerStatus.lastPollAt,
+        activeJobs: workerStatus.activeJobs,
+        database: workerStatus.database,
+      }),
+    );
   });
 }
 

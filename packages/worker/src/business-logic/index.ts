@@ -1,12 +1,12 @@
-export {
-  type DomainEntity,
-  type EntityField,
-  type EntityRelation,
-  type WorkflowState,
-  type WorkflowTransition,
-  type StateMachine,
-  type LogicFlawType,
-  type LogicFlaw,
+export type {
+  DomainEntity,
+  EntityField,
+  EntityRelation,
+  WorkflowState,
+  WorkflowTransition,
+  StateMachine,
+  LogicFlawType,
+  LogicFlaw,
 } from './types.js';
 export { SchemaParser } from './schema-parser.js';
 export { StateMachineBuilder } from './state-machine.js';

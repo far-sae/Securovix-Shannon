@@ -1,12 +1,12 @@
 import { execSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { heartbeat } from '@temporalio/activity';
 import type { Container } from '../../di/container.js';
-import type { PreReconInput } from './index.js';
-import { unwrap } from '../../result.js';
 import { loadPrompt } from '../../prompts/loader.js';
+import { unwrap } from '../../result.js';
 import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
+import type { PreReconInput } from './index.js';
 
 export async function preReconActivity(container: Container, input: PreReconInput): Promise<void> {
   const config = unwrap(container.configLoader.load(input.configPath));
@@ -15,7 +15,13 @@ export async function preReconActivity(container: Container, input: PreReconInpu
 
   try {
     heartbeat('Starting nmap scan');
-    const nmapResult = runTool('nmap', ['-sV', '-sC', '-oN', join(outputDir, 'nmap.txt'), new URL(config.target.url).hostname]);
+    const nmapResult = runTool('nmap', [
+      '-sV',
+      '-sC',
+      '-oN',
+      join(outputDir, 'nmap.txt'),
+      new URL(config.target.url).hostname,
+    ]);
     writeFileSync(join(outputDir, 'nmap-raw.txt'), truncateForSerialization(nmapResult));
 
     heartbeat('Running subfinder');
@@ -28,11 +34,13 @@ export async function preReconActivity(container: Container, input: PreReconInpu
 
     heartbeat('Running source code analysis');
     if (config.target.repoPath && existsSync(config.target.repoPath)) {
-      const prompt = unwrap(loadPrompt('pre-recon', {
-        targetUrl: config.target.url,
-        repoPath: config.target.repoPath,
-        loginInstructions: config.loginInstructions,
-      }));
+      const prompt = unwrap(
+        loadPrompt('pre-recon', {
+          targetUrl: config.target.url,
+          repoPath: config.target.repoPath,
+          loginInstructions: config.loginInstructions,
+        }),
+      );
 
       const model = container.llmClientFactory.resolveModelForAgent('pre-recon');
       const client = container.llmClientFactory.createClient();

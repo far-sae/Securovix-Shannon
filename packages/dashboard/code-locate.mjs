@@ -92,7 +92,7 @@ export function locateFinding({ finding = {}, files = [], max = 8, window = 2 } 
         score += 2;
         why.push('route handler');
       }
-      if (paramRe && paramRe.test(win)) {
+      if (paramRe?.test(win)) {
         score += 2;
         why.push('uses the flagged parameter');
       }

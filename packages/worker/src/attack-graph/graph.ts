@@ -1,4 +1,4 @@
-import type { VulnNode, Edge, AttackChain } from './types.js';
+import type { AttackChain, Edge, VulnNode } from './types.js';
 
 export class AttackGraph {
   private adjacency = new Map<string, Set<string>>();
@@ -21,12 +21,12 @@ export class AttackGraph {
     if (!this.adjacency.has(edge.from)) {
       this.adjacency.set(edge.from, new Set());
     }
-    this.adjacency.get(edge.from)!.add(edge.to);
+    this.adjacency.get(edge.from)?.add(edge.to);
 
     if (!this.reverseAdj.has(edge.to)) {
       this.reverseAdj.set(edge.to, new Set());
     }
-    this.reverseAdj.get(edge.to)!.add(edge.from);
+    this.reverseAdj.get(edge.to)?.add(edge.from);
   }
 
   getNode(id: string): VulnNode | undefined {
@@ -39,7 +39,7 @@ export class AttackGraph {
 
   // Find all paths from entry points (no preconditions or preconditions met by unauthenticated access)
   // to nodes whose postconditions match the objective
-  findChains(objective: string, maxDepth: number = 6): VulnNode[][] {
+  findChains(objective: string, maxDepth = 6): VulnNode[][] {
     const chains: VulnNode[][] = [];
     const entryPoints = this.findEntryPoints();
 
@@ -57,9 +57,7 @@ export class AttackGraph {
       // Entry points: no preconditions, or preconditions like "unauthenticated", "public"
       if (
         node.preconditions.length === 0 ||
-        node.preconditions.every((p) =>
-          ['unauthenticated', 'public', 'none', 'external'].includes(p.toLowerCase()),
-        )
+        node.preconditions.every((p) => ['unauthenticated', 'public', 'none', 'external'].includes(p.toLowerCase()))
       ) {
         entries.push(node);
       }
@@ -147,7 +145,7 @@ export class AttackGraph {
 
     for (const edge of this.edges) {
       if (chainIds.has(edge.from) && chainIds.has(edge.to)) {
-        adj.get(edge.from)!.push(edge.to);
+        adj.get(edge.from)?.push(edge.to);
         inDegree.set(edge.to, (inDegree.get(edge.to) ?? 0) + 1);
       }
     }
@@ -159,8 +157,10 @@ export class AttackGraph {
 
     const sorted: VulnNode[] = [];
     while (queue.length > 0) {
-      const id = queue.shift()!;
-      sorted.push(this.nodes.get(id)!);
+      const id = queue.shift();
+      if (id === undefined) break;
+      const node = this.nodes.get(id);
+      if (node) sorted.push(node);
 
       for (const neighbor of adj.get(id) ?? []) {
         const newDegree = (inDegree.get(neighbor) ?? 1) - 1;

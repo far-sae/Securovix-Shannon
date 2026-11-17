@@ -1,10 +1,10 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { LLMClientFactory } from '../llm/client.js';
-import { PurpleProtocol } from './protocol.js';
-import { RedStrategist } from './red-strategist.js';
-import { RedAttacker } from './red-attacker.js';
 import { BlueDefender } from './blue-defender.js';
 import { BlueIR } from './blue-ir.js';
+import { PurpleProtocol } from './protocol.js';
+import { RedAttacker } from './red-attacker.js';
+import { RedStrategist } from './red-strategist.js';
 import type {
   DetectionProposal,
   FindingConclusion,
@@ -39,10 +39,7 @@ export class PurpleTeamModerator {
       this.llmFactory.createClient(),
       this.llmFactory.resolveModelForAgent('purple-blue-defender'),
     );
-    const blueIR = new BlueIR(
-      this.llmFactory.createClient(),
-      this.llmFactory.resolveModelForAgent('purple-blue-ir'),
-    );
+    const blueIR = new BlueIR(this.llmFactory.createClient(), this.llmFactory.resolveModelForAgent('purple-blue-ir'));
 
     const moderatorClient = this.llmFactory.createClient();
     const moderatorModel = this.llmFactory.resolveModelForAgent('purple-moderator');
@@ -63,9 +60,7 @@ export class PurpleTeamModerator {
     }
 
     const agreementRate =
-      conclusions.length === 0
-        ? 0
-        : conclusions.filter((c) => c.agreement).length / conclusions.length;
+      conclusions.length === 0 ? 0 : conclusions.filter((c) => c.agreement).length / conclusions.length;
 
     return {
       conclusions,
@@ -93,10 +88,11 @@ export class PurpleTeamModerator {
       rounds = round;
 
       // 1. Red internal huddle
-      const lastAttackerNote = protocol
-        .visibleTo('red-strategist', finding.id)
-        .filter((m) => m.from === 'red-attacker')
-        .at(-1)?.content ?? '';
+      const lastAttackerNote =
+        protocol
+          .visibleTo('red-strategist', finding.id)
+          .filter((m) => m.from === 'red-attacker')
+          .at(-1)?.content ?? '';
 
       const stratPlan = await redStrategist.plan(
         finding,
@@ -129,10 +125,11 @@ export class PurpleTeamModerator {
       });
 
       // 2. Blue internal huddle
-      const lastIRNote = protocol
-        .visibleTo('blue-defender', finding.id)
-        .filter((m) => m.from === 'blue-ir')
-        .at(-1)?.content ?? '';
+      const lastIRNote =
+        protocol
+          .visibleTo('blue-defender', finding.id)
+          .filter((m) => m.from === 'blue-ir')
+          .at(-1)?.content ?? '';
 
       const mitigation = await blueDefender.propose(
         finding,
@@ -149,11 +146,7 @@ export class PurpleTeamModerator {
         content: mitigation,
       });
 
-      const detection = await blueIR.propose(
-        finding,
-        protocol.renderHistory('blue-ir', finding.id),
-        mitigation,
-      );
+      const detection = await blueIR.propose(finding, protocol.renderHistory('blue-ir', finding.id), mitigation);
       protocol.send({
         channel: 'blue-internal',
         team: 'blue',
@@ -234,10 +227,7 @@ export class PurpleTeamModerator {
     }
 
     // Final positions
-    lastRedFinal = await redStrategist.finalPosition(
-      finding,
-      protocol.renderHistory('red-strategist', finding.id),
-    );
+    lastRedFinal = await redStrategist.finalPosition(finding, protocol.renderHistory('red-strategist', finding.id));
     protocol.send({
       channel: 'cross-team',
       team: 'cross',
@@ -248,10 +238,7 @@ export class PurpleTeamModerator {
       content: lastRedFinal,
     });
 
-    lastBlueFinal = await blueDefender.finalPosition(
-      finding,
-      protocol.renderHistory('blue-defender', finding.id),
-    );
+    lastBlueFinal = await blueDefender.finalPosition(finding, protocol.renderHistory('blue-defender', finding.id));
     protocol.send({
       channel: 'cross-team',
       team: 'cross',
@@ -361,12 +348,8 @@ function parseSynthesis(raw: string): {
     return {
       exploitable: Boolean(parsed.exploitable),
       attackChain: typeof parsed.attackChain === 'string' ? parsed.attackChain : '',
-      mitigations: Array.isArray(parsed.mitigations)
-        ? (parsed.mitigations as MitigationProposal[])
-        : [],
-      detections: Array.isArray(parsed.detections)
-        ? (parsed.detections as DetectionProposal[])
-        : [],
+      mitigations: Array.isArray(parsed.mitigations) ? (parsed.mitigations as MitigationProposal[]) : [],
+      detections: Array.isArray(parsed.detections) ? (parsed.detections as DetectionProposal[]) : [],
       residualRisk: normalizeRisk(parsed.residualRisk),
       agreement: Boolean(parsed.agreement),
     };

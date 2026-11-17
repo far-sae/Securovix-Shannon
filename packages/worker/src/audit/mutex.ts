@@ -26,8 +26,8 @@ export class AuditMutex {
 
   private processQueue(): void {
     if (this.queue.length > 0 && !this.locked) {
-      const next = this.queue.shift()!;
-      this.acquire(next);
+      const next = this.queue.shift();
+      if (next) this.acquire(next);
     }
   }
 }

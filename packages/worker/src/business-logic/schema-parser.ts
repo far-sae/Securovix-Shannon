@@ -1,7 +1,7 @@
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { extname, join } from 'node:path';
+import { type Result, err, ok } from '../result.js';
 import type { DomainEntity, EntityField, WorkflowState } from './types.js';
-import { type Result, ok, err } from '../result.js';
 
 // Route patterns for common frameworks
 const ROUTE_PATTERNS = {
@@ -91,9 +91,8 @@ export class SchemaParser {
         const content = readFileSync(file, 'utf-8');
 
         for (const [framework, pattern] of Object.entries(MODEL_PATTERNS)) {
-          let match: RegExpExecArray | null;
           const regex = new RegExp(pattern.source, pattern.flags);
-          while ((match = regex.exec(content)) !== null) {
+          for (let match = regex.exec(content); match !== null; match = regex.exec(content)) {
             const name = match[1] ?? 'Unknown';
             entities.push({
               name,
@@ -110,7 +109,7 @@ export class SchemaParser {
     }
   }
 
-  private findSourceFiles(dir: string, depth: number = 5): string[] {
+  private findSourceFiles(dir: string, depth = 5): string[] {
     if (depth <= 0) return [];
 
     const files: string[] = [];
@@ -142,9 +141,8 @@ export class SchemaParser {
     let routeCounter = 0;
 
     for (const [framework, pattern] of Object.entries(ROUTE_PATTERNS)) {
-      let match: RegExpExecArray | null;
       const regex = new RegExp(pattern.source, pattern.flags);
-      while ((match = regex.exec(content)) !== null) {
+      for (let match = regex.exec(content); match !== null; match = regex.exec(content)) {
         const method = match[1] ?? 'GET';
         const path = match[2] ?? match[1] ?? '';
         routes.push({
@@ -178,8 +176,7 @@ export class SchemaParser {
 
     // Simple field extraction based on common patterns
     const fieldPattern = /['"`]?(\w+)['"`]?\s*:\s*\{?\s*type\s*:\s*['"`]?(\w+)/g;
-    let match: RegExpExecArray | null;
-    while ((match = fieldPattern.exec(content)) !== null) {
+    for (let match = fieldPattern.exec(content); match !== null; match = fieldPattern.exec(content)) {
       fields.push({
         name: match[1],
         type: match[2],

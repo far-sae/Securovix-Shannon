@@ -6,7 +6,10 @@
   "matchers-condition": "and",
   "matchers": [
     { "part": "status", "status": 200 },
-    { "part": "body", "regex": "\\[\\d{2}-[A-Za-z]{3}-\\d{4}[^\\]]*\\]\\s+PHP (Notice|Warning|Fatal error|Deprecated):" }
+    {
+      "part": "body",
+      "regex": "\\[\\d{2}-[A-Za-z]{3}-\\d{4}[^\\]]*\\]\\s+PHP (Notice|Warning|Fatal error|Deprecated):"
+    }
   ],
   "remediation": "Disable WP_DEBUG_LOG in production and block /wp-content/debug.log; it leaks paths, queries, and errors."
 }

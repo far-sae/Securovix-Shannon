@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { resolveProvider, type LLMProvider } from './provider.js';
-import { resolveModel, type ModelTier, AGENT_TIERS } from './tiers.js';
-import { unwrap } from '../result.js';
 import type { ModelOverrides } from '../config/schema.js';
+import { unwrap } from '../result.js';
+import { type LLMProvider, resolveProvider } from './provider.js';
+import { AGENT_TIERS, type ModelTier, resolveModel } from './tiers.js';
 
 const MAX_TURNS = 10_000;
 

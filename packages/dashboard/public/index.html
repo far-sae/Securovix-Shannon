@@ -1843,6 +1843,7 @@ async function api(u,o){
     const e=new Error(reason);e.status=r.status;e.detail=reason;e.body=b||{};
     // Two failures are the same everywhere, so handle them once here rather than per page.
     if(r.status===401&&!u.startsWith('/auth/'))apiSessionExpired();
+    if(r.status===403&&b&&b.code==='EMAIL_NOT_VERIFIED')apiEmailNotVerified();
     if(r.status===429&&b&&b.code==='ORG_USAGE_LIMIT')apiQuotaReached(b);
     throw e
   }
@@ -1853,6 +1854,21 @@ async function api(u,o){
 // user to the sign-in screen instead of each page inventing its own "please sign in" text — several
 // of which linked to Settings, a page that itself needs a session.
 let API_AUTH_SHOWN=false;
+// An account that has not opened its verification link yet: say so once, and offer the two things
+// it can do (get the link again, or sign out).
+let EMAIL_NOTICE_SHOWN=false;
+function apiEmailNotVerified(){
+  if(EMAIL_NOTICE_SHOWN)return;EMAIL_NOTICE_SHOWN=true;
+  showNotice('Verify your email address',`We sent a link to <b>${H(CURRENT_USER?.email||'your email address')}</b>. Open it to finish setting up your account. Until then the dashboard cannot be used.<div id="verify-note" style="margin-top:10px;color:var(--t2)"></div>`,{actions:'<button class="btn btn-g" onclick="authResendVerification()">Send the link again</button><button class="btn btn-g" onclick="authLogout()">Sign out</button>'});
+}
+async function authResendVerification(){
+  const note=document.getElementById('verify-note');
+  try{
+    const r=await fetch('/api/auth/email/resend',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:CURRENT_USER?.email||''})});
+    const d=await r.json().catch(()=>({}));
+    if(note)note.textContent=r.ok?'A new link is on its way. It can take a minute to arrive.':(d.error||'The link could not be sent. Try again in a few minutes.');
+  }catch{if(note)note.textContent='The link could not be sent. Check your connection and try again.'}
+}
 function apiSessionExpired(){
   if(API_AUTH_SHOWN)return;API_AUTH_SHOWN=true;
   CURRENT_USER=null;
@@ -5979,7 +5995,7 @@ async function guardAddMachine(){
   showNotice('Add a machine',`<p style="font-size:13px;margin:0 0 6px">Paste one command on the machine. It downloads the agent, checks it is the exact file this server built, and installs it as a service that starts with the machine. The machine shows up here within seconds.</p>
     <p style="font-size:12px;color:var(--t3);margin:8px 0 2px">Linux server or desktop, Docker hosts included (any distribution, as a user who can sudo)</p>${linux?guardPre(linux):missing}
     <p style="font-size:12px;color:var(--t3);margin:8px 0 2px">Windows (PowerShell, run as administrator)</p>${windows?guardPre(windows):missing}
-    <p style="font-size:12px;color:var(--t3);margin:8px 0 0">The token works for any number of machines until you create a new one, and is shown only now. Creating a new token stops this one from enrolling more machines; machines already enrolled keep working. To remove the agent later: <code>sudo securovix-guard uninstall</code> (Linux) or <code>&amp; "C:\\Program Files\\Securovix Guard\\securovix-guard.exe" uninstall</code> (Windows).</p>`);
+    <p style="font-size:12px;color:var(--t3);margin:8px 0 0">These commands work for any number of machines for <b>24 hours</b>, and are shown only now. Opening this again makes new commands and stops these ones; machines already enrolled keep working. To update or reinstall a machine, run the command on that machine itself. To remove the agent later: <code>sudo securovix-guard uninstall</code> (Linux) or <code>&amp; "C:\\Program Files\\Securovix Guard\\securovix-guard.exe" uninstall</code> (Windows).</p>`);
 }
 async function guardMachine(id,type){
   if(type==='isolate-host'&&!confirm('Isolate this machine? It loses all network access except to Securovix until you reconnect it.'))return;

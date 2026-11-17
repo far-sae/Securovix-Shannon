@@ -1,18 +1,14 @@
 import type { BrowserContext, Route } from 'playwright';
-import { DetectionDetector } from './detector.js';
-import { EvasionStrategyEngine } from './strategy-engine.js';
 import type { EvidenceStore } from '../forensic/evidence-store.js';
+import type { DetectionDetector } from './detector.js';
+import type { EvasionStrategyEngine } from './strategy-engine.js';
 
 export class EvasionMiddleware {
   private detector: DetectionDetector;
   private engine: EvasionStrategyEngine;
   private evidenceStore?: EvidenceStore;
 
-  constructor(
-    engine: EvasionStrategyEngine,
-    detector: DetectionDetector,
-    evidenceStore?: EvidenceStore,
-  ) {
+  constructor(engine: EvasionStrategyEngine, detector: DetectionDetector, evidenceStore?: EvidenceStore) {
     this.engine = engine;
     this.detector = detector;
     this.evidenceStore = evidenceStore;
@@ -53,9 +49,7 @@ export class EvasionMiddleware {
           await this.engine.waitBeforeRequest();
 
           const retryResponse = await route.fetch({
-            headers: this.engine.transformHeaders(Object.fromEntries(
-              Object.entries(await request.allHeaders()),
-            )),
+            headers: this.engine.transformHeaders(Object.fromEntries(Object.entries(await request.allHeaders()))),
           });
 
           await route.fulfill({

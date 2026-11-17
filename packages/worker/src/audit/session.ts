@@ -1,4 +1,4 @@
-import { appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentMetrics } from '../workspace/session.js';
 import { AuditMutex } from './mutex.js';

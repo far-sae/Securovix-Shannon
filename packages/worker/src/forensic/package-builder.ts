@@ -1,6 +1,6 @@
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { EvidenceStore } from './evidence-store.js';
 import type { CustodyMetadata, EvidencePackage } from './types.js';
 
@@ -33,10 +33,7 @@ export class ForensicPackageBuilder {
     const agents = [...new Set(evidencePackage.entries.map((e) => e.agentName))];
     for (const agent of agents) {
       const agentEntries = evidencePackage.entries.filter((e) => e.agentName === agent);
-      writeFileSync(
-        join(packageDir, `agent-${agent}.json`),
-        JSON.stringify(agentEntries, null, 2),
-      );
+      writeFileSync(join(packageDir, `agent-${agent}.json`), JSON.stringify(agentEntries, null, 2));
     }
 
     return packageDir;

@@ -1,9 +1,9 @@
 import type { LLMClientFactory } from '../llm/client.js';
-import type { FindingInput, FindingVerdict, WarRoomResult, MitreMapping } from './types.js';
+import { AdversarySimAgent } from './adversary-sim.js';
 import { DebateProtocol } from './protocol.js';
 import { RedTeamLead } from './red-team-lead.js';
-import { AdversarySimAgent } from './adversary-sim.js';
 import { SkepticAgent } from './skeptic.js';
+import type { FindingInput, FindingVerdict, MitreMapping, WarRoomResult } from './types.js';
 
 const MAX_ROUNDS_PER_FINDING = 5;
 
@@ -25,7 +25,10 @@ export class WarRoomModerator {
     const skepticClient = this.llmFactory.createClient();
 
     const lead = new RedTeamLead(leadClient, this.llmFactory.resolveModelForAgent('war-room-lead'));
-    const adversary = new AdversarySimAgent(adversaryClient, this.llmFactory.resolveModelForAgent('war-room-adversary'));
+    const adversary = new AdversarySimAgent(
+      adversaryClient,
+      this.llmFactory.resolveModelForAgent('war-room-adversary'),
+    );
     const skeptic = new SkepticAgent(skepticClient, this.llmFactory.resolveModelForAgent('war-room-skeptic'));
 
     for (const finding of findings) {
@@ -68,17 +71,17 @@ export class WarRoomModerator {
       protocol.createMessage('red-team-lead', 'all', 'assertion', finding.id, leadAssessment);
 
       // Round step 2: Adversary Sim maps to MITRE ATT&CK
-      const adversaryResult = await adversary.analyze(finding, protocol.buildContextForAgent('adversary-sim', finding.id));
+      const adversaryResult = await adversary.analyze(
+        finding,
+        protocol.buildContextForAgent('adversary-sim', finding.id),
+      );
       protocol.createMessage('adversary-sim', 'all', 'evidence', finding.id, adversaryResult.assessment, {
         mitreMappings: adversaryResult.mappings,
       });
       mitreMappings = adversaryResult.mappings;
 
       // Round step 3: Skeptic challenges
-      const skepticChallenge = await skeptic.challenge(
-        finding,
-        protocol.buildContextForAgent('skeptic', finding.id),
-      );
+      const skepticChallenge = await skeptic.challenge(finding, protocol.buildContextForAgent('skeptic', finding.id));
       lastSkepticResponse = skepticChallenge;
 
       const challengeType = skepticChallenge.includes('CONCEDE') ? 'concession' : 'challenge';
@@ -137,7 +140,10 @@ export class WarRoomModerator {
     // Check if skeptic suggested severity adjustment
     const severities = ['critical', 'high', 'medium', 'low'];
     for (const sev of severities) {
-      if (skepticResponse.toLowerCase().includes(`severity.*${sev}`) || skepticResponse.toLowerCase().includes(`should be ${sev}`)) {
+      if (
+        skepticResponse.toLowerCase().includes(`severity.*${sev}`) ||
+        skepticResponse.toLowerCase().includes(`should be ${sev}`)
+      ) {
         return sev;
       }
     }

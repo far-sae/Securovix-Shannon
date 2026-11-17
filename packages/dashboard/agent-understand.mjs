@@ -59,7 +59,11 @@ export function analyzeSurface(surface = {}) {
     'high',
     'Prompt injection (LLM01) — direct & indirect',
     'an AI / chat feature is exposed; test whether attacker text overrides the model (proof-based, zero-FP)',
-    llmPaths.concat(postForms.filter((f) => (f.params || []).some((p) => /prompt|message|content|comment|note/i.test(p))).map((f) => f.url)),
+    llmPaths.concat(
+      postForms
+        .filter((f) => (f.params || []).some((p) => /prompt|message|content|comment|note/i.test(p)))
+        .map((f) => f.url),
+    ),
   );
   add(
     'medium',

@@ -7,11 +7,7 @@ export class BlueIR {
     private model: string,
   ) {}
 
-  async propose(
-    finding: PurpleFinding,
-    history: string,
-    defenderNote: string,
-  ): Promise<string> {
+  async propose(finding: PurpleFinding, history: string, defenderNote: string): Promise<string> {
     const prompt = [
       'You are the BLUE TEAM IR / DETECTION ENGINEER. You design detections and response playbooks for findings the Defender cannot fully close.',
       '',
@@ -38,11 +34,7 @@ export class BlueIR {
     return runText(this.client, this.model, prompt);
   }
 
-  async crossTeamReply(
-    finding: PurpleFinding,
-    history: string,
-    attackerCounter: string,
-  ): Promise<string> {
+  async crossTeamReply(finding: PurpleFinding, history: string, attackerCounter: string): Promise<string> {
     const prompt = [
       'You are the BLUE TEAM IR engineer replying to the Red Attacker.',
       'They have told you which of your detections fire and which they evade. Take it seriously and adapt.',

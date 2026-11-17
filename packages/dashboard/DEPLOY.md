@@ -30,6 +30,7 @@ host at `packages/dashboard/server.mjs` and it works. Docker is offered only for
 | `SHANNON_ALLOW_LOCAL_TARGETS` | (unset) | In production, targets on the server itself (`localhost`, `127.*`, `*.local`) are refused. Set `1` only on a private installation that tests sites on the same machine. |
 | `SHANNON_LOCAL_OPERATOR` | (unset) | Outside production, set `1` to treat a signed-in user on this machine as the platform operator. Never has an effect in production; operators are the emails in `SHANNON_PLATFORM_ADMINS`. |
 | `SHANNON_DEV_TOKENS` | (unset) | Outside production, set `1` to have sign-up, reset and invitation answers include the one-time token (for local development without an email provider). Never has an effect in production. |
+| `SHANNON_REQUIRE_EMAIL_VERIFICATION` | (unset) | In production with an email provider configured, new accounts must open a verification link before they can sign in or use any feature. Set `0` to switch that off, or `1` to force it on anywhere. |
 
 What is blocked: path traversal, NoSQL injection, prompt injection, and the strict (structural)
 forms of SQL injection, XSS, command injection, template injection, server-side request forgery and

@@ -17,7 +17,9 @@ import {
 import { fetchT, injReq, setScanOrigin } from './purple-engine.mjs';
 
 const servers = [];
-after(() => servers.forEach((s) => s.close()));
+after(() => {
+  for (const s of servers) s.close();
+});
 function mkHttp(handler) {
   const s = http.createServer(handler);
   servers.push(s);
@@ -34,7 +36,10 @@ test('access-control: horizontal BOLA + vertical BFLA proven; secure endpoints n
   const origin = await mkHttp((req, res) => {
     const u = new URL(req.url, 'http://x');
     const s = sid(req);
-    const send = (c, b) => (res.writeHead(c, { 'content-type': 'text/html' }), res.end(b));
+    const send = (c, b) => {
+      res.writeHead(c, { 'content-type': 'text/html' });
+      res.end(b);
+    };
     if (u.pathname === '/order') {
       if (!s) return send(401, 'login');
       const d = ORDERS[u.searchParams.get('id')];
