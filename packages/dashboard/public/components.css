@@ -15,7 +15,9 @@
 }
 
 /* Universal focus ring. Only keyboard-driven focus shows it. */
-*:focus { outline: none; }
+*:focus {
+  outline: none;
+}
 *:focus-visible {
   outline: 2px solid var(--acc);
   outline-offset: 2px;
@@ -80,11 +82,26 @@ textarea:focus-visible {
   background: currentColor;
   flex-shrink: 0;
 }
-.sev-critical { color: var(--sev-critical); background: var(--sev-critical-bg); }
-.sev-high     { color: var(--sev-high);     background: var(--sev-high-bg); }
-.sev-medium   { color: var(--sev-medium);   background: var(--sev-medium-bg); }
-.sev-low      { color: var(--sev-low);      background: var(--sev-low-bg); }
-.sev-info     { color: var(--sev-info);     background: var(--sev-info-bg); }
+.sev-critical {
+  color: var(--sev-critical);
+  background: var(--sev-critical-bg);
+}
+.sev-high {
+  color: var(--sev-high);
+  background: var(--sev-high-bg);
+}
+.sev-medium {
+  color: var(--sev-medium);
+  background: var(--sev-medium-bg);
+}
+.sev-low {
+  color: var(--sev-low);
+  background: var(--sev-low-bg);
+}
+.sev-info {
+  color: var(--sev-info);
+  background: var(--sev-info-bg);
+}
 
 /* Team tags */
 .team {
@@ -98,9 +115,18 @@ textarea:focus-visible {
   text-transform: uppercase;
   letter-spacing: 0.6px;
 }
-.team-red    { color: var(--rt); background: var(--red-bg); }
-.team-blue   { color: var(--bt); background: var(--blu-bg); }
-.team-purple { color: var(--pt); background: var(--pt-bg); }
+.team-red {
+  color: var(--rt);
+  background: var(--red-bg);
+}
+.team-blue {
+  color: var(--bt);
+  background: var(--blu-bg);
+}
+.team-purple {
+  color: var(--pt);
+  background: var(--pt-bg);
+}
 
 /* ---------- Empty state ---------- */
 .empty-state {
@@ -129,7 +155,7 @@ textarea:focus-visible {
   color: var(--t2);
 }
 .empty-state h3 {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
   font-size: var(--fs-h3);
   color: var(--t0);
   margin-bottom: var(--sp-2);
@@ -156,16 +182,37 @@ textarea:focus-visible {
   animation: skel-shimmer 1.4s var(--ease-in-out) infinite;
   display: block;
 }
-.skel-line { height: 12px; margin-bottom: 8px; }
-.skel-title { height: 22px; width: 60%; margin-bottom: 14px; }
-.skel-card { height: 120px; border-radius: var(--rs); }
-.skel-avatar { width: 42px; height: 42px; border-radius: 12px; }
+.skel-line {
+  height: 12px;
+  margin-bottom: 8px;
+}
+.skel-title {
+  height: 22px;
+  width: 60%;
+  margin-bottom: 14px;
+}
+.skel-card {
+  height: 120px;
+  border-radius: var(--rs);
+}
+.skel-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+}
 @keyframes skel-shimmer {
-  from { background-position: 200% 0; }
-  to   { background-position: -200% 0; }
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .skel { animation: none; background: var(--s2); }
+  .skel {
+    animation: none;
+    background: var(--s2);
+  }
 }
 
 /* ---------- Toast (one-shot copy/save feedback) ---------- */
@@ -195,8 +242,12 @@ textarea:focus-visible {
   transform: translateX(-50%) translateY(0);
   pointer-events: auto;
 }
-.toast.success { border-color: rgba(127, 166, 110, 0.35); }
-.toast.error   { border-color: rgba(226, 104, 71, 0.35); }
+.toast.success {
+  border-color: rgba(127, 166, 110, 0.35);
+}
+.toast.error {
+  border-color: rgba(226, 104, 71, 0.35);
+}
 
 /* ---------- Section heading (used by redesigned pages) ---------- */
 .section-eyebrow {
@@ -246,10 +297,26 @@ textarea:disabled {
 }
 
 /* ---------- Icon sizing ---------- */
-.ico    { width: 16px; height: 16px; flex-shrink: 0; }
-.ico-sm { width: 14px; height: 14px; flex-shrink: 0; }
-.ico-lg { width: 20px; height: 20px; flex-shrink: 0; }
-.ico-xl { width: 28px; height: 28px; flex-shrink: 0; }
+.ico {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.ico-sm {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.ico-lg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.ico-xl {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
 
 /* ---------- Sub-tabs (used by scan-detail group navigation) ---------- */
 .subtab:hover {
@@ -257,9 +324,15 @@ textarea:disabled {
   color: var(--t1) !important;
   border-color: var(--brd2) !important;
 }
-.subtab.team-red[aria-selected="true"]    { color: var(--rt) !important; }
-.subtab.team-blue[aria-selected="true"]   { color: var(--bt) !important; }
-.subtab.team-purple[aria-selected="true"] { color: var(--pt) !important; }
+.subtab.team-red[aria-selected="true"] {
+  color: var(--rt) !important;
+}
+.subtab.team-blue[aria-selected="true"] {
+  color: var(--bt) !important;
+}
+.subtab.team-purple[aria-selected="true"] {
+  color: var(--pt) !important;
+}
 .tabs-primary .tab.on {
   color: var(--t0);
   position: relative;
@@ -267,7 +340,9 @@ textarea:disabled {
 .tabs-primary .tab.on::after {
   content: "";
   position: absolute;
-  left: 0; right: 0; bottom: -1px;
+  left: 0;
+  right: 0;
+  bottom: -1px;
   height: 2px;
   background: var(--acc);
   border-radius: 2px 2px 0 0;
@@ -279,15 +354,14 @@ textarea:disabled {
   padding: 30px 32px 26px;
   border-radius: 18px;
   border: 1px solid var(--brd);
-  background:
-    radial-gradient(700px 280px at 0% 0%, rgba(217, 119, 87, 0.10), transparent 60%),
+  background: radial-gradient(700px 280px at 0% 0%, rgba(217, 119, 87, 0.1), transparent 60%),
     radial-gradient(600px 220px at 100% 100%, rgba(91, 148, 196, 0.07), transparent 60%),
     linear-gradient(180deg, var(--s1), var(--bg2));
   overflow: hidden;
   margin-bottom: 18px;
 }
 .cs-hero h1 {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
   font-size: var(--fs-h1);
   font-weight: 700;
   letter-spacing: -.5px;
@@ -331,7 +405,9 @@ textarea:disabled {
   font-size: 12.5px;
   transition: background var(--fast), color var(--fast);
 }
-.cs-mode:hover { color: var(--t0); }
+.cs-mode:hover {
+  color: var(--t0);
+}
 .cs-mode.on {
   background: var(--glow);
   color: var(--t0);
@@ -349,7 +425,9 @@ textarea:disabled {
   transition: border-color var(--fast), background var(--fast);
   cursor: pointer;
 }
-.cs-dz:hover { border-color: var(--brd3); }
+.cs-dz:hover {
+  border-color: var(--brd3);
+}
 .cs-dz.drag {
   border-color: var(--acc);
   background: var(--glow);
@@ -367,7 +445,7 @@ textarea:disabled {
   color: var(--acc2);
 }
 .cs-dz h3 {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
   font-size: 18px;
   color: var(--t0);
   margin-bottom: 6px;
@@ -394,7 +472,7 @@ textarea:disabled {
   border-radius: var(--rs);
   max-height: 460px;
   overflow: auto;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 12px;
   padding: 10px 0;
 }
@@ -409,22 +487,41 @@ textarea:disabled {
   border-radius: 0;
   white-space: nowrap;
 }
-.cs-tree-row:hover { background: var(--s2); }
+.cs-tree-row:hover {
+  background: var(--s2);
+}
 .cs-tree-row input[type="checkbox"] {
   accent-color: var(--acc);
-  width: 14px; height: 14px;
+  width: 14px;
+  height: 14px;
 }
-.cs-tree-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cs-tree-row .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .cs-tree-row .meta {
   color: var(--t3);
   font-size: 10.5px;
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
 }
-.cs-tree-row.dir { color: var(--t0); font-weight: 600; }
-.cs-tree-row.skipped { color: var(--t4); }
-.cs-tree-row.scanned .name { color: var(--grn); }
-.cs-tree-row.has-findings .name { color: var(--ylw); }
-.cs-tree-row.has-critical .name { color: var(--red); }
+.cs-tree-row.dir {
+  color: var(--t0);
+  font-weight: 600;
+}
+.cs-tree-row.skipped {
+  color: var(--t4);
+}
+.cs-tree-row.scanned .name {
+  color: var(--grn);
+}
+.cs-tree-row.has-findings .name {
+  color: var(--ylw);
+}
+.cs-tree-row.has-critical .name {
+  color: var(--red);
+}
 
 /* Project summary cards */
 .cs-proj-summary {
@@ -445,7 +542,7 @@ textarea:disabled {
   margin-bottom: 6px;
 }
 .cs-proj-summary .crd-v {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
   font-size: 26px;
   font-weight: 700;
   color: var(--t0);

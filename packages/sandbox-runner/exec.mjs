@@ -21,12 +21,34 @@ export function validateRunRequest(body = {}) {
 
 export function dockerArgs({ lang, input, name }) {
   return [
-    'run', '--rm', '-i', '--network', 'none', '--cap-drop', 'ALL',
-    '--security-opt', 'no-new-privileges', '--read-only',
-    '--tmpfs', '/tmp:rw,size=32m,noexec,nosuid', '--user', '65534:65534',
-    '--memory', '256m', '--memory-swap', '256m', '--cpus', '0.5', '--pids-limit', '128',
-    '--name', name, '-e', `SX_INPUT=${Buffer.from(input).toString('base64')}`,
-    IMAGES[lang], ...COMMANDS[lang],
+    'run',
+    '--rm',
+    '-i',
+    '--network',
+    'none',
+    '--cap-drop',
+    'ALL',
+    '--security-opt',
+    'no-new-privileges',
+    '--read-only',
+    '--tmpfs',
+    '/tmp:rw,size=32m,noexec,nosuid',
+    '--user',
+    '65534:65534',
+    '--memory',
+    '256m',
+    '--memory-swap',
+    '256m',
+    '--cpus',
+    '0.5',
+    '--pids-limit',
+    '128',
+    '--name',
+    name,
+    '-e',
+    `SX_INPUT=${Buffer.from(input).toString('base64')}`,
+    IMAGES[lang],
+    ...COMMANDS[lang],
   ];
 }
 
@@ -41,21 +63,51 @@ export async function dockerAvailable() {
 export async function executeSandbox(body) {
   const job = validateRunRequest(body);
   if (job.error) return { ok: false, status: 400, error: job.error };
-  if (!(await dockerAvailable())) return { ok: false, status: 503, error: 'Docker is unavailable on the sandbox runner' };
+  if (!(await dockerAvailable()))
+    return { ok: false, status: 503, error: 'Docker is unavailable on the sandbox runner' };
   const name = `sxsbx-${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
   const args = dockerArgs({ ...job, name });
   return new Promise((resolve) => {
-    let stdout = ''; let stderr = ''; let done = false;
-    const finish = (result) => { if (!done) { done = true; clearTimeout(timer); resolve(result); } };
-    const timer = setTimeout(() => {
-      spawn('docker', ['kill', name], { stdio: 'ignore' }).on('error', () => {});
-      finish({ ok: false, timedOut: true, image: IMAGES[job.lang], stdout: stdout.slice(0, 200_000), stderr: 'sandbox timed out' });
-    }, (job.timeoutSecs + 5) * 1000);
+    let stdout = '';
+    let stderr = '';
+    let done = false;
+    const finish = (result) => {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        resolve(result);
+      }
+    };
+    const timer = setTimeout(
+      () => {
+        spawn('docker', ['kill', name], { stdio: 'ignore' }).on('error', () => {});
+        finish({
+          ok: false,
+          timedOut: true,
+          image: IMAGES[job.lang],
+          stdout: stdout.slice(0, 200_000),
+          stderr: 'sandbox timed out',
+        });
+      },
+      (job.timeoutSecs + 5) * 1000,
+    );
     const p = spawn('docker', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     p.on('error', (error) => finish({ ok: false, stderr: `docker spawn failed: ${error.message}`, stdout: '' }));
-    p.stdout.on('data', (chunk) => { if (stdout.length < 200_000) stdout += chunk; });
-    p.stderr.on('data', (chunk) => { if (stderr.length < 20_000) stderr += chunk; });
-    p.on('close', (code) => finish({ ok: code === 0, code, image: IMAGES[job.lang], stdout: stdout.slice(0, 200_000), stderr: stderr.slice(0, 20_000) }));
+    p.stdout.on('data', (chunk) => {
+      if (stdout.length < 200_000) stdout += chunk;
+    });
+    p.stderr.on('data', (chunk) => {
+      if (stderr.length < 20_000) stderr += chunk;
+    });
+    p.on('close', (code) =>
+      finish({
+        ok: code === 0,
+        code,
+        image: IMAGES[job.lang],
+        stdout: stdout.slice(0, 200_000),
+        stderr: stderr.slice(0, 20_000),
+      }),
+    );
     p.stdin.end(job.code);
   });
 }

@@ -2,11 +2,11 @@ export class TimingController {
   private baseDelayMs: number;
   private currentDelayMs: number;
   private jitterRange: number;
-  private consecutiveSuccesses: number = 0;
+  private consecutiveSuccesses = 0;
   private readonly minDelayMs = 100;
   private readonly maxDelayMs = 30_000;
 
-  constructor(baseDelayMs: number = 500) {
+  constructor(baseDelayMs = 500) {
     this.baseDelayMs = baseDelayMs;
     this.currentDelayMs = baseDelayMs;
     this.jitterRange = baseDelayMs * 0.3;

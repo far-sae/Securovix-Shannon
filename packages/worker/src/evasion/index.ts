@@ -1,9 +1,9 @@
-export {
-  type DetectionSignal,
-  type DetectionType,
-  type EvasionTechnique,
-  type EvasionStrategy,
-  type EvasionProfile,
+export type {
+  DetectionSignal,
+  DetectionType,
+  EvasionTechnique,
+  EvasionStrategy,
+  EvasionProfile,
 } from './types.js';
 export { DetectionDetector } from './detector.js';
 export { PayloadEncoder } from './payload-encoder.js';

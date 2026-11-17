@@ -16,7 +16,9 @@ async function request(name, url, { expected, authorization } = {}) {
   });
   const text = await response.text();
   let body = null;
-  try { body = JSON.parse(text); } catch {}
+  try {
+    body = JSON.parse(text);
+  } catch {}
   if (!expected.includes(response.status)) {
     throw new Error(`${name} returned HTTP ${response.status}: ${text.slice(0, 240)}`);
   }
@@ -38,7 +40,8 @@ async function main() {
   }
 
   const edgeHealth = await request('Defender Edge health', `${edge}/__edge/health`, { expected: [200] });
-  if (edgeHealth?.ok !== true || !Number.isFinite(Number(edgeHealth.routes))) throw new Error('Defender Edge health payload is invalid');
+  if (edgeHealth?.ok !== true || !Number.isFinite(Number(edgeHealth.routes)))
+    throw new Error('Defender Edge health payload is invalid');
 
   await request('Sandbox anonymous denial', `${sandbox}/health`, { expected: [401] });
   if (sandboxToken) {

@@ -1,9 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { AttackChain, VulnNode, Edge, ChainAnalysisResult } from './types.js';
-import { AttackGraph } from './graph.js';
 import type { LLMClientFactory } from '../llm/client.js';
 import { loadPrompt } from '../prompts/loader.js';
 import { unwrap } from '../result.js';
+import type { AttackGraph } from './graph.js';
+import type { AttackChain, ChainAnalysisResult, Edge, VulnNode } from './types.js';
 
 const OBJECTIVES = [
   'remote code execution',
@@ -81,12 +81,12 @@ export class ChainScorer {
   private mapToMitre(path: VulnNode[]): string[] {
     const tactics: string[] = [];
     const categoryToTactic: Record<string, string[]> = {
-      'sqli': ['TA0001', 'TA0006', 'TA0009'],
-      'xss': ['TA0001', 'TA0006'],
-      'ssrf': ['TA0008', 'TA0007'],
+      sqli: ['TA0001', 'TA0006', 'TA0009'],
+      xss: ['TA0001', 'TA0006'],
+      ssrf: ['TA0008', 'TA0007'],
       'auth-bypass': ['TA0001', 'TA0004'],
       'authz-bypass': ['TA0004', 'TA0005'],
-      'rce': ['TA0002', 'TA0003'],
+      rce: ['TA0002', 'TA0003'],
       'credential-theft': ['TA0006'],
       'business-logic': ['TA0001', 'TA0040'],
       'rce-ssti': ['TA0002', 'TA0003'],
@@ -114,19 +114,21 @@ export class ChainScorer {
   ): Promise<AttackChain[]> {
     if (chains.length === 0) return [];
 
-    const prompt = unwrap(loadPrompt('chain-reasoning', {
-      targetUrl,
-      configContext: JSON.stringify(
-        chains.map((c) => ({
-          id: c.id,
-          objective: c.objective,
-          steps: c.nodes.map((n) => `${n.category}: ${n.endpoint} (${n.severity})`),
-          score: c.compositeScore,
-        })),
-        null,
-        2,
-      ),
-    }));
+    const prompt = unwrap(
+      loadPrompt('chain-reasoning', {
+        targetUrl,
+        configContext: JSON.stringify(
+          chains.map((c) => ({
+            id: c.id,
+            objective: c.objective,
+            steps: c.nodes.map((n) => `${n.category}: ${n.endpoint} (${n.severity})`),
+            score: c.compositeScore,
+          })),
+          null,
+          2,
+        ),
+      }),
+    );
 
     const client = this.llmFactory.createClient();
     const model = this.llmFactory.resolveModelForAgent('chain-analysis');

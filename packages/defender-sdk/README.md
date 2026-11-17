@@ -146,7 +146,8 @@ The web adapter takes the same `mode`, `apiKey`, `endpoint`, `skip`, `honeypot`,
 | Option | Default | Meaning |
 |---|---|---|
 | `ban` | `null` | `{ threshold, windowMs, ttlMs }` — refuse an address after repeated confirmed attacks. A honeypot or attack-tool hit bans at once. |
-| `getIp` | platform headers | `(request) => string`. The default reads `x-vercel-forwarded-for`, `cf-connecting-ip`, `x-real-ip`, then `x-forwarded-for` — set by the platform on Vercel and Cloudflare. Behind another proxy, supply your own. |
+| `platform` | detected | `'vercel'`, `'cloudflare'` or `'none'`: which host's client-address header to trust. Vercel overwrites `x-vercel-forwarded-for`, Cloudflare overwrites `cf-connecting-ip`; on any other host a visitor can send these headers themselves, so set `'none'` (bans and rate limits are then off) or supply `getIp`. Cloudflare Workers is detected automatically. |
+| `getIp` | platform headers | `(request) => string`. Your own way to read the visitor's address, for hosts other than Vercel and Cloudflare. |
 | `maxBody` | 256 KB | Text bodies up to this size are inspected. Larger bodies and uploads are not read. |
 
 Things to know:

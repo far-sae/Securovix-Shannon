@@ -1,9 +1,9 @@
-import type { AttackChain, VulnNode } from './types.js';
-import type { LLMClientFactory } from '../llm/client.js';
 import type { EvidenceStore } from '../forensic/evidence-store.js';
 import type { CustodyMetadata } from '../forensic/types.js';
+import type { LLMClientFactory } from '../llm/client.js';
 import { loadPrompt } from '../prompts/loader.js';
 import { unwrap } from '../result.js';
+import type { AttackChain, VulnNode } from './types.js';
 
 export interface ChainExploitResult {
   chainId: string;
@@ -95,18 +95,18 @@ export class ChainExecutor {
       `You are executing step ${stepNumber} of a multi-step attack chain.`,
       `Target: ${targetUrl}`,
       `Current access level: ${currentAccess.join(', ') || 'unauthenticated'}`,
-      ``,
-      `Exploit this vulnerability:`,
+      '',
+      'Exploit this vulnerability:',
       `- Category: ${node.category}`,
       `- Endpoint: ${node.endpoint}`,
       `- Severity: ${node.severity}`,
       `- Evidence so far: ${node.evidence}`,
       `- Goal: Achieve these postconditions: ${node.postconditions.join(', ')}`,
-      ``,
-      `Provide:`,
-      `1. The exact exploit payload (curl command or HTTP request)`,
-      `2. Expected response that confirms success`,
-      `3. What access/capability is gained after exploitation`,
+      '',
+      'Provide:',
+      '1. The exact exploit payload (curl command or HTTP request)',
+      '2. Expected response that confirms success',
+      '3. What access/capability is gained after exploitation',
     ].join('\n');
 
     const response = await client.messages.create({

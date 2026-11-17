@@ -1,10 +1,10 @@
-export {
-  type AgentRole,
-  type WarRoomMessage,
-  type MitreMapping,
-  type FindingVerdict,
-  type WarRoomResult,
-  type FindingInput,
+export type {
+  AgentRole,
+  WarRoomMessage,
+  MitreMapping,
+  FindingVerdict,
+  WarRoomResult,
+  FindingInput,
 } from './types.js';
 export { DebateProtocol } from './protocol.js';
 export { RedTeamLead } from './red-team-lead.js';

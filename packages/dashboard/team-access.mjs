@@ -53,7 +53,8 @@ export function canChangeMember(actor, target, nextRole) {
 export function canTransitionFinding(role, from, to) {
   if (!FINDING_STATUSES.includes(to)) return false;
   if (to === 'risk-accepted' || to === 'false-positive') return can(role, 'findings.triage');
-  if (to === 'ready-for-retest' || to === 'resolved') return can(role, 'findings.remediate') || can(role, 'findings.triage');
+  if (to === 'ready-for-retest' || to === 'resolved')
+    return can(role, 'findings.remediate') || can(role, 'findings.triage');
   return can(role, 'findings.triage') || can(role, 'findings.remediate');
 }
 

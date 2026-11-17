@@ -1,31 +1,27 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import _crypto from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
-import { SCAN_PHASES, createSeen, progressSince } from './scan-progress.mjs';
-import { DEFENDER_RULES, normalizePolicy, policyFor, sdkBundle } from './defender-policy.mjs';
-import { createOwnTestLedger, isOwnTest, signOwnTest, siteName, verifyOwnTest } from './defender-own-test.mjs';
-import {
-  CODE_SCAN_MAX_CHARS,
-  FILE_IS_DATA_RULE,
-  checkScanResult,
-  fileBlock,
-  outputBudget,
-  parseModelJson,
-  safeFilename,
-} from './code-scan.mjs';
 import express from 'express';
 import QRCode from 'qrcode';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { crawl } from '../../crawler.mjs';
 import { runDefender } from '../../defender/agent.mjs';
 import { httpProxyConnector } from '../../defender/connectors.mjs';
+import { createSelfDefense } from '../../defender/middleware.mjs';
 import { cmdContext, sqliExtract, ssrfMetadata } from '../../impact.mjs';
 import { checkIpControl, ipInCidr, ipVerifyToken, parseCidr, verificationInstructions } from '../../ip-ownership.mjs';
 import { sendMonitorAlert } from '../../monitor.mjs';
@@ -40,81 +36,15 @@ import {
   setSessionHeaders,
   setTestMark,
 } from '../../purple-engine.mjs';
-import { createSelfDefense } from '../../defender/middleware.mjs';
 import { diffRuns } from './agent-history.mjs';
 import { runAgentCampaign, runAgentLoop } from './agent-loop.mjs';
-import { runSecurityTeam } from './agent-team.mjs';
 import { toJson, toMarkdown, toSarif } from './agent-report.mjs';
+import { runSecurityTeam } from './agent-team.mjs';
 import { analyzeSurface } from './agent-understand.mjs';
-import { locateFinding } from './code-locate.mjs';
-import { evaluateMatcher, sanitizeCheck } from './custom-check.mjs';
-import { analyzePersonalThreat } from './personal-shield.mjs';
+import { describeAiError, runChat, runResearch } from './assistant-ai.mjs';
 import {
-  appendDefenseEvent,
-  appendAudit,
-  addVerified,
-  allMonitors,
-  createOrganization,
-  getFinding,
-  getMembership,
-  getOrganization,
-  getAgentRun,
-  getScanOwner,
-  initDb,
-  isSupabase,
-  listAudit,
-  listDefenseEventOrgIds,
-  listDefenseEvents,
-  listDefenseEventsSince,
-  listEdgeRoutes,
-  listAgentRuns,
-  listFindings,
-  listMembers,
-  listMonitors,
-  listOrganizations,
-  listProjects,
-  loadUserSettings,
-  loadLeaderboard,
-  loadUsers,
-  loadVerified,
-  removeMembership,
-  removeEdgeRoute,
-  removeMonitor,
-  removeVerified,
-  refreshDbIfStale,
-  saveAgentRun,
-  saveFinding,
-  saveEdgeRoute,
-  saveLeaderboard,
-  saveMembership,
-  saveMonitor,
-  saveProject,
-  saveScanOwner,
-  saveUserSettings,
-  saveUsers,
-  touchMonitor,
-  updateDefenseEvent,
-  waitForUserWrites,
-} from './db.mjs';
-import {
-  cancelOrder,
-  catalogItem,
-  commerceEnabled,
-  creditBalance,
-  creditGrantFor,
-  markCardPaid,
-  newOrder,
-  paymentInstructions,
-  paymentMethods,
-  publicCatalog,
-  reviewOrder,
-  submitEvidence,
-} from './commerce.mjs';
-import { openPullRequest } from './github-pr.mjs';
-import { renderPricingPage } from './pricing-page.mjs';
-import {
-  ASSISTANT_INSTRUCTIONS,
   API_SCOPES,
+  ASSISTANT_INSTRUCTIONS,
   CHAT_LIMITS,
   RESEARCH_INSTRUCTIONS,
   SHARE_TYPES,
@@ -136,90 +66,148 @@ import {
   toApiMessages,
   v1RouteScope,
 } from './assistant.mjs';
-import { describeAiError, runChat, runResearch } from './assistant-ai.mjs';
-import { renderMarkdown, renderShareGone, renderSharedConversation, renderSharedResearch } from './share-page.mjs';
-import { renderSecurityArea, renderSecurityIndex, renderSitemap, securityArea } from './security-pages.mjs';
-import { gatherLeads } from './leads.mjs';
-import { diffToDelta, dueMonitors } from './monitor-schedule.mjs';
-import { applyLineFix, generatePatch } from './patch.mjs';
-import { runInSandbox, sandboxAvailable } from './sandbox.mjs';
+import { locateFinding } from './code-locate.mjs';
+import {
+  CODE_SCAN_MAX_CHARS,
+  FILE_IS_DATA_RULE,
+  checkScanResult,
+  fileBlock,
+  outputBudget,
+  parseModelJson,
+  safeFilename,
+} from './code-scan.mjs';
+import {
+  cancelOrder,
+  catalogItem,
+  commerceEnabled,
+  creditBalance,
+  creditGrantFor,
+  markCardPaid,
+  newOrder,
+  paymentInstructions,
+  paymentMethods,
+  publicCatalog,
+  reviewOrder,
+  submitEvidence,
+} from './commerce.mjs';
+import { evaluateMatcher, sanitizeCheck } from './custom-check.mjs';
+import {
+  addVerified,
+  allMonitors,
+  appendAudit,
+  appendDefenseEvent,
+  createOrganization,
+  getAgentRun,
+  getFinding,
+  getMembership,
+  getOrganization,
+  getScanOwner,
+  initDb,
+  isSupabase,
+  listAgentRuns,
+  listAudit,
+  listDefenseEventOrgIds,
+  listDefenseEvents,
+  listDefenseEventsSince,
+  listEdgeRoutes,
+  listFindings,
+  listMembers,
+  listMonitors,
+  listOrganizations,
+  listProjects,
+  loadLeaderboard,
+  loadUserSettings,
+  loadUsers,
+  loadVerified,
+  refreshDbIfStale,
+  removeEdgeRoute,
+  removeMembership,
+  removeMonitor,
+  removeVerified,
+  saveAgentRun,
+  saveEdgeRoute,
+  saveFinding,
+  saveLeaderboard,
+  saveMembership,
+  saveMonitor,
+  saveProject,
+  saveScanOwner,
+  saveUserSettings,
+  saveUsers,
+  touchMonitor,
+  updateDefenseEvent,
+  waitForUserWrites,
+} from './db.mjs';
+import { DAY, buildDefenseDigest, lastCompleteWeek } from './defender-digest.mjs';
+import { cleanDetection, createIntakeGate } from './defender-intake.mjs';
+import { createOwnTestLedger, isOwnTest, signOwnTest, siteName, verifyOwnTest } from './defender-own-test.mjs';
+import { DEFENDER_RULES, normalizePolicy, policyFor, sdkBundle } from './defender-policy.mjs';
 import {
   addCreditGrant,
   apiKeys,
   appendOperationalEvent,
+  assistantConversations,
+  assistantMemory,
+  consumeAuthToken,
+  consumeCredits,
+  consumeScanAuthGrant,
+  consumeUsage,
+  createAuthToken,
+  createScanAuthGrant,
   defenderBans,
+  deleteDefenseAsset,
+  deleteIntegration,
+  deleteOrgSecret,
+  enqueueJob,
+  enterpriseHealth,
+  findAuthToken,
+  findSsoIdentity,
+  getCommerceOrder,
+  getDefenseProgram,
+  getEntitlement,
+  getIntegration,
+  getJob,
+  getOrgSecret,
   guardActions,
   guardAgents,
   guardCommands,
   guardConnections,
   guardEndpoint,
   guardHashes,
-  guardSamples,
   guardIncidents,
+  guardSamples,
   guardSettings,
   guardState,
-  assistantConversations,
-  assistantMemory,
-  researchReports,
-  shareLinks,
-  consumeCredits,
-  consumeScanAuthGrant,
-  consumeUsage,
-  consumeAuthToken,
-  createScanAuthGrant,
-  createAuthToken,
-  deleteOrgSecret,
-  deleteDefenseAsset,
-  deleteIntegration,
-  enqueueJob,
-  enterpriseHealth,
-  findAuthToken,
-  findSsoIdentity,
-  getJob,
-  getIntegration,
-  getCommerceOrder,
-  getEntitlement,
-  getDefenseProgram,
-  getOrgSecret,
   listArtifacts,
   listCommerceOrders,
   listCreditGrants,
-  listDeliveries,
   listDefenseAssets,
   listDefenseCycles,
+  listDeliveries,
   listIntegrations,
   listJobs,
-  listSoftwareComponents,
-  listVulnerabilityMatches,
-  listUsage,
   listOperationalEvents,
   listOrgSecrets,
+  listSoftwareComponents,
+  listUsage,
+  listVulnerabilityMatches,
   readArtifact,
+  researchReports,
   saveCommerceOrder,
-  saveIntegration,
-  saveEntitlement,
   saveDefenseAsset,
   saveDefenseProgram,
+  saveEntitlement,
+  saveIntegration,
   saveOrgSecret,
   saveSsoIdentity,
+  shareLinks,
   signedArtifactUrl,
-  upsertSoftwareComponents,
   updateDefenseAsset,
   updateJob,
   updateVulnerabilityMatch,
+  upsertSoftwareComponents,
 } from './enterprise-db.mjs';
 import { queueIntegrationEvent, sendEmail } from './enterprise-integrations.mjs';
-import { buildDefenseDigest, DAY, lastCompleteWeek } from './defender-digest.mjs';
-import { createLoginGuard } from './login-guard.mjs';
-import { createGuardEngine } from './guard/engine.mjs';
-import { createGoogleProvider } from './guard/google.mjs';
-import { loadBadIps } from './guard/intel.mjs';
-import { createMicrosoftProvider } from './guard/microsoft.mjs';
-import { registerGuardRoutes } from './guard/routes.mjs';
-import { createEndpointService } from './guard/endpoint.mjs';
-import { registerEndpointRoutes } from './guard/endpoint-routes.mjs';
-import { createCapeClient } from './guard/sandbox.mjs';
-import { createSimulationProvider } from './guard/simulate.mjs';
 import {
   consumeRecoveryCode,
   createRecoveryCodes,
@@ -235,14 +223,29 @@ import {
   verifyChallenge,
   verifyTotp,
 } from './enterprise-security.mjs';
-import {
-  ROLES,
-  can,
-  canChangeMember,
-  sanitizeLabel,
-  slugifyOrg,
-  validateFindingTransition,
-} from './team-access.mjs';
+import { openPullRequest } from './github-pr.mjs';
+import { registerEndpointRoutes } from './guard/endpoint-routes.mjs';
+import { createEndpointService } from './guard/endpoint.mjs';
+import { createGuardEngine } from './guard/engine.mjs';
+import { createGoogleProvider } from './guard/google.mjs';
+import { loadBadIps } from './guard/intel.mjs';
+import { createMicrosoftProvider } from './guard/microsoft.mjs';
+import { registerGuardRoutes } from './guard/routes.mjs';
+import { createCapeClient } from './guard/sandbox.mjs';
+import { createSimulationProvider } from './guard/simulate.mjs';
+import { gatherLeads } from './leads.mjs';
+import { createLoginGuard } from './login-guard.mjs';
+import { diffToDelta, dueMonitors } from './monitor-schedule.mjs';
+import { applyLineFix, generatePatch } from './patch.mjs';
+import { analyzePersonalThreat } from './personal-shield.mjs';
+import { renderPricingPage } from './pricing-page.mjs';
+import { isLocalHost, isPrivateAddress, publicOriginAllowed } from './public-address.mjs';
+import { runInSandbox, sandboxAvailable } from './sandbox.mjs';
+import { SCAN_PHASES, createSeen, progressSince } from './scan-progress.mjs';
+import { renderSecurityArea, renderSecurityIndex, renderSitemap, securityArea } from './security-pages.mjs';
+import { renderMarkdown, renderShareGone, renderSharedConversation, renderSharedResearch } from './share-page.mjs';
+import { refusedBy } from './site-firewall.mjs';
+import { ROLES, can, canChangeMember, sanitizeLabel, slugifyOrg, validateFindingTransition } from './team-access.mjs';
 import { fetchGithubSbom, manualSoftwareComponent, parseSbom } from './vulnerability-management.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -260,18 +263,23 @@ const app = express();
 // Google OAuth redirect URI is built with http://, which Google rejects.
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
-app.use(express.json({
-  limit: '2mb',
-  verify(req, _res, buffer) {
-    if (req.originalUrl === '/api/billing/webhook') req.rawBody = Buffer.from(buffer);
-  },
-}));
+app.use(
+  express.json({
+    limit: '2mb',
+    verify(req, _res, buffer) {
+      if (req.originalUrl === '/api/billing/webhook') req.rawBody = Buffer.from(buffer);
+    },
+  }),
+);
 app.use((req, res, next) => {
   res.setHeader('x-content-type-options', 'nosniff');
   res.setHeader('x-frame-options', 'DENY');
   res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
   res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('cross-origin-opener-policy', 'same-origin');
+  // API answers carry account data. Neither a browser nor a proxy keeps a copy. (Event streams and
+  // downloads set their own value afterwards.)
+  if (req.path.startsWith('/api/')) res.setHeader('cache-control', 'no-store');
   // HTTPS only (trust proxy makes req.secure reflect the edge). Never sent over plain local http.
   if (req.secure) res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
   res.setHeader(
@@ -302,6 +310,11 @@ function rateLimit(key, { limit, windowMs }) {
   const now = Date.now();
   const rec = RATE_BUCKETS.get(key);
   if (!rec || now >= rec.resetAt) {
+    // Finished windows are dropped once the table grows, so many distinct addresses cannot fill memory.
+    if (RATE_BUCKETS.size >= 20_000) {
+      for (const [k, v] of RATE_BUCKETS) if (now >= v.resetAt) RATE_BUCKETS.delete(k);
+      while (RATE_BUCKETS.size >= 20_000) RATE_BUCKETS.delete(RATE_BUCKETS.keys().next().value);
+    }
     RATE_BUCKETS.set(key, { count: 1, resetAt: now + windowMs });
     return { ok: true };
   }
@@ -343,18 +356,20 @@ const DEFENDER_BAN_STORE = {
     for (const row of rows) if (!(row.until > now)) defenderBans.remove(row.id).catch(() => {});
     return rows.filter((row) => row.until > now);
   },
-  save: ({ ip, until, reason }) => defenderBans.save({ id: ip, ip, until, reason: reason || null, createdAt: Date.now() }),
+  save: ({ ip, until, reason }) =>
+    defenderBans.save({ id: ip, ip, until, reason: reason || null, createdAt: Date.now() }),
   remove: (ip) => defenderBans.remove(ip),
 };
-const SELF_DEFENSE = process.env.SHANNON_DEFEND_SELF === '1'
-  ? createSelfDefense({
-      mode: process.env.SHANNON_DEFEND_SELF_MODE === 'enforce' ? 'enforce' : 'monitor',
-      ban: SELF_BAN,
-      banStore: DEFENDER_BAN_STORE,
-      honeypot: process.env.SHANNON_DEFEND_SELF_HONEYPOT === '0' ? false : undefined,
-      scanners: process.env.SHANNON_DEFEND_SELF_SCANNERS === '0' ? false : undefined,
-    })
-  : null;
+const SELF_DEFENSE =
+  process.env.SHANNON_DEFEND_SELF === '1'
+    ? createSelfDefense({
+        mode: process.env.SHANNON_DEFEND_SELF_MODE === 'enforce' ? 'enforce' : 'monitor',
+        ban: SELF_BAN,
+        banStore: DEFENDER_BAN_STORE,
+        honeypot: process.env.SHANNON_DEFEND_SELF_HONEYPOT === '0' ? false : undefined,
+        scanners: process.env.SHANNON_DEFEND_SELF_SCANNERS === '0' ? false : undefined,
+      })
+    : null;
 // Live subscribers of /api/defender/self/events (platform operators watching the Defender page).
 const SELF_SSE = new Set();
 function selfSseBroadcast(payload) {
@@ -367,7 +382,9 @@ function selfSseBroadcast(payload) {
 }
 if (SELF_DEFENSE) {
   app.use(SELF_DEFENSE.middleware);
-  console.log(`[defender] self-defense active in ${SELF_DEFENSE.getMode()} mode; repeat-offender ban ${SELF_BAN.enabled ? (SELF_BAN.enforce ? 'ENFORCING' : 'report-only') : 'off'}`);
+  console.log(
+    `[defender] self-defense active in ${SELF_DEFENSE.getMode()} mode; repeat-offender ban ${SELF_BAN.enabled ? (SELF_BAN.enforce ? 'ENFORCING' : 'report-only') : 'off'}`,
+  );
   // Every detection and ban decision: stream it live; and when a platform organization is
   // configured, persist it and fan it out to that organization's alert integrations exactly as
   // SDK and edge detections already are. Detect-only classes (an apostrophe, an HTML tag) are
@@ -386,7 +403,9 @@ if (SELF_DEFENSE) {
       userId: null,
       at: payload.at,
       method: isBan ? 'BAN' : String(payload.method || '').slice(0, 10),
-      url: isBan ? `repeat offender ${payload.ip} (${payload.count} confirmed attacks)` : String(payload.url || '').slice(0, 300),
+      url: isBan
+        ? `repeat offender ${payload.ip} (${payload.count} confirmed attacks)`
+        : String(payload.url || '').slice(0, 300),
       cls: isBan ? 'repeat-offender' : String(payload.cls || '').slice(0, 60),
       // eventText() in enterprise-integrations titles a message as data.title || event.type; without
       // this a Slack alert would read "[HIGH] defender.detection (open)".
@@ -395,7 +414,7 @@ if (SELF_DEFENSE) {
           ? `Scanner ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after requesting a honeypot path on the dashboard`
           : payload.reason === 'scanner-tool'
             ? `Attack tool at ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after identifying itself to the dashboard`
-          : `Repeat offender ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after ${payload.count} confirmed attacks on the dashboard`
+            : `Repeat offender ${payload.ip} ${payload.enforce ? 'banned' : 'would be banned'} after ${payload.count} confirmed attacks on the dashboard`
         : `${String(payload.cls || 'attack')} ${enforced ? 'blocked' : 'detected'} on the dashboard: ${String(payload.method || '')} ${String(payload.url || '').slice(0, 120)}`,
       enforced,
       srcIp: payload.srcIp || payload.ip || null,
@@ -406,11 +425,12 @@ if (SELF_DEFENSE) {
       createdAt: Date.now(),
     };
     appendDefenseEvent(event);
-    queueIntegrationEvent(orgId, { id: `defender:${event.id}`, type: 'defender.detection', at: event.at, data: event }, null)
-      .catch((error) => console.error('[defender] self-defense integration event failed:', error.message));
+    sendDefenseAlert(orgId, event, null, 'self');
   });
   if (!process.env.SHANNON_PLATFORM_ORG_ID) {
-    console.warn('[defender] SHANNON_PLATFORM_ORG_ID is not set — self-defense detections stream live to operators but are not persisted or sent to alert integrations');
+    console.warn(
+      '[defender] SHANNON_PLATFORM_ORG_ID is not set — self-defense detections stream live to operators but are not persisted or sent to alert integrations',
+    );
   }
 }
 
@@ -421,7 +441,11 @@ app.get('/security-testing', (req, res) => {
 });
 app.get('/security-testing/:slug', (req, res) => {
   const area = securityArea(String(req.params.slug || ''));
-  if (!area) return res.status(404).type('html').send(renderSecurityIndex({ baseUrl: publicBaseUrl(req) }));
+  if (!area)
+    return res
+      .status(404)
+      .type('html')
+      .send(renderSecurityIndex({ baseUrl: publicBaseUrl(req) }));
   res.setHeader('cache-control', 'public, max-age=300');
   res.type('html').send(renderSecurityArea(area, { baseUrl: publicBaseUrl(req), compliance: COMPLIANCE }));
 });
@@ -474,7 +498,9 @@ const COOKIE_SECURE = process.env.NODE_ENV === 'production';
 // so the whole app appears broken with no error that points at the cause.
 if (!process.env.SHANNON_SESSION_SECRET) {
   if (process.env.NODE_ENV === 'production') {
-    throw new Error('SHANNON_SESSION_SECRET is required in production; use an independent random value of at least 32 bytes');
+    throw new Error(
+      'SHANNON_SESSION_SECRET is required in production; use an independent random value of at least 32 bytes',
+    );
   }
   console.warn(
     '[auth] WARNING: SHANNON_SESSION_SECRET is not set — using a key stored on local disk.\n' +
@@ -495,8 +521,13 @@ const FREE_PLAN = {
   limits: FREE_LIMITS,
 };
 const PRO_PLAN = {
-  plan: 'pro', label: 'Pro',
-  pricing: { monthly: Number(process.env.SHANNON_PRO_MONTHLY_GBP || 99), yearly: Number(process.env.SHANNON_PRO_YEARLY_GBP || 990), currency: 'GBP' },
+  plan: 'pro',
+  label: 'Pro',
+  pricing: {
+    monthly: Number(process.env.SHANNON_PRO_MONTHLY_GBP || 99),
+    yearly: Number(process.env.SHANNON_PRO_YEARLY_GBP || 990),
+    currency: 'GBP',
+  },
   features: ['Everything in Free', 'Higher organization limits', 'SSO and SCIM', 'Priority operations support'],
   limits: PRO_LIMITS,
 };
@@ -506,14 +537,24 @@ function stripeCardReady() {
 }
 
 function billingEnabled() {
-  return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET && process.env.STRIPE_PRO_MONTHLY_PRICE_ID);
+  return !!(
+    process.env.STRIPE_SECRET_KEY &&
+    process.env.STRIPE_WEBHOOK_SECRET &&
+    process.env.STRIPE_PRO_MONTHLY_PRICE_ID
+  );
 }
 
 async function organizationPlan(orgId) {
   const entitlement = await getEntitlement(orgId);
-  const paid = entitlement?.plan === 'pro' && ['active', 'trialing'].includes(entitlement.status)
-    && (!entitlement.currentPeriodEnd || entitlement.currentPeriodEnd > Date.now());
-  return { plan: paid ? 'pro' : 'free', limits: paid ? { ...PRO_LIMITS, ...(entitlement.limits || {}) } : FREE_LIMITS, entitlement };
+  const paid =
+    entitlement?.plan === 'pro' &&
+    ['active', 'trialing'].includes(entitlement.status) &&
+    (!entitlement.currentPeriodEnd || entitlement.currentPeriodEnd > Date.now());
+  return {
+    plan: paid ? 'pro' : 'free',
+    limits: paid ? { ...PRO_LIMITS, ...(entitlement.limits || {}) } : FREE_LIMITS,
+    entitlement,
+  };
 }
 
 // Daily plan allowance first; once it is spent, fall back to prepaid credits (soonest-expiring first).
@@ -523,7 +564,15 @@ export async function consumeOrgAllowance(orgId, metric, amount = 1) {
   const usage = await consumeUsage(orgId, metric, amount, limit);
   if (usage.allowed) return { allowed: true, source: 'daily', used: usage.used, limit, plan: current.plan };
   const credit = await consumeCredits(orgId, metric, amount);
-  if (credit.allowed) return { allowed: true, source: 'credits', used: usage.used, limit, plan: current.plan, creditsRemaining: credit.remaining };
+  if (credit.allowed)
+    return {
+      allowed: true,
+      source: 'credits',
+      used: usage.used,
+      limit,
+      plan: current.plan,
+      creditsRemaining: credit.remaining,
+    };
   return { allowed: false, source: null, used: usage.used, limit, plan: current.plan };
 }
 
@@ -534,7 +583,16 @@ async function consumeOrgQuota(ctx, res, metric, amount = 1) {
   if (quota.source === 'credits') res.setHeader('x-shannon-credits-remaining', String(quota.creditsRemaining));
   if (quota.allowed) return true;
   const buyable = billingEnabled() || commerceEnabled();
-  res.status(429).json({ error: `Daily organization limit reached for ${metric}.`, code: 'ORG_USAGE_LIMIT', metric, used: quota.used, limit: quota.limit, plan: quota.plan, upgradeAvailable: buyable, creditsAvailable: commerceEnabled() });
+  res.status(429).json({
+    error: `Daily organization limit reached for ${metric}.`,
+    code: 'ORG_USAGE_LIMIT',
+    metric,
+    used: quota.used,
+    limit: quota.limit,
+    plan: quota.plan,
+    upgradeAvailable: buyable,
+    creditsAvailable: commerceEnabled(),
+  });
   return false;
 }
 
@@ -560,7 +618,7 @@ function signSession(userId) {
   const payload = JSON.stringify({ uid: userId, sid: _crypto.randomBytes(16).toString('hex'), iat: Date.now() });
   const b64 = Buffer.from(payload).toString('base64url');
   const sig = _crypto.createHmac('sha256', SESSION_SECRET).update(b64).digest('base64url');
-  return b64 + '.' + sig;
+  return `${b64}.${sig}`;
 }
 function verifySession(token) {
   if (!token || typeof token !== 'string' || !token.includes('.')) return null;
@@ -592,8 +650,38 @@ function setSessionCookie(res, userId) {
     `shannon_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}${COOKIE_SECURE ? '; Secure' : ''}`,
   );
 }
-if (process.env.NODE_ENV === 'production' && (String(process.env.SHANNON_SESSION_SECRET).length < 32 || /replace-me|change-me/i.test(process.env.SHANNON_SESSION_SECRET))) {
+if (
+  process.env.NODE_ENV === 'production' &&
+  (String(process.env.SHANNON_SESSION_SECRET).length < 32 ||
+    /replace-me|change-me/i.test(process.env.SHANNON_SESSION_SECRET))
+) {
   throw new Error('SHANNON_SESSION_SECRET must be a non-placeholder value of at least 32 characters');
+}
+// A request sent by another website's page (browsers label these). Used on the few GET routes that
+// start work, which the Origin check on POST/PUT/PATCH/DELETE does not cover.
+const fromAnotherSite = (req) => String(req.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site';
+// Tokens are handed back in an API answer only for automated tests, or when a developer asks for it
+// on a machine that is not production. A deployment that merely forgot NODE_ENV gets nothing.
+export function devTokensAllowed(env = process.env) {
+  if (env.NODE_ENV === 'production') return false;
+  return env.NODE_ENV === 'test' || env.SHANNON_DEV_TOKENS === '1';
+}
+const DEV_TOKENS = devTokensAllowed();
+// What a member sees of a queued job. An email's text can hold a one-time link (invitation,
+// password reset) meant for its recipient only, so the text never leaves the server.
+export function publicJob({ secretEnc: _secret, ...job }) {
+  if (job.type !== 'email') return job;
+  return { ...job, payload: { to: job.payload?.to, subject: job.payload?.subject }, result: null };
+}
+// The one way a sign-in is completed for an account that already exists. With two-step sign-in on,
+// a password or a link from the mailbox is only the first step: the answer is the code challenge,
+// never a session.
+function finishSignIn(res, user, extra = {}) {
+  if (user.mfaEnabled) {
+    return res.json({ ok: true, mfaRequired: true, challenge: signChallenge({ uid: user.id }, 'mfa-login') });
+  }
+  setSessionCookie(res, user.id);
+  return res.json({ ok: true, user: publicUser(user), ...extra });
 }
 function clearSessionCookie(res) {
   res.append(
@@ -721,11 +809,34 @@ function requirePlatformOperator(req, res) {
     .split(',')
     .map((x) => x.trim().toLowerCase())
     .filter(Boolean);
-  if (!user || (!allowed.includes(user.email.toLowerCase()) && !(process.env.NODE_ENV !== 'production' && csIsLocalhost(req)))) {
+  if (!user || (!allowed.includes(user.email.toLowerCase()) && !(LOCAL_OPERATOR && csIsLocalhost(req)))) {
     res.status(403).json({ error: 'Platform operator permission required.' });
     return null;
   }
   return user;
+}
+// On a developer's own machine the person at the keyboard is the operator. That shortcut is on for
+// automated tests and by explicit choice, never in production, and never merely because NODE_ENV
+// was left unset behind a proxy on the same host (where every visitor looks local).
+const LOCAL_OPERATOR =
+  process.env.NODE_ENV !== 'production' &&
+  (process.env.NODE_ENV === 'test' || process.env.SHANNON_LOCAL_OPERATOR === '1');
+function isPlatformOperator(req, user) {
+  const allowed = String(process.env.SHANNON_PLATFORM_ADMINS || '')
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+  return !!user && (allowed.includes(String(user.email || '').toLowerCase()) || (LOCAL_OPERATOR && csIsLocalhost(req)));
+}
+
+// Must a new account prove its email address before it can use the product?
+// Yes on a production service that is able to send email, unless switched off with
+// SHANNON_REQUIRE_EMAIL_VERIFICATION=0. Setting it to 1 forces it on anywhere. (A service that
+// cannot send email cannot ask for this: nobody could ever get in.)
+export function emailVerificationRequired(env = process.env) {
+  if (env.SHANNON_REQUIRE_EMAIL_VERIFICATION === '1') return true;
+  if (env.SHANNON_REQUIRE_EMAIL_VERIFICATION === '0') return false;
+  return env.NODE_ENV === 'production' && !!(env.RESEND_API_KEY || env.SHANNON_EMAIL_WEBHOOK_URL);
 }
 
 const PUBLIC_API = new Set([
@@ -755,30 +866,43 @@ app.use('/api', async (req, res, next) => {
     const parsed = parseApiKey(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
     if (!parsed) return res.status(401).json({ error: 'Send a Securovix API key: Authorization: Bearer svx_...' });
     const key = await apiKeys.get(parsed.id).catch(() => null);
-    if (!key || key.revokedAt || !secretMatches(parsed.secret, key.secretHash)) return res.status(401).json({ error: 'Invalid or revoked API key.' });
+    if (!key || key.revokedAt || !secretMatches(parsed.secret, key.secretHash))
+      return res.status(401).json({ error: 'Invalid or revoked API key.' });
     const keyUser = loadUsers()[key.createdBy];
-    if (!keyUser || keyUser.disabledAt || !getMembership(key.orgId, keyUser.id)) return res.status(401).json({ error: 'The user who created this key no longer has access to the organization.' });
-    if (route.scope && !(key.scopes || []).includes(route.scope)) return res.status(403).json({ error: `This API key does not have the ${route.scope} scope.` });
+    if (!keyUser || keyUser.disabledAt || !getMembership(key.orgId, keyUser.id))
+      return res.status(401).json({ error: 'The user who created this key no longer has access to the organization.' });
+    if (route.scope && !(key.scopes || []).includes(route.scope))
+      return res.status(403).json({ error: `This API key does not have the ${route.scope} scope.` });
     if (limited(req, res, `apikey:${key.id}`, 300, 5 * 60 * 1000)) return;
     req.shannonUser = keyUser;
     req.apiKey = key;
     req.headers['x-shannon-org'] = key.orgId;
-    if (!key.lastUsedAt || Date.now() - key.lastUsedAt > 60_000) apiKeys.save({ ...key, lastUsedAt: Date.now() }).catch(() => {});
+    if (!key.lastUsedAt || Date.now() - key.lastUsedAt > 60_000)
+      apiKeys.save({ ...key, lastUsedAt: Date.now() }).catch(() => {});
     return next();
   }
   const bearerRoute =
     req.headers.authorization &&
-    (relative === '/defender/report'
-      || (relative === '/defender/sdk/policy' && req.method === 'GET')
-      || relative === '/defender/sensors/heartbeat'
-      || (relative === '/defender/edge/routes' && req.method === 'GET')
-      || relative === '/platform/defender/edge/routes'
-      || relative === '/platform/defender/edge/report');
+    (relative === '/defender/report' ||
+      (relative === '/defender/sdk/policy' && req.method === 'GET') ||
+      relative === '/defender/sensors/heartbeat' ||
+      (relative === '/defender/edge/routes' && req.method === 'GET') ||
+      relative === '/platform/defender/edge/routes' ||
+      relative === '/platform/defender/edge/report');
   // The Guard endpoint agent authenticates with its own token inside its routes.
   if (relative.startsWith('/endpoint-agent/v1/')) return next();
   if (PUBLIC_API.has(relative) || bearerRoute) return next();
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  // An account whose email address is not proven gets as far as its own sign-in routes (to ask for
+  // the link again, or sign out) and no further: no tests, no invitations, no keys.
+  if (emailVerificationRequired() && !user.emailVerifiedAt && !relative.startsWith('/auth/')) {
+    return res.status(403).json({
+      error: 'Verify your email address to continue. Open the link we sent you, or ask for a new one.',
+      code: 'EMAIL_NOT_VERIFIED',
+      emailVerificationRequired: true,
+    });
+  }
   req.shannonUser = user;
   ensurePersonalOrg(user);
   if (limited(req, res, `api:${user.id}`, 600, 5 * 60 * 1000)) return;
@@ -792,18 +916,10 @@ async function dispatchEmail(payload, { orgId = null, userId = null } = {}) {
   return sendEmail(payload);
 }
 
-async function issueAuthToken(req, {
-  kind,
-  email,
-  userId = null,
-  orgId = null,
-  role = null,
-  createdBy = null,
-  ttlMs,
-  linkPath,
-  subject,
-  message,
-}) {
+async function issueAuthToken(
+  req,
+  { kind, email, userId = null, orgId = null, role = null, createdBy = null, ttlMs, linkPath, subject, message },
+) {
   const token = randomToken();
   await createAuthToken({
     id: randomUUID(),
@@ -886,7 +1002,7 @@ app.post('/api/auth/signup', async (req, res) => {
       termsVersion: '2026-05-04',
       privacyVersion: '2026-05-04',
       acceptedAt,
-      ip: (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim(),
+      ip: String(req.ip || req.socket?.remoteAddress || ''),
       userAgent: String(req.headers['user-agent'] || '').slice(0, 240),
     },
   };
@@ -906,14 +1022,14 @@ app.post('/api/auth/signup', async (req, res) => {
   } catch (error) {
     console.error('[auth] verification email failed:', error.message);
   }
-  const verificationRequired = process.env.SHANNON_REQUIRE_EMAIL_VERIFICATION === '1';
+  const verificationRequired = emailVerificationRequired();
   if (!verificationRequired) setSessionCookie(res, id);
   res.status(verificationRequired ? 202 : 200).json({
     ok: true,
     verificationRequired,
     user: publicUser(users[id]),
     organizations: listOrganizations(id),
-    ...(process.env.NODE_ENV !== 'production' && verification ? { developmentToken: verification.token } : {}),
+    ...(DEV_TOKENS && verification ? { developmentToken: verification.token } : {}),
   });
 });
 
@@ -958,14 +1074,10 @@ app.post('/api/auth/login', (req, res) => {
   }
   LOGIN_GUARD.succeed('password', email);
   if (u.disabledAt) return res.status(403).json({ error: 'This account is disabled.' });
-  if (process.env.SHANNON_REQUIRE_EMAIL_VERIFICATION === '1' && !u.emailVerifiedAt) {
+  if (emailVerificationRequired() && !u.emailVerifiedAt) {
     return res.status(403).json({ error: 'Verify your email before signing in.', emailVerificationRequired: true });
   }
-  if (u.mfaEnabled) {
-    return res.json({ ok: true, mfaRequired: true, challenge: signChallenge({ uid: u.id }, 'mfa-login') });
-  }
-  setSessionCookie(res, u.id);
-  res.json({ ok: true, user: publicUser(u) });
+  finishSignIn(res, u);
 });
 
 app.post('/api/auth/mfa/login', async (req, res) => {
@@ -1006,20 +1118,30 @@ app.post('/api/auth/email/verify', async (req, res) => {
   if (!user) return res.status(404).json({ error: 'Account not found.' });
   user.emailVerifiedAt = Date.now();
   saveUsers(loadUsers());
-  setSessionCookie(res, user.id);
-  res.json({ ok: true, user: publicUser(user) });
+  finishSignIn(res, user);
 });
 
 app.post('/api/auth/email/resend', async (req, res) => {
   if (limited(req, res, 'email-resend', 5, 60 * 60_000)) return;
-  const email = String(req.body?.email || '').trim().toLowerCase();
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase();
   const user = findUserByEmail(email);
   let verification = null;
-  if (user && !user.emailVerifiedAt && !user.disabledAt) {
+  // Capped per mailbox as well as per sender, so rotating addresses cannot flood one inbox.
+  if (
+    user &&
+    !user.emailVerifiedAt &&
+    !user.disabledAt &&
+    rateLimit(`mail-verify:${email}`, { limit: 3, windowMs: 60 * 60_000 }).ok
+  ) {
     try {
       verification = await issueAuthToken(req, {
-        kind: 'email-verification', email, ttlMs: 24 * 60 * 60_000,
-        linkPath: '/?verify=', subject: 'Verify your Securovix Shannon email',
+        kind: 'email-verification',
+        email,
+        ttlMs: 24 * 60 * 60_000,
+        linkPath: '/?verify=',
+        subject: 'Verify your Securovix Shannon email',
         message: 'Verify your email address to activate your security workspace.',
       });
     } catch (error) {
@@ -1029,7 +1151,7 @@ app.post('/api/auth/email/resend', async (req, res) => {
   res.json({
     ok: true,
     message: 'If that account requires verification, a new link has been sent.',
-    ...(process.env.NODE_ENV !== 'production' && verification ? { developmentToken: verification.token } : {}),
+    ...(DEV_TOKENS && verification ? { developmentToken: verification.token } : {}),
   });
 });
 
@@ -1042,18 +1164,27 @@ app.post('/api/auth/password/request', async (req, res) => {
   // nothing about whether an account exists.
   if (process.env.NODE_ENV === 'production' && !process.env.RESEND_API_KEY && !process.env.SHANNON_EMAIL_WEBHOOK_URL) {
     return res.status(503).json({
-      error: 'Password reset by email is not available on this deployment: no email provider is configured. Contact your administrator.',
+      error:
+        'Password reset by email is not available on this deployment: no email provider is configured. Contact your administrator.',
       code: 'EMAIL_NOT_CONFIGURED',
     });
   }
-  const email = String(req.body?.email || '').trim().toLowerCase();
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase();
   const user = findUserByEmail(email);
   let reset = null;
-  if (user && !user.disabledAt) {
+  // Capped per mailbox as well as per sender, so rotating addresses cannot flood one inbox. Over the
+  // cap the answer is the same as always; no link is sent.
+  if (user && !user.disabledAt && rateLimit(`mail-reset:${email}`, { limit: 3, windowMs: 60 * 60_000 }).ok) {
     try {
       reset = await issueAuthToken(req, {
-        kind: 'password-reset', email, userId: user.id, ttlMs: 30 * 60_000,
-        linkPath: '/?reset=', subject: 'Reset your Securovix Shannon password',
+        kind: 'password-reset',
+        email,
+        userId: user.id,
+        ttlMs: 30 * 60_000,
+        linkPath: '/?reset=',
+        subject: 'Reset your Securovix Shannon password',
         message: 'Use this one-time link to reset your password. It expires in 30 minutes.',
       });
     } catch (error) {
@@ -1063,7 +1194,7 @@ app.post('/api/auth/password/request', async (req, res) => {
   res.json({
     ok: true,
     message: 'If an account exists for that email, a reset link has been sent.',
-    ...(process.env.NODE_ENV !== 'production' && reset ? { developmentToken: reset.token } : {}),
+    ...(DEV_TOKENS && reset ? { developmentToken: reset.token } : {}),
   });
 });
 
@@ -1081,23 +1212,37 @@ app.post('/api/auth/password/reset', async (req, res) => {
   saveUsers(loadUsers());
   // The owner of the mailbox has proved who they are, so a lock caused by someone else's guesses ends.
   LOGIN_GUARD.succeed('password', user.email);
-  setSessionCookie(res, user.id);
-  res.json({ ok: true, user: publicUser(user) });
+  // The mailbox proves the first step only: an account with two-step sign-in is asked for its code.
+  finishSignIn(res, user);
 });
 
 app.post('/api/auth/invitations/accept', async (req, res) => {
   const password = String(req.body?.password || '');
   const tokenHash = hashToken(req.body?.token);
   const preview = await findAuthToken(tokenHash, 'invitation');
-  if (preview && !findUserByEmail(preview.email)) {
+  // An invitation adds a member; it is never a way in to an account. For an address that already
+  // has an account, the invited person signs in to it first (password, and code if they use one),
+  // and only that account may accept. Refusing here leaves the invitation unused.
+  const signInFirst = () =>
+    res.status(401).json({
+      error: 'This email address already has an account. Sign in to it and the invitation will be accepted.',
+      signInRequired: true,
+    });
+  const invited = preview ? findUserByEmail(preview.email) : null;
+  if (invited && getUser(req)?.id !== invited.id) return signInFirst();
+  if (preview && !invited) {
     if (password.length < 12) return res.status(400).json({ error: 'Choose a password with at least 12 characters.' });
-    if (!req.body?.acceptedTerms) return res.status(400).json({ error: 'You must accept the Terms and Privacy Policy.' });
+    if (!req.body?.acceptedTerms)
+      return res.status(400).json({ error: 'You must accept the Terms and Privacy Policy.' });
   }
   const record = await consumeAuthToken(tokenHash, 'invitation');
   if (!record || !record.orgId || !ROLES.includes(record.role) || record.role === 'owner') {
     return res.status(400).json({ error: 'This invitation is invalid or expired.' });
   }
   let user = findUserByEmail(record.email);
+  // The account may have been created between the two lookups above: same rule.
+  if (user && getUser(req)?.id !== user.id) return signInFirst();
+  const created = !user;
   if (!user) {
     const id = _crypto.randomBytes(8).toString('hex');
     const passwordRecord = hashPassword(password);
@@ -1124,11 +1269,17 @@ app.post('/api/auth/invitations/accept', async (req, res) => {
     saveMembership({ orgId: record.orgId, userId: user.id, role: record.role, createdAt: Date.now() });
   }
   appendAudit({
-    id: randomUUID(), orgId: record.orgId, actorUserId: user.id,
-    action: 'invitation.accepted', resourceType: 'membership', resourceId: user.id,
-    metadata: { role: record.role }, createdAt: Date.now(),
+    id: randomUUID(),
+    orgId: record.orgId,
+    actorUserId: user.id,
+    action: 'invitation.accepted',
+    resourceType: 'membership',
+    resourceId: user.id,
+    metadata: { role: record.role },
+    createdAt: Date.now(),
   });
-  setSessionCookie(res, user.id);
+  // A session is issued only for the account this request created; an existing one is already signed in.
+  if (created) setSessionCookie(res, user.id);
   res.json({ ok: true, user: publicUser(user), organization: getOrganization(record.orgId) });
 });
 
@@ -1136,8 +1287,14 @@ app.get('/api/auth/mfa/status', (req, res) => {
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Authentication required.' });
   let enrollment = null;
-  try { enrollment = decryptSecret(user.mfaSecretEnc); } catch {}
-  const pending = !!(!user.mfaEnabled && enrollment?.pending && Date.now() - Number(enrollment.createdAt || 0) < 15 * 60_000);
+  try {
+    enrollment = decryptSecret(user.mfaSecretEnc);
+  } catch {}
+  const pending = !!(
+    !user.mfaEnabled &&
+    enrollment?.pending &&
+    Date.now() - Number(enrollment.createdAt || 0) < 15 * 60_000
+  );
   res.json({
     enabled: user.mfaEnabled === true,
     pending,
@@ -1187,7 +1344,9 @@ app.post('/api/auth/mfa/enable', async (req, res) => {
   if (!user) return res.status(401).json({ error: 'Authentication required.' });
   if (limited(req, res, `mfa-enable:${user.id}`, 10, 15 * 60 * 1000)) return;
   let enrollment;
-  try { enrollment = decryptSecret(user.mfaSecretEnc); } catch {}
+  try {
+    enrollment = decryptSecret(user.mfaSecretEnc);
+  } catch {}
   if (!enrollment?.pending || Date.now() - Number(enrollment.createdAt || 0) >= 15 * 60_000) {
     user.mfaSecretEnc = null;
     saveUsers(loadUsers());
@@ -1195,7 +1354,8 @@ app.post('/api/auth/mfa/enable', async (req, res) => {
     return res.status(400).json({ error: 'MFA enrollment expired. Start again to create a new QR code.' });
   }
   const secret = enrollment.secret;
-  if (!secret || !verifyTotp(secret, req.body?.code)) return res.status(400).json({ error: 'Invalid authentication code.' });
+  if (!secret || !verifyTotp(secret, req.body?.code))
+    return res.status(400).json({ error: 'Invalid authentication code.' });
   const recoveryCodes = createRecoveryCodes();
   user.mfaSecretEnc = encryptSecret({ secret, pending: false, enabledAt: Date.now() });
   user.mfaEnabled = true;
@@ -1215,8 +1375,11 @@ app.post('/api/auth/mfa/recovery-codes', async (req, res) => {
   if (limited(req, res, `mfa-recovery:${user.id}`, 6, 15 * 60 * 1000)) return;
   if (!user.mfaEnabled) return res.status(409).json({ error: 'Enable MFA before generating recovery codes.' });
   let secret;
-  try { secret = decryptSecret(user.mfaSecretEnc)?.secret; } catch {}
-  if (!secret || !verifyTotp(secret, req.body?.code)) return res.status(400).json({ error: 'Invalid authentication code.' });
+  try {
+    secret = decryptSecret(user.mfaSecretEnc)?.secret;
+  } catch {}
+  if (!secret || !verifyTotp(secret, req.body?.code))
+    return res.status(400).json({ error: 'Invalid authentication code.' });
   const recoveryCodes = createRecoveryCodes();
   user.mfaRecoveryCodes = hashRecoveryCodes(recoveryCodes);
   user.sessionInvalidBefore = Date.now();
@@ -1224,7 +1387,10 @@ app.post('/api/auth/mfa/recovery-codes', async (req, res) => {
   await waitForUserWrites();
   setSessionCookie(res, user.id);
   const ctx = requestContext(req);
-  if (ctx) audit(ctx, 'authentication.mfa_recovery_codes_regenerated', 'user', user.id, { recoveryCodes: recoveryCodes.length });
+  if (ctx)
+    audit(ctx, 'authentication.mfa_recovery_codes_regenerated', 'user', user.id, {
+      recoveryCodes: recoveryCodes.length,
+    });
   res.json({ ok: true, recoveryCodes, recoveryCodesRemaining: recoveryCodes.length });
 });
 
@@ -1234,7 +1400,9 @@ app.delete('/api/auth/mfa', async (req, res) => {
   if (limited(req, res, `mfa-disable:${user.id}`, 6, 15 * 60 * 1000)) return;
   if (!user.mfaEnabled) return res.status(409).json({ error: 'MFA is not enabled.' });
   let secret;
-  try { secret = decryptSecret(user.mfaSecretEnc)?.secret; } catch {}
+  try {
+    secret = decryptSecret(user.mfaSecretEnc)?.secret;
+  } catch {}
   let verified = !!secret && verifyTotp(secret, req.body?.code);
   if (!verified) verified = consumeRecoveryCode(req.body?.code, user.mfaRecoveryCodes || []) !== null;
   if (!verified) return res.status(400).json({ error: 'Invalid authentication or recovery code.' });
@@ -1251,6 +1419,13 @@ app.delete('/api/auth/mfa', async (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
+  // The cookie is a signed token, so clearing it in this browser is not enough: a copy would keep
+  // working until it expired. Signing out ends every session of the account.
+  const user = getUser(req);
+  if (user) {
+    user.sessionInvalidBefore = Date.now();
+    saveUsers(loadUsers());
+  }
   clearSessionCookie(res);
   res.json({ ok: true });
 });
@@ -1270,17 +1445,15 @@ app.get('/auth/google', (req, res) => {
     'Set-Cookie',
     `shannon_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/auth/google/callback; Max-Age=600${COOKIE_SECURE ? '; Secure' : ''}`,
   );
-  const url =
-    'https://accounts.google.com/o/oauth2/v2/auth?' +
-    new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: 'openid email profile',
-      access_type: 'online',
-      prompt: 'select_account',
-      state,
-    });
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'online',
+    prompt: 'select_account',
+    state,
+  })}`;
   res.redirect(url);
 });
 
@@ -1316,10 +1489,12 @@ app.get('/auth/google/callback', async (req, res) => {
     const td = await tokenResp.json();
     if (!tokenResp.ok) throw new Error(td.error_description || td.error || 'token exchange failed');
     const userResp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-      headers: { authorization: 'Bearer ' + td.access_token },
+      headers: { authorization: `Bearer ${td.access_token}` },
     });
     const profile = await userResp.json();
     if (!userResp.ok || !profile.email) throw new Error('userinfo failed');
+    if (profile.email_verified === false || profile.email_verified === 'false')
+      throw new Error('this Google account has not verified its email address');
     const users = loadUsers();
     let user = Object.values(users).find((u) => u.googleId === profile.sub) || findUserByEmail(profile.email);
     if (!user) {
@@ -1349,7 +1524,7 @@ app.get('/auth/google/callback', async (req, res) => {
     setSessionCookie(res, user.id);
     res.redirect('/');
   } catch (e) {
-    res.status(500).send('Google sign-in failed: ' + e.message);
+    res.status(500).type('text/plain').send(`Google sign-in failed: ${e.message}`);
   }
 });
 
@@ -1358,17 +1533,23 @@ const OIDC_DISCOVERY_CACHE = new Map();
 async function oidcDiscovery(configuredIssuer = process.env.OIDC_ISSUER) {
   const issuer = String(configuredIssuer || '').replace(/\/$/, '');
   if (!issuer) throw new Error('OIDC_ISSUER is not configured');
-  if (!(await publicOriginAllowed(issuer))) throw new Error('OIDC issuer must be a public HTTPS origin');
+  if (!issuer.startsWith('https://') || !(await publicOriginAllowed(issuer)))
+    throw new Error('OIDC issuer must be a public HTTPS origin');
   const cached = OIDC_DISCOVERY_CACHE.get(issuer);
   if (cached?.expiresAt > Date.now()) return cached.value;
-  const response = await fetch(`${issuer}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(10_000) });
+  const response = await fetch(`${issuer}/.well-known/openid-configuration`, {
+    signal: AbortSignal.timeout(10_000),
+    redirect: 'error',
+  });
   if (!response.ok) throw new Error(`OIDC discovery returned ${response.status}`);
   const value = await response.json();
   if (!value.authorization_endpoint || !value.token_endpoint || !value.userinfo_endpoint) {
     throw new Error('OIDC provider discovery is incomplete');
   }
   const endpointsArePublic = await Promise.all(
-    [value.authorization_endpoint, value.token_endpoint, value.userinfo_endpoint].map((endpoint) => publicOriginAllowed(endpoint)),
+    [value.authorization_endpoint, value.token_endpoint, value.userinfo_endpoint].map(
+      async (endpoint) => String(endpoint).startsWith('https://') && (await publicOriginAllowed(endpoint)),
+    ),
   );
   if (endpointsArePublic.some((allowed) => !allowed)) throw new Error('OIDC endpoints must use public HTTPS origins');
   OIDC_DISCOVERY_CACHE.set(issuer, { expiresAt: Date.now() + 60 * 60_000, value });
@@ -1379,7 +1560,9 @@ async function organizationIdentityConfig(orgId, kind) {
   const row = await getOrgSecret(orgId, kind, 'default');
   if (!row) return null;
   let secret = {};
-  try { secret = decryptSecret(row.secretEnc) || {}; } catch {}
+  try {
+    secret = decryptSecret(row.secretEnc) || {};
+  } catch {}
   return { ...row.config, ...secret, updatedAt: row.updatedAt };
 }
 
@@ -1392,8 +1575,21 @@ app.get('/api/team/:orgId/identity', async (req, res) => {
   ]);
   res.json({
     ok: true,
-    oidc: oidc ? { configured: true, ...oidc.config, updatedAt: oidc.updatedAt, startUrl: `${publicBaseUrl(req)}/auth/sso/org/${encodeURIComponent(ctx.org.id)}/start` } : { configured: false },
-    scim: scim ? { configured: true, updatedAt: scim.updatedAt, baseUrl: `${publicBaseUrl(req)}/scim/v2/orgs/${encodeURIComponent(ctx.org.id)}` } : { configured: false },
+    oidc: oidc
+      ? {
+          configured: true,
+          ...oidc.config,
+          updatedAt: oidc.updatedAt,
+          startUrl: `${publicBaseUrl(req)}/auth/sso/org/${encodeURIComponent(ctx.org.id)}/start`,
+        }
+      : { configured: false },
+    scim: scim
+      ? {
+          configured: true,
+          updatedAt: scim.updatedAt,
+          baseUrl: `${publicBaseUrl(req)}/scim/v2/orgs/${encodeURIComponent(ctx.org.id)}`,
+        }
+      : { configured: false },
   });
 });
 
@@ -1403,26 +1599,50 @@ app.put('/api/team/:orgId/identity/oidc', async (req, res) => {
   const issuer = String(req.body?.issuer || '').replace(/\/$/, '');
   const clientId = String(req.body?.clientId || '').trim();
   const clientSecret = String(req.body?.clientSecret || '');
-  if (!/^https:\/\//i.test(issuer) || !clientId || clientSecret.length < 8) return res.status(400).json({ error: 'Issuer, client ID, and client secret are required; issuer must use HTTPS.' });
-  try { await oidcDiscovery(issuer); } catch (error) { return res.status(400).json({ error: `OIDC discovery failed: ${error.message}` }); }
+  if (!/^https:\/\//i.test(issuer) || !clientId || clientSecret.length < 8)
+    return res.status(400).json({ error: 'Issuer, client ID, and client secret are required; issuer must use HTTPS.' });
+  try {
+    await oidcDiscovery(issuer);
+  } catch (error) {
+    return res.status(400).json({ error: `OIDC discovery failed: ${error.message}` });
+  }
   const previous = await getOrgSecret(ctx.org.id, 'oidc', 'default');
   const now = Date.now();
-  const requestedDomains = String(req.body?.allowedDomains || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
-  if (!requestedDomains.length) return res.status(400).json({ error: 'At least one verified email domain is required.' });
+  const requestedDomains = String(req.body?.allowedDomains || '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  if (!requestedDomains.length)
+    return res.status(400).json({ error: 'At least one verified email domain is required.' });
   const allowedDomains = [];
   for (const value of requestedDomains) {
     let domain;
-    try { domain = registrable(hostOf(value)); } catch { return res.status(400).json({ error: `Invalid email domain: ${value}` }); }
+    try {
+      domain = registrable(hostOf(value));
+    } catch {
+      return res.status(400).json({ error: `Invalid email domain: ${value}` });
+    }
     if (!domain.includes('.') || !isVerified(ctx.user.id, domain)) {
       return res.status(403).json({ error: `Verify ownership of ${domain} in Domains before enabling it for SSO.` });
     }
     if (!allowedDomains.includes(domain)) allowedDomains.push(domain);
   }
   await saveOrgSecret({
-    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`, orgId: ctx.org.id, kind: 'oidc', name: 'default',
-    config: { issuer, clientId, scopes: String(req.body?.scopes || 'openid email profile'), name: sanitizeLabel(req.body?.name || 'Company SSO', 80), allowedDomains },
-    secretEnc: encryptSecret({ clientSecret }), createdBy: previous?.createdBy || ctx.user.id,
-    createdAt: previous?.createdAt || now, updatedAt: now,
+    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`,
+    orgId: ctx.org.id,
+    kind: 'oidc',
+    name: 'default',
+    config: {
+      issuer,
+      clientId,
+      scopes: String(req.body?.scopes || 'openid email profile'),
+      name: sanitizeLabel(req.body?.name || 'Company SSO', 80),
+      allowedDomains,
+    },
+    secretEnc: encryptSecret({ clientSecret }),
+    createdBy: previous?.createdBy || ctx.user.id,
+    createdAt: previous?.createdAt || now,
+    updatedAt: now,
   });
   audit(ctx, previous ? 'identity.oidc_rotated' : 'identity.oidc_created', 'organization', ctx.org.id);
   res.json({ ok: true, startUrl: `${publicBaseUrl(req)}/auth/sso/org/${encodeURIComponent(ctx.org.id)}/start` });
@@ -1444,9 +1664,15 @@ app.put('/api/team/:orgId/identity/scim', async (req, res) => {
   const previous = await getOrgSecret(ctx.org.id, 'scim', 'default');
   const now = Date.now();
   await saveOrgSecret({
-    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`, orgId: ctx.org.id, kind: 'scim', name: 'default', config: {},
-    secretEnc: encryptSecret({ token }), createdBy: previous?.createdBy || ctx.user.id,
-    createdAt: previous?.createdAt || now, updatedAt: now,
+    id: previous?.id || `osec_${randomUUID().replaceAll('-', '')}`,
+    orgId: ctx.org.id,
+    kind: 'scim',
+    name: 'default',
+    config: {},
+    secretEnc: encryptSecret({ token }),
+    createdBy: previous?.createdBy || ctx.user.id,
+    createdAt: previous?.createdAt || now,
+    updatedAt: now,
   });
   audit(ctx, previous ? 'identity.scim_rotated' : 'identity.scim_created', 'organization', ctx.org.id);
   res.json({ ok: true, token, baseUrl: `${publicBaseUrl(req)}/scim/v2/orgs/${encodeURIComponent(ctx.org.id)}` });
@@ -1462,54 +1688,126 @@ app.delete('/api/team/:orgId/identity/scim', async (req, res) => {
 
 app.get('/auth/sso/org/:orgId/start', async (req, res) => {
   const org = getOrganization(String(req.params.orgId || ''));
-  const config = org && await organizationIdentityConfig(org.id, 'oidc');
-  if (!org || !config?.issuer || !config?.clientId || !config?.clientSecret) return res.status(404).send('Organization SSO is not configured.');
+  const config = org && (await organizationIdentityConfig(org.id, 'oidc'));
+  if (!org || !config?.issuer || !config?.clientId || !config?.clientSecret)
+    return res.status(404).send('Organization SSO is not configured.');
   try {
     const discovery = await oidcDiscovery(config.issuer);
-    const state = randomToken(24), verifier = randomToken(48);
+    const state = randomToken(24);
+    const verifier = randomToken(48);
     const flow = signChallenge({ state, verifier, orgId: org.id }, 'org-oidc-flow', 10 * 60_000);
     const challenge = _crypto.createHash('sha256').update(verifier).digest('base64url');
-    res.append('Set-Cookie', `shannon_org_oidc_state=${flow}; HttpOnly; SameSite=Lax; Path=/auth/sso/org/callback; Max-Age=600${COOKIE_SECURE ? '; Secure' : ''}`);
+    res.append(
+      'Set-Cookie',
+      `shannon_org_oidc_state=${flow}; HttpOnly; SameSite=Lax; Path=/auth/sso/org/callback; Max-Age=600${COOKIE_SECURE ? '; Secure' : ''}`,
+    );
     const redirectUri = `${publicBaseUrl(req)}/auth/sso/org/callback`;
     const target = new URL(discovery.authorization_endpoint);
-    target.search = new URLSearchParams({ client_id: config.clientId, redirect_uri: redirectUri, response_type: 'code', scope: config.scopes || 'openid email profile', state, code_challenge: challenge, code_challenge_method: 'S256' });
+    target.search = new URLSearchParams({
+      client_id: config.clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: config.scopes || 'openid email profile',
+      state,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+    });
     res.redirect(target.toString());
-  } catch (error) { res.status(502).send(`SSO initialization failed: ${error.message}`); }
+  } catch (error) {
+    res.status(502).type('text/plain').send(`SSO initialization failed: ${error.message}`);
+  }
 });
 
 app.get('/auth/sso/org/callback', async (req, res) => {
   const flow = verifyChallenge(parseCookies(req).shannon_org_oidc_state || '', 'org-oidc-flow');
-  const expected = String(flow?.state || ''), actual = String(req.query?.state || '');
-  const stateOk = expected.length > 0 && expected.length === actual.length && _crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
-  if (!stateOk || !req.query?.code || !flow?.orgId) return res.status(400).send('Invalid SSO callback. Start sign-in again.');
-  res.append('Set-Cookie', `shannon_org_oidc_state=; HttpOnly; SameSite=Lax; Path=/auth/sso/org/callback; Max-Age=0${COOKIE_SECURE ? '; Secure' : ''}`);
+  const expected = String(flow?.state || '');
+  const actual = String(req.query?.state || '');
+  const stateOk =
+    expected.length > 0 &&
+    expected.length === actual.length &&
+    _crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
+  if (!stateOk || !req.query?.code || !flow?.orgId)
+    return res.status(400).send('Invalid SSO callback. Start sign-in again.');
+  res.append(
+    'Set-Cookie',
+    `shannon_org_oidc_state=; HttpOnly; SameSite=Lax; Path=/auth/sso/org/callback; Max-Age=0${COOKIE_SECURE ? '; Secure' : ''}`,
+  );
   try {
     const config = await organizationIdentityConfig(flow.orgId, 'oidc');
     if (!config) throw new Error('Organization SSO configuration was removed');
     const discovery = await oidcDiscovery(config.issuer);
     const redirectUri = `${publicBaseUrl(req)}/auth/sso/org/callback`;
-    const tokenResponse = await fetch(discovery.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri, client_id: config.clientId, client_secret: config.clientSecret, code_verifier: String(flow.verifier) }), signal: AbortSignal.timeout(10_000) });
+    const tokenResponse = await fetch(discovery.token_endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: String(req.query.code),
+        redirect_uri: redirectUri,
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        code_verifier: String(flow.verifier),
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
     const tokens = await tokenResponse.json();
-    if (!tokenResponse.ok || !tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'token exchange failed');
-    const profileResponse = await fetch(discovery.userinfo_endpoint, { headers: { authorization: `Bearer ${tokens.access_token}` }, signal: AbortSignal.timeout(10_000) });
+    if (!tokenResponse.ok || !tokens.access_token)
+      throw new Error(tokens.error_description || tokens.error || 'token exchange failed');
+    const profileResponse = await fetch(discovery.userinfo_endpoint, {
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
     const profile = await profileResponse.json();
-    if (!profileResponse.ok || !profile.sub || !profile.email || profile.email_verified === false) throw new Error('SSO user profile is incomplete or unverified');
+    if (!profileResponse.ok || !profile.sub || !profile.email || profile.email_verified === false)
+      throw new Error('SSO user profile is incomplete or unverified');
     const email = String(profile.email).toLowerCase();
     const emailDomain = registrable(email.split('@')[1] || '');
-    if (!config.allowedDomains?.includes(emailDomain)) throw new Error('Your email domain is not allowed for this workspace');
+    if (!config.allowedDomains?.includes(emailDomain))
+      throw new Error('Your email domain is not allowed for this workspace');
     const providerKey = `${config.issuer}#org=${flow.orgId}`;
     const identity = await findSsoIdentity(providerKey, String(profile.sub));
     const users = loadUsers();
     let user = (identity && users[identity.userId]) || findUserByEmail(email);
-    if (!user) { const id = _crypto.randomBytes(8).toString('hex'); user = { id, email, name: profile.name || email, picture: profile.picture || null, emailVerifiedAt: Date.now(), disabledAt: null, mfaEnabled: false, mfaSecretEnc: null, mfaRecoveryCodes: [], createdAt: Date.now(), subscription: null }; users[id] = user; }
+    if (!user) {
+      const id = _crypto.randomBytes(8).toString('hex');
+      user = {
+        id,
+        email,
+        name: profile.name || email,
+        picture: profile.picture || null,
+        emailVerifiedAt: Date.now(),
+        disabledAt: null,
+        mfaEnabled: false,
+        mfaSecretEnc: null,
+        mfaRecoveryCodes: [],
+        createdAt: Date.now(),
+        subscription: null,
+      };
+      users[id] = user;
+    }
     if (user.disabledAt) return res.status(403).send('This account is disabled.');
-    user.emailVerifiedAt ||= Date.now(); saveUsers(users); await waitForUserWrites();
-    await saveSsoIdentity({ provider: providerKey, subject: String(profile.sub), userId: user.id, email, createdAt: Date.now(), lastLoginAt: Date.now() });
-    if (!getMembership(flow.orgId, user.id)) saveMembership({ orgId: flow.orgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
+    user.emailVerifiedAt ||= Date.now();
+    saveUsers(users);
+    await waitForUserWrites();
+    await saveSsoIdentity({
+      provider: providerKey,
+      subject: String(profile.sub),
+      userId: user.id,
+      email,
+      createdAt: Date.now(),
+      lastLoginAt: Date.now(),
+    });
+    if (!getMembership(flow.orgId, user.id))
+      saveMembership({ orgId: flow.orgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
     setSessionCookie(res, user.id);
-    res.append('Set-Cookie', `shannon_org=${encodeURIComponent(flow.orgId)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}${COOKIE_SECURE ? '; Secure' : ''}`);
+    res.append(
+      'Set-Cookie',
+      `shannon_org=${encodeURIComponent(flow.orgId)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_DAYS * 86400}${COOKIE_SECURE ? '; Secure' : ''}`,
+    );
     res.redirect('/');
-  } catch (error) { res.status(502).send(`SSO sign-in failed: ${error.message}`); }
+  } catch (error) {
+    res.status(502).type('text/plain').send(`SSO sign-in failed: ${error.message}`);
+  }
 });
 
 app.get('/auth/sso', async (req, res) => {
@@ -1521,17 +1819,24 @@ app.get('/auth/sso', async (req, res) => {
     const verifier = randomToken(48);
     const flow = signChallenge({ state, verifier }, 'oidc-flow', 10 * 60_000);
     const challenge = _crypto.createHash('sha256').update(verifier).digest('base64url');
-    res.append('Set-Cookie', `shannon_oidc_state=${flow}; HttpOnly; SameSite=Lax; Path=/auth/sso/callback; Max-Age=600${COOKIE_SECURE ? '; Secure' : ''}`);
+    res.append(
+      'Set-Cookie',
+      `shannon_oidc_state=${flow}; HttpOnly; SameSite=Lax; Path=/auth/sso/callback; Max-Age=600${COOKIE_SECURE ? '; Secure' : ''}`,
+    );
     const redirectUri = `${publicBaseUrl(req)}/auth/sso/callback`;
     const target = new URL(discovery.authorization_endpoint);
     target.search = new URLSearchParams({
-      client_id: clientId, redirect_uri: redirectUri, response_type: 'code',
-      scope: process.env.OIDC_SCOPES || 'openid email profile', state,
-      code_challenge: challenge, code_challenge_method: 'S256',
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: process.env.OIDC_SCOPES || 'openid email profile',
+      state,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
     });
     res.redirect(target.toString());
   } catch (error) {
-    res.status(502).send(`SSO initialization failed: ${error.message}`);
+    res.status(502).type('text/plain').send(`SSO initialization failed: ${error.message}`);
   }
 });
 
@@ -1539,9 +1844,15 @@ app.get('/auth/sso/callback', async (req, res) => {
   const flow = verifyChallenge(parseCookies(req).shannon_oidc_state || '', 'oidc-flow');
   const expected = String(flow?.state || '');
   const actual = String(req.query?.state || '');
-  const stateOk = expected.length > 0 && expected.length === actual.length && _crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
+  const stateOk =
+    expected.length > 0 &&
+    expected.length === actual.length &&
+    _crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
   if (!stateOk || !req.query?.code) return res.status(400).send('Invalid SSO callback. Start sign-in again.');
-  res.append('Set-Cookie', `shannon_oidc_state=; HttpOnly; SameSite=Lax; Path=/auth/sso/callback; Max-Age=0${COOKIE_SECURE ? '; Secure' : ''}`);
+  res.append(
+    'Set-Cookie',
+    `shannon_oidc_state=; HttpOnly; SameSite=Lax; Path=/auth/sso/callback; Max-Age=0${COOKIE_SECURE ? '; Secure' : ''}`,
+  );
   try {
     const discovery = await oidcDiscovery();
     const redirectUri = `${publicBaseUrl(req)}/auth/sso/callback`;
@@ -1549,14 +1860,18 @@ app.get('/auth/sso/callback', async (req, res) => {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri,
-        client_id: process.env.OIDC_CLIENT_ID, client_secret: process.env.OIDC_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: String(req.query.code),
+        redirect_uri: redirectUri,
+        client_id: process.env.OIDC_CLIENT_ID,
+        client_secret: process.env.OIDC_CLIENT_SECRET,
         code_verifier: String(flow.verifier),
       }),
       signal: AbortSignal.timeout(10_000),
     });
     const tokens = await tokenResponse.json();
-    if (!tokenResponse.ok || !tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'token exchange failed');
+    if (!tokenResponse.ok || !tokens.access_token)
+      throw new Error(tokens.error_description || tokens.error || 'token exchange failed');
     const profileResponse = await fetch(discovery.userinfo_endpoint, {
       headers: { authorization: `Bearer ${tokens.access_token}` },
       signal: AbortSignal.timeout(10_000),
@@ -1565,8 +1880,12 @@ app.get('/auth/sso/callback', async (req, res) => {
     if (!profileResponse.ok || !profile.sub || !profile.email) throw new Error('SSO user profile is incomplete');
     if (profile.email_verified === false) throw new Error('SSO provider has not verified this email address');
     const email = String(profile.email).toLowerCase();
-    const allowedDomains = String(process.env.SHANNON_SSO_ALLOWED_DOMAINS || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
-    if (allowedDomains.length && !allowedDomains.includes(email.split('@')[1])) throw new Error('Your email domain is not allowed for this workspace');
+    const allowedDomains = String(process.env.SHANNON_SSO_ALLOWED_DOMAINS || '')
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+    if (allowedDomains.length && !allowedDomains.includes(email.split('@')[1]))
+      throw new Error('Your email domain is not allowed for this workspace');
     const provider = String(process.env.OIDC_ISSUER).replace(/\/$/, '');
     const identity = await findSsoIdentity(provider, String(profile.sub));
     const users = loadUsers();
@@ -1574,9 +1893,17 @@ app.get('/auth/sso/callback', async (req, res) => {
     if (!user) {
       const id = _crypto.randomBytes(8).toString('hex');
       user = {
-        id, email, name: profile.name || email, picture: profile.picture || null,
-        emailVerifiedAt: Date.now(), disabledAt: null, mfaEnabled: false,
-        mfaSecretEnc: null, mfaRecoveryCodes: [], createdAt: Date.now(), subscription: null,
+        id,
+        email,
+        name: profile.name || email,
+        picture: profile.picture || null,
+        emailVerifiedAt: Date.now(),
+        disabledAt: null,
+        mfaEnabled: false,
+        mfaSecretEnc: null,
+        mfaRecoveryCodes: [],
+        createdAt: Date.now(),
+        subscription: null,
       };
       users[id] = user;
     } else if (user.disabledAt) {
@@ -1586,22 +1913,41 @@ app.get('/auth/sso/callback', async (req, res) => {
     if (!user.picture && profile.picture) user.picture = profile.picture;
     saveUsers(users);
     await waitForUserWrites();
-    await saveSsoIdentity({ provider, subject: String(profile.sub), userId: user.id, email, createdAt: Date.now(), lastLoginAt: Date.now() });
+    await saveSsoIdentity({
+      provider,
+      subject: String(profile.sub),
+      userId: user.id,
+      email,
+      createdAt: Date.now(),
+      lastLoginAt: Date.now(),
+    });
     ensurePersonalOrg(user);
     setSessionCookie(res, user.id);
     res.redirect('/');
   } catch (error) {
-    res.status(502).send(`SSO sign-in failed: ${error.message}`);
+    res.status(502).type('text/plain').send(`SSO sign-in failed: ${error.message}`);
   }
 });
 
 function requireScim(req, res, next) {
   const configured = String(process.env.SHANNON_SCIM_TOKEN || '');
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  const valid = configured.length >= 24 && configured.length === supplied.length && _crypto.timingSafeEqual(Buffer.from(configured), Buffer.from(supplied));
-  if (!valid) return res.status(401).set('www-authenticate', 'Bearer').json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '401', detail: 'Unauthorized' });
+  const valid =
+    configured.length >= 24 &&
+    configured.length === supplied.length &&
+    _crypto.timingSafeEqual(Buffer.from(configured), Buffer.from(supplied));
+  if (!valid)
+    return res
+      .status(401)
+      .set('www-authenticate', 'Bearer')
+      .json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '401', detail: 'Unauthorized' });
   const orgId = process.env.SHANNON_SCIM_ORG_ID;
-  if (!orgId || !getOrganization(orgId)) return res.status(503).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '503', detail: 'SCIM organization is not configured' });
+  if (!orgId || !getOrganization(orgId))
+    return res.status(503).json({
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+      status: '503',
+      detail: 'SCIM organization is not configured',
+    });
   req.scimOrgId = orgId;
   req.scimTenantScoped = false;
   next();
@@ -1622,65 +1968,116 @@ function scimUser(user, active = !user.disabledAt) {
 
 async function requireOrgScim(req, res, next) {
   const orgId = String(req.params.orgId || '');
-  const config = getOrganization(orgId) && await organizationIdentityConfig(orgId, 'scim');
+  const config = getOrganization(orgId) && (await organizationIdentityConfig(orgId, 'scim'));
   const configured = String(config?.token || '');
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  const valid = configured.length >= 24 && configured.length === supplied.length && _crypto.timingSafeEqual(Buffer.from(configured), Buffer.from(supplied));
-  if (!valid) return res.status(401).set('www-authenticate', 'Bearer').json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '401', detail: 'Unauthorized' });
+  const valid =
+    configured.length >= 24 &&
+    configured.length === supplied.length &&
+    _crypto.timingSafeEqual(Buffer.from(configured), Buffer.from(supplied));
+  if (!valid)
+    return res
+      .status(401)
+      .set('www-authenticate', 'Bearer')
+      .json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '401', detail: 'Unauthorized' });
   req.scimOrgId = orgId;
   req.scimTenantScoped = true;
   next();
 }
 
 const scimRouter = express.Router();
-scimRouter.get('/ServiceProviderConfig', (_req, res) => res.json({
-  schemas: ['urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig'],
-  patch: { supported: true }, bulk: { supported: false }, filter: { supported: true, maxResults: 200 },
-  changePassword: { supported: false }, sort: { supported: false }, etag: { supported: false },
-}));
+scimRouter.get('/ServiceProviderConfig', (_req, res) =>
+  res.json({
+    schemas: ['urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig'],
+    patch: { supported: true },
+    bulk: { supported: false },
+    filter: { supported: true, maxResults: 200 },
+    changePassword: { supported: false },
+    sort: { supported: false },
+    etag: { supported: false },
+  }),
+);
 scimRouter.get('/Users', (req, res) => {
-  let users = listMembers(req.scimOrgId).map((member) => loadUsers()[member.userId]).filter(Boolean);
+  let users = listMembers(req.scimOrgId)
+    .map((member) => loadUsers()[member.userId])
+    .filter(Boolean);
   const match = /^userName\s+eq\s+"([^"]+)"$/i.exec(String(req.query.filter || ''));
   if (match) users = users.filter((user) => user.email === match[1].toLowerCase());
   const resources = users.map(scimUser);
-  res.json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:ListResponse'], totalResults: resources.length, startIndex: 1, itemsPerPage: resources.length, Resources: resources });
+  res.json({
+    schemas: ['urn:ietf:params:scim:api:messages:2.0:ListResponse'],
+    totalResults: resources.length,
+    startIndex: 1,
+    itemsPerPage: resources.length,
+    Resources: resources,
+  });
 });
 scimRouter.get('/Users/:id', (req, res) => {
   const membership = getMembership(req.scimOrgId, req.params.id);
   const user = membership && loadUsers()[req.params.id];
-  if (!user) return res.status(404).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '404', detail: 'User not found' });
+  if (!user)
+    return res
+      .status(404)
+      .json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '404', detail: 'User not found' });
   res.json(scimUser(user));
 });
 scimRouter.post('/Users', async (req, res) => {
-  const email = String(req.body?.userName || req.body?.emails?.[0]?.value || '').trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '400', detail: 'A valid userName is required' });
+  const email = String(req.body?.userName || req.body?.emails?.[0]?.value || '')
+    .trim()
+    .toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+      status: '400',
+      detail: 'A valid userName is required',
+    });
   const users = loadUsers();
   let user = findUserByEmail(email);
   if (!user) {
     const id = _crypto.randomBytes(8).toString('hex');
     user = {
-      id, email, name: sanitizeLabel(req.body?.displayName || req.body?.name?.formatted || email, 100),
-      emailVerifiedAt: Date.now(), disabledAt: !req.scimTenantScoped && req.body?.active === false ? Date.now() : null,
-      mfaEnabled: false, mfaSecretEnc: null, mfaRecoveryCodes: [], createdAt: Date.now(), subscription: null,
+      id,
+      email,
+      name: sanitizeLabel(req.body?.displayName || req.body?.name?.formatted || email, 100),
+      emailVerifiedAt: Date.now(),
+      disabledAt: !req.scimTenantScoped && req.body?.active === false ? Date.now() : null,
+      mfaEnabled: false,
+      mfaSecretEnc: null,
+      mfaRecoveryCodes: [],
+      createdAt: Date.now(),
+      subscription: null,
     };
     users[id] = user;
     saveUsers(users);
     await waitForUserWrites();
   }
-  if (req.body?.active !== false && !getMembership(req.scimOrgId, user.id)) saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
+  if (req.body?.active !== false && !getMembership(req.scimOrgId, user.id))
+    saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
   res.status(201).json(scimUser(user, req.body?.active !== false && !user.disabledAt));
 });
 scimRouter.patch('/Users/:id', (req, res) => {
   const membership = getMembership(req.scimOrgId, req.params.id);
   const user = membership && loadUsers()[req.params.id];
-  if (!user) return res.status(404).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '404', detail: 'User not found' });
+  if (!user)
+    return res
+      .status(404)
+      .json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '404', detail: 'User not found' });
   for (const operation of req.body?.Operations || []) {
     const path = String(operation.path || '').toLowerCase();
     if (path === 'active' || (!path && Object.hasOwn(operation.value || {}, 'active'))) {
       const active = path === 'active' ? operation.value : operation.value.active;
       if (req.scimTenantScoped) {
+        // The dashboard never lets an owner be removed this way; neither does provisioning.
+        if (active === false && membership.role === 'owner') {
+          return res.status(403).json({
+            schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+            status: '403',
+            detail: 'The organization owner cannot be deactivated through provisioning.',
+          });
+        }
         if (active === false) removeMembership(req.scimOrgId, user.id);
-        else if (!getMembership(req.scimOrgId, user.id)) saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
+        else if (!getMembership(req.scimOrgId, user.id))
+          saveMembership({ orgId: req.scimOrgId, userId: user.id, role: 'viewer', createdAt: Date.now() });
       } else user.disabledAt = active === false ? Date.now() : null;
     }
     if (path === 'displayname') user.name = sanitizeLabel(operation.value, 100);
@@ -1692,8 +2089,18 @@ scimRouter.delete('/Users/:id', (req, res) => {
   const membership = getMembership(req.scimOrgId, req.params.id);
   const user = membership && loadUsers()[req.params.id];
   if (!user) return res.status(404).end();
+  if (req.scimTenantScoped && membership.role === 'owner') {
+    return res.status(403).json({
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+      status: '403',
+      detail: 'The organization owner cannot be removed through provisioning.',
+    });
+  }
   if (req.scimTenantScoped) removeMembership(req.scimOrgId, user.id);
-  else { user.disabledAt = Date.now(); saveUsers(loadUsers()); }
+  else {
+    user.disabledAt = Date.now();
+    saveUsers(loadUsers());
+  }
   res.status(204).end();
 });
 
@@ -1703,23 +2110,42 @@ app.use('/scim/v2', requireScim, scimRouter);
 async function stripeRequest(path, params) {
   const response = await fetch(`https://api.stripe.com/v1/${path}`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params), signal: AbortSignal.timeout(15_000),
+    headers: {
+      authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(params),
+    signal: AbortSignal.timeout(15_000),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data?.error?.message || `Stripe returned ${response.status}`);
   return data;
 }
 
-export function verifyStripeWebhook(raw, header, secret, now = Date.now()) {
-  header = String(header || '');
-  const timestamp = header.split(',').find((item) => item.startsWith('t='))?.slice(2);
-  const signatures = header.split(',').filter((item) => item.startsWith('v1=')).map((item) => item.slice(3));
+export function verifyStripeWebhook(raw, signatureHeader, secret, now = Date.now()) {
+  const header = String(signatureHeader || '');
+  const timestamp = header
+    .split(',')
+    .find((item) => item.startsWith('t='))
+    ?.slice(2);
+  const signatures = header
+    .split(',')
+    .filter((item) => item.startsWith('v1='))
+    .map((item) => item.slice(3));
   if (!raw || !timestamp || !secret || Math.abs(now / 1000 - Number(timestamp)) > 300) return null;
-  const expected = _crypto.createHmac('sha256', secret).update(`${timestamp}.${raw.toString('utf8')}`).digest('hex');
-  const valid = signatures.some((value) => value.length === expected.length && _crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected)));
+  const expected = _crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${raw.toString('utf8')}`)
+    .digest('hex');
+  const valid = signatures.some(
+    (value) => value.length === expected.length && _crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected)),
+  );
   if (!valid) return null;
-  try { return JSON.parse(raw.toString('utf8')); } catch { return null; }
+  try {
+    return JSON.parse(raw.toString('utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function verifiedStripeEvent(req) {
@@ -1736,15 +2162,22 @@ app.post('/api/auth/subscribe', async (req, res) => {
   try {
     const base = publicBaseUrl(req);
     const session = await stripeRequest('checkout/sessions', {
-      mode: 'subscription', 'line_items[0][price]': price, 'line_items[0][quantity]': '1',
-      customer_email: ctx.user.email, client_reference_id: ctx.org.id,
-      'metadata[orgId]': ctx.org.id, 'subscription_data[metadata][orgId]': ctx.org.id,
-      success_url: `${base}/?billing=success`, cancel_url: `${base}/?billing=cancelled`,
+      mode: 'subscription',
+      'line_items[0][price]': price,
+      'line_items[0][quantity]': '1',
+      customer_email: ctx.user.email,
+      client_reference_id: ctx.org.id,
+      'metadata[orgId]': ctx.org.id,
+      'subscription_data[metadata][orgId]': ctx.org.id,
+      success_url: `${base}/?billing=success`,
+      cancel_url: `${base}/?billing=cancelled`,
       allow_promotion_codes: 'true',
     });
     audit(ctx, 'billing.checkout_created', 'organization', ctx.org.id, { cycle, sessionId: session.id });
     res.json({ ok: true, url: session.url });
-  } catch (error) { res.status(502).json({ error: `Could not create checkout: ${error.message}` }); }
+  } catch (error) {
+    res.status(502).json({ error: `Could not create checkout: ${error.message}` });
+  }
 });
 
 app.post('/api/billing/webhook', async (req, res) => {
@@ -1769,9 +2202,33 @@ app.post('/api/billing/webhook', async (req, res) => {
     if (current?.updatedAt && current.updatedAt >= eventAt) return res.json({ received: true, duplicateOrStale: true });
     if (event.type === 'checkout.session.completed') {
       const paid = object.payment_status === 'paid' || object.payment_status === 'no_payment_required';
-      await saveEntitlement({ orgId, plan: 'pro', status: paid ? 'active' : 'incomplete', provider: 'stripe', providerCustomerId: String(object.customer || ''), providerSubscriptionId: String(object.subscription || ''), currentPeriodEnd: null, limits: PRO_LIMITS, updatedAt: eventAt });
-    } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.created' || event.type === 'customer.subscription.deleted') {
-      await saveEntitlement({ orgId, plan: 'pro', status: event.type.endsWith('.deleted') ? 'canceled' : String(object.status || 'incomplete'), provider: 'stripe', providerCustomerId: String(object.customer || ''), providerSubscriptionId: String(object.id || ''), currentPeriodEnd: object.current_period_end ? Number(object.current_period_end) * 1000 : null, limits: PRO_LIMITS, updatedAt: eventAt });
+      await saveEntitlement({
+        orgId,
+        plan: 'pro',
+        status: paid ? 'active' : 'incomplete',
+        provider: 'stripe',
+        providerCustomerId: String(object.customer || ''),
+        providerSubscriptionId: String(object.subscription || ''),
+        currentPeriodEnd: null,
+        limits: PRO_LIMITS,
+        updatedAt: eventAt,
+      });
+    } else if (
+      event.type === 'customer.subscription.updated' ||
+      event.type === 'customer.subscription.created' ||
+      event.type === 'customer.subscription.deleted'
+    ) {
+      await saveEntitlement({
+        orgId,
+        plan: 'pro',
+        status: event.type.endsWith('.deleted') ? 'canceled' : String(object.status || 'incomplete'),
+        provider: 'stripe',
+        providerCustomerId: String(object.customer || ''),
+        providerSubscriptionId: String(object.id || ''),
+        currentPeriodEnd: object.current_period_end ? Number(object.current_period_end) * 1000 : null,
+        limits: PRO_LIMITS,
+        updatedAt: eventAt,
+      });
     }
   }
   res.json({ received: true });
@@ -1785,11 +2242,17 @@ app.post('/api/auth/cancel', async (req, res) => {
   const ctx = requirePermission(req, res, 'settings.manage');
   if (!ctx) return;
   const entitlement = await getEntitlement(ctx.org.id);
-  if (!billingEnabled() || !entitlement?.providerCustomerId) return res.status(409).json({ error: 'This organization has no Stripe subscription.' });
+  if (!billingEnabled() || !entitlement?.providerCustomerId)
+    return res.status(409).json({ error: 'This organization has no Stripe subscription.' });
   try {
-    const portal = await stripeRequest('billing_portal/sessions', { customer: entitlement.providerCustomerId, return_url: `${publicBaseUrl(req)}/` });
+    const portal = await stripeRequest('billing_portal/sessions', {
+      customer: entitlement.providerCustomerId,
+      return_url: `${publicBaseUrl(req)}/`,
+    });
     res.json({ ok: true, url: portal.url });
-  } catch (error) { res.status(502).json({ error: `Could not open billing portal: ${error.message}` }); }
+  } catch (error) {
+    res.status(502).json({ error: `Could not open billing portal: ${error.message}` });
+  }
 });
 
 // ===== Security assistant, memory, research reports, developer API keys, share links =====
@@ -1808,7 +2271,9 @@ async function readScanText(orgId, scanId, paths) {
   for (const rel of paths) {
     const artifact = artifacts.find((item) => item.metadata?.relativePath === rel);
     if (artifact) {
-      try { return (await readArtifact(artifact)).toString('utf8'); } catch {}
+      try {
+        return (await readArtifact(artifact)).toString('utf8');
+      } catch {}
     }
   }
   return null;
@@ -1816,7 +2281,13 @@ async function readScanText(orgId, scanId, paths) {
 
 // Assistant and research text is rendered server-side with raw HTML escaped (share-page.mjs).
 const withHtml = (message) => ({ ...message, html: renderMarkdown(message.content) });
-const conversationSummary = (c) => ({ id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, messageCount: (c.messages || []).length });
+const conversationSummary = (c) => ({
+  id: c.id,
+  title: c.title,
+  createdAt: c.createdAt,
+  updatedAt: c.updatedAt,
+  messageCount: (c.messages || []).length,
+});
 
 async function ownConversation(req, res) {
   const ctx = requirePermission(req, res, 'findings.read');
@@ -1832,13 +2303,20 @@ async function ownConversation(req, res) {
 app.get('/api/assistant/conversations', async (req, res) => {
   const ctx = requirePermission(req, res, 'findings.read');
   if (!ctx) return;
-  const list = await assistantConversations.list({ orgId: ctx.org.id, userId: ctx.user.id }, { orderBy: 'updatedAt', limit: 100 });
+  const list = await assistantConversations.list(
+    { orgId: ctx.org.id, userId: ctx.user.id },
+    { orderBy: 'updatedAt', limit: 100 },
+  );
   res.json({ ok: true, conversations: list.map(conversationSummary) });
 });
 
 app.get('/api/assistant/conversations/:id', async (req, res) => {
   const found = await ownConversation(req, res);
-  if (found) res.json({ ok: true, conversation: { ...found.conversation, messages: (found.conversation.messages || []).map(withHtml) } });
+  if (found)
+    res.json({
+      ok: true,
+      conversation: { ...found.conversation, messages: (found.conversation.messages || []).map(withHtml) },
+    });
 });
 
 app.delete('/api/assistant/conversations/:id', async (req, res) => {
@@ -1852,8 +2330,15 @@ async function saveMemoryNote(ctx, rawText) {
   const normalized = normalizeMemoryText(rawText);
   if (!normalized.ok) return { ok: false, status: 400, error: normalized.error };
   const existing = await assistantMemory.list({ orgId: ctx.org.id }, { limit: 500 });
-  if (existing.length >= MEMORY_MAX_NOTES) return { ok: false, status: 409, error: `Memory is full (${MEMORY_MAX_NOTES} notes). Delete one first.` };
-  const note = { id: newId('mem'), orgId: ctx.org.id, text: normalized.text, createdBy: ctx.user.id, createdAt: Date.now() };
+  if (existing.length >= MEMORY_MAX_NOTES)
+    return { ok: false, status: 409, error: `Memory is full (${MEMORY_MAX_NOTES} notes). Delete one first.` };
+  const note = {
+    id: newId('mem'),
+    orgId: ctx.org.id,
+    text: normalized.text,
+    createdBy: ctx.user.id,
+    createdAt: Date.now(),
+  };
   await assistantMemory.save(note);
   audit(ctx, 'assistant.memory_added', 'assistant_memory', note.id, {});
   return { ok: true, note };
@@ -1871,24 +2356,52 @@ app.post('/api/assistant/chat', async (req, res) => {
     return res.status(404).json({ error: 'Conversation not found.' });
   }
   const now = Date.now();
-  conversation ||= { id: newId('cnv'), orgId: ctx.org.id, userId: ctx.user.id, title: conversationTitle(text), messages: [], createdAt: now, updatedAt: now };
+  conversation ||= {
+    id: newId('cnv'),
+    orgId: ctx.org.id,
+    userId: ctx.user.id,
+    title: conversationTitle(text),
+    messages: [],
+    createdAt: now,
+    updatedAt: now,
+  };
   const history = [...(conversation.messages || []), { role: 'user', content: text, at: now }];
 
   const remember = parseRememberCommand(text);
   let reply;
   if (remember !== null) {
-    if (!can(ctx.membership.role, 'findings.triage')) reply = { role: 'assistant', content: 'Your role cannot add organization memory. Ask an analyst, engineer, admin or owner.', at: Date.now(), local: true };
+    if (!can(ctx.membership.role, 'findings.triage'))
+      reply = {
+        role: 'assistant',
+        content: 'Your role cannot add organization memory. Ask an analyst, engineer, admin or owner.',
+        at: Date.now(),
+        local: true,
+      };
     else {
       const saved = await saveMemoryNote(ctx, remember);
-      reply = { role: 'assistant', content: saved.ok ? `Saved to organization memory: "${saved.note.text}"` : saved.error, at: Date.now(), local: true };
+      reply = {
+        role: 'assistant',
+        content: saved.ok ? `Saved to organization memory: "${saved.note.text}"` : saved.error,
+        at: Date.now(),
+        local: true,
+      };
     }
   } else {
     const apiKey = (await aiKeysForRequest(req)).claude;
-    if (!apiKey) return res.status(400).json({ error: 'Anthropic key required. An organization owner or admin can add it in Settings.' });
-    const [memory, scans] = await Promise.all([assistantMemory.list({ orgId: ctx.org.id }, { limit: MEMORY_MAX_NOTES }), listOrgScans(ctx.org.id)]);
+    if (!apiKey)
+      return res
+        .status(400)
+        .json({ error: 'Anthropic key required. An organization owner or admin can add it in Settings.' });
+    const [memory, scans] = await Promise.all([
+      assistantMemory.list({ orgId: ctx.org.id }, { limit: MEMORY_MAX_NOTES }),
+      listOrgScans(ctx.org.id),
+    ]);
     const system = [
       { type: 'text', text: ASSISTANT_INSTRUCTIONS, cache_control: { type: 'ephemeral' } },
-      { type: 'text', text: buildOrgContext({ orgName: ctx.org.name, memory, findings: listFindings(ctx.org.id), scans }) },
+      {
+        type: 'text',
+        text: buildOrgContext({ orgName: ctx.org.name, memory, findings: listFindings(ctx.org.id), scans }),
+      },
     ];
     let result;
     try {
@@ -1898,10 +2411,27 @@ app.post('/api/assistant/chat', async (req, res) => {
       return res.status(described.status).json({ error: described.message });
     }
     reply = result.ok
-      ? { role: 'assistant', content: result.text || '(The assistant returned no text.)', at: Date.now(), model: result.model, truncated: result.truncated || undefined }
-      : { role: 'assistant', content: "I can't help with that request. I can help you understand, prioritize and fix findings in systems your organization owns.", at: Date.now(), model: result.model, refusal: true };
+      ? {
+          role: 'assistant',
+          content: result.text || '(The assistant returned no text.)',
+          at: Date.now(),
+          model: result.model,
+          truncated: result.truncated || undefined,
+        }
+      : {
+          role: 'assistant',
+          content:
+            "I can't help with that request. I can help you understand, prioritize and fix findings in systems your organization owns.",
+          at: Date.now(),
+          model: result.model,
+          refusal: true,
+        };
   }
-  conversation = { ...conversation, messages: [...history, reply].slice(-CHAT_LIMITS.storedMessages), updatedAt: Date.now() };
+  conversation = {
+    ...conversation,
+    messages: [...history, reply].slice(-CHAT_LIMITS.storedMessages),
+    updatedAt: Date.now(),
+  };
   await assistantConversations.save(conversation);
   res.json({ ok: true, conversation: conversationSummary(conversation), reply: withHtml(reply) });
 });
@@ -1909,7 +2439,11 @@ app.post('/api/assistant/chat', async (req, res) => {
 app.get('/api/assistant/memory', async (req, res) => {
   const ctx = requirePermission(req, res, 'findings.read');
   if (!ctx) return;
-  res.json({ ok: true, notes: await assistantMemory.list({ orgId: ctx.org.id }, { limit: MEMORY_MAX_NOTES }), canEdit: can(ctx.membership.role, 'findings.triage') });
+  res.json({
+    ok: true,
+    notes: await assistantMemory.list({ orgId: ctx.org.id }, { limit: MEMORY_MAX_NOTES }),
+    canEdit: can(ctx.membership.role, 'findings.triage'),
+  });
 });
 
 app.post('/api/assistant/memory', async (req, res) => {
@@ -1935,7 +2469,12 @@ const researchSummary = ({ markdown, ...rest }) => ({ ...rest, hasReport: !!mark
 
 async function settleStaleResearch(report) {
   if (report?.status === 'running' && Date.now() - report.updatedAt > RESEARCH_STALE_MS) {
-    const failed = { ...report, status: 'failed', error: 'The report did not finish (the server may have restarted). Start a new one.', updatedAt: Date.now() };
+    const failed = {
+      ...report,
+      status: 'failed',
+      error: 'The report did not finish (the server may have restarted). Start a new one.',
+      updatedAt: Date.now(),
+    };
     await researchReports.save(failed);
     return failed;
   }
@@ -1944,23 +2483,50 @@ async function settleStaleResearch(report) {
 
 async function generateResearch(report, { apiKey, orgId }) {
   try {
-    const findings = listFindings(orgId).filter((f) => domainMatches(f.details?.target || f.details?.url || f.details?.host || '', report.domain) || JSON.stringify(f.details || {}).toLowerCase().includes(report.domain));
+    const findings = listFindings(orgId).filter(
+      (f) =>
+        domainMatches(f.details?.target || f.details?.url || f.details?.host || '', report.domain) ||
+        JSON.stringify(f.details || {})
+          .toLowerCase()
+          .includes(report.domain),
+    );
     const scans = (await listOrgScans(orgId)).filter((scan) => domainMatches(scan.target, report.domain));
     const reports = [];
     for (const scan of scans) {
       if (reports.length >= 5) break;
       const text = await readScanText(orgId, scan.id, ['purple/certification-report.md', 'report.md']);
-      if (text) reports.push({ scanId: scan.id, target: scan.target, status: scan.status, startedAt: scan.startedAt, text });
+      if (text)
+        reports.push({ scanId: scan.id, target: scan.target, status: scan.status, startedAt: scan.startedAt, text });
     }
-    const result = await runResearch({ apiKey, system: RESEARCH_INSTRUCTIONS, prompt: researchMaterial({ domain: report.domain, findings, reports }) });
+    const result = await runResearch({
+      apiKey,
+      system: RESEARCH_INSTRUCTIONS,
+      prompt: researchMaterial({ domain: report.domain, findings, reports }),
+    });
     const sources = { findings: findings.length, scans: scans.length, reportsUsed: reports.map((r) => r.scanId) };
     if (!result.ok) {
-      await researchReports.save({ ...report, status: 'failed', error: 'The model declined to write this report.', model: result.model, sources, updatedAt: Date.now() });
+      await researchReports.save({
+        ...report,
+        status: 'failed',
+        error: 'The model declined to write this report.',
+        model: result.model,
+        sources,
+        updatedAt: Date.now(),
+      });
       return;
     }
-    await researchReports.save({ ...report, status: 'completed', markdown: result.truncated ? `${result.text}\n\n> Report truncated at the output limit.` : result.text, model: result.model, sources, updatedAt: Date.now() });
+    await researchReports.save({
+      ...report,
+      status: 'completed',
+      markdown: result.truncated ? `${result.text}\n\n> Report truncated at the output limit.` : result.text,
+      model: result.model,
+      sources,
+      updatedAt: Date.now(),
+    });
   } catch (error) {
-    await researchReports.save({ ...report, status: 'failed', error: describeAiError(error).message, updatedAt: Date.now() }).catch(() => {});
+    await researchReports
+      .save({ ...report, status: 'failed', error: describeAiError(error).message, updatedAt: Date.now() })
+      .catch(() => {});
   }
 }
 
@@ -1968,16 +2534,36 @@ app.post('/api/assistant/research', async (req, res) => {
   const ctx = requirePermission(req, res, 'scans.run');
   if (!ctx) return;
   const domain = registrable(hostOf(String(req.body?.domain || '')));
-  if (!domain || !domain.includes('.')) return res.status(400).json({ error: 'Enter a domain, for example example.com.' });
-  if (!isVerified(ctx.user.id, domain)) return res.status(403).json({ error: `Verify ownership of ${domain} first (Domains page).`, needsVerification: domain });
+  if (!domain || !domain.includes('.'))
+    return res.status(400).json({ error: 'Enter a domain, for example example.com.' });
+  if (!isVerified(ctx.user.id, domain))
+    return res
+      .status(403)
+      .json({ error: `Verify ownership of ${domain} first (Domains page).`, needsVerification: domain });
   const running = (await researchReports.list({ orgId: ctx.org.id, status: 'running' }, { limit: 10 })).map((r) => r);
   for (const item of running) await settleStaleResearch(item);
-  if ((await researchReports.list({ orgId: ctx.org.id, status: 'running' }, { limit: 1 })).length) return res.status(409).json({ error: 'A research report is already being written for this organization.' });
+  if ((await researchReports.list({ orgId: ctx.org.id, status: 'running' }, { limit: 1 })).length)
+    return res.status(409).json({ error: 'A research report is already being written for this organization.' });
   const apiKey = (await aiKeysForRequest(req)).claude;
-  if (!apiKey) return res.status(400).json({ error: 'Anthropic key required. An organization owner or admin can add it in Settings.' });
+  if (!apiKey)
+    return res
+      .status(400)
+      .json({ error: 'Anthropic key required. An organization owner or admin can add it in Settings.' });
   if (!(await consumeOrgQuota(ctx, res, 'agentRuns'))) return;
   const now = Date.now();
-  const report = { id: newId('rsr'), orgId: ctx.org.id, userId: ctx.user.id, domain, status: 'running', markdown: null, model: null, error: null, sources: null, createdAt: now, updatedAt: now };
+  const report = {
+    id: newId('rsr'),
+    orgId: ctx.org.id,
+    userId: ctx.user.id,
+    domain,
+    status: 'running',
+    markdown: null,
+    model: null,
+    error: null,
+    sources: null,
+    createdAt: now,
+    updatedAt: now,
+  };
   await researchReports.save(report);
   audit(ctx, 'assistant.research_started', 'research_report', report.id, { domain });
   generateResearch(report, { apiKey, orgId: ctx.org.id });
@@ -2017,7 +2603,11 @@ const keyView = ({ secretHash, ...rest }) => rest;
 app.get('/api/developer/keys', async (req, res) => {
   const ctx = requirePermission(req, res, 'settings.manage');
   if (!ctx) return;
-  res.json({ ok: true, keys: (await apiKeys.list({ orgId: ctx.org.id }, { limit: 200 })).map(keyView), scopes: API_SCOPES });
+  res.json({
+    ok: true,
+    keys: (await apiKeys.list({ orgId: ctx.org.id }, { limit: 200 })).map(keyView),
+    scopes: API_SCOPES,
+  });
 });
 
 app.post('/api/developer/keys', async (req, res) => {
@@ -2026,9 +2616,21 @@ app.post('/api/developer/keys', async (req, res) => {
   const name = sanitizeLabel(req.body?.name || '', 80);
   if (!name) return res.status(400).json({ error: 'Give the key a name, for example "GitHub Actions".' });
   const active = (await apiKeys.list({ orgId: ctx.org.id }, { limit: 200 })).filter((key) => !key.revokedAt);
-  if (active.length >= MAX_ACTIVE_KEYS) return res.status(409).json({ error: `An organization can have at most ${MAX_ACTIVE_KEYS} active keys.` });
+  if (active.length >= MAX_ACTIVE_KEYS)
+    return res.status(409).json({ error: `An organization can have at most ${MAX_ACTIVE_KEYS} active keys.` });
   const generated = newApiKey();
-  const key = { id: generated.id, orgId: ctx.org.id, name, hint: generated.hint, secretHash: generated.secretHash, scopes: normalizeScopes(req.body?.scopes), createdBy: ctx.user.id, createdAt: Date.now(), lastUsedAt: null, revokedAt: null };
+  const key = {
+    id: generated.id,
+    orgId: ctx.org.id,
+    name,
+    hint: generated.hint,
+    secretHash: generated.secretHash,
+    scopes: normalizeScopes(req.body?.scopes),
+    createdBy: ctx.user.id,
+    createdAt: Date.now(),
+    lastUsedAt: null,
+    revokedAt: null,
+  };
   await apiKeys.save(key);
   audit(ctx, 'developer.key_created', 'api_key', key.id, { scopes: key.scopes });
   res.status(201).json({ ok: true, key: keyView(key), token: generated.token });
@@ -2063,11 +2665,15 @@ const shareView = ({ secretHash, ...rest }) => rest;
 async function shareResource(ctx, type, id) {
   if (type === 'research') {
     const report = await researchReports.get(id);
-    return report && report.orgId === ctx.org.id && report.status === 'completed' ? { title: `Security assessment: ${report.domain}` } : null;
+    return report && report.orgId === ctx.org.id && report.status === 'completed'
+      ? { title: `Security assessment: ${report.domain}` }
+      : null;
   }
   if (type === 'conversation') {
     const conversation = await assistantConversations.get(id);
-    return conversation && conversation.orgId === ctx.org.id && conversation.userId === ctx.user.id ? { title: conversation.title } : null;
+    return conversation && conversation.orgId === ctx.org.id && conversation.userId === ctx.user.id
+      ? { title: conversation.title }
+      : null;
   }
   if (type === 'scan-report') {
     if (getScanOwner(id)?.orgId !== ctx.org.id) return null;
@@ -2084,9 +2690,22 @@ app.post('/api/share-links', async (req, res) => {
   const resourceId = String(req.body?.resourceId || '');
   if (!SHARE_TYPES.includes(type) || !resourceId) return res.status(400).json({ error: 'Choose what to share.' });
   const resource = await shareResource(ctx, type, resourceId);
-  if (!resource) return res.status(404).json({ error: 'Nothing to share: it does not exist, is not finished, or is not yours.' });
+  if (!resource)
+    return res.status(404).json({ error: 'Nothing to share: it does not exist, is not finished, or is not yours.' });
   const token = newShareToken();
-  const link = { id: token.id, orgId: ctx.org.id, resourceType: type, resourceId, title: resource.title, secretHash: token.secretHash, createdBy: ctx.user.id, createdAt: Date.now(), expiresAt: shareExpiry(req.body?.days), revokedAt: null, views: 0 };
+  const link = {
+    id: token.id,
+    orgId: ctx.org.id,
+    resourceType: type,
+    resourceId,
+    title: resource.title,
+    secretHash: token.secretHash,
+    createdBy: ctx.user.id,
+    createdAt: Date.now(),
+    expiresAt: shareExpiry(req.body?.days),
+    revokedAt: null,
+    views: 0,
+  };
   await shareLinks.save(link);
   audit(ctx, 'share.created', 'share_link', link.id, { resourceType: type, resourceId, expiresAt: link.expiresAt });
   res.status(201).json({ ok: true, link: shareView(link), url: `${publicBaseUrl(req)}/share/${token.token}` });
@@ -2104,7 +2723,8 @@ app.delete('/api/share-links/:id', async (req, res) => {
   if (!ctx) return;
   const link = await shareLinks.get(String(req.params.id || ''));
   if (!link || link.orgId !== ctx.org.id) return res.status(404).json({ error: 'Link not found.' });
-  if (link.createdBy !== ctx.user.id && !can(ctx.membership.role, 'settings.manage')) return res.status(403).json({ error: 'Only the person who shared it or an admin can revoke this link.' });
+  if (link.createdBy !== ctx.user.id && !can(ctx.membership.role, 'settings.manage'))
+    return res.status(403).json({ error: 'Only the person who shared it or an admin can revoke this link.' });
   if (!link.revokedAt) await shareLinks.save({ ...link, revokedAt: Date.now() });
   audit(ctx, 'share.revoked', 'share_link', link.id, {});
   res.json({ ok: true });
@@ -2117,7 +2737,8 @@ app.get('/share/:token', async (req, res) => {
   res.setHeader('referrer-policy', 'no-referrer');
   const parsed = parseShareToken(req.params.token);
   const link = parsed ? await shareLinks.get(parsed.id).catch(() => null) : null;
-  if (!link || !secretMatches(parsed.secret, link.secretHash) || !shareUsable(link)) return res.status(404).type('html').send(renderShareGone());
+  if (!link || !secretMatches(parsed.secret, link.secretHash) || !shareUsable(link))
+    return res.status(404).type('html').send(renderShareGone());
   let html = null;
   if (link.resourceType === 'research') {
     const report = await researchReports.get(link.resourceId);
@@ -2128,7 +2749,7 @@ app.get('/share/:token', async (req, res) => {
   } else if (link.resourceType === 'scan-report' && getScanOwner(link.resourceId)?.orgId === link.orgId) {
     html = await readScanText(link.orgId, link.resourceId, ['purple/certification-report.html']);
     // Engine-generated HTML: render it sandboxed so no script can run on our origin.
-    if (html) res.setHeader('content-security-policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:");
+    if (html) res.setHeader('content-security-policy', REPORT_SANDBOX);
   }
   if (!html) return res.status(404).type('html').send(renderShareGone());
   shareLinks.save({ ...link, views: Number(link.views || 0) + 1 }).catch(() => {});
@@ -2140,7 +2761,11 @@ app.get('/share/:token', async (req, res) => {
 // commerce.mjs; the client never sends an amount.
 
 function commerceCatalog() {
-  return publicCatalog(process.env, { cardReady: stripeCardReady(), plans: billingEnabled() ? [FREE_PLAN, PRO_PLAN] : [FREE_PLAN], freeLimits: FREE_LIMITS });
+  return publicCatalog(process.env, {
+    cardReady: stripeCardReady(),
+    plans: billingEnabled() ? [FREE_PLAN, PRO_PLAN] : [FREE_PLAN],
+    freeLimits: FREE_LIMITS,
+  });
 }
 
 async function grantCreditsForOrder(order) {
@@ -2151,7 +2776,8 @@ async function grantCreditsForOrder(order) {
 }
 
 async function applyCommerceWebhook(event, object) {
-  const paidEvent = event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded';
+  const paidEvent =
+    event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded';
   if (!paidEvent) return { ignored: event.type };
   if (object.payment_status !== 'paid') return { pending: true };
   const order = await getCommerceOrder(String(object.metadata?.orderId || ''));
@@ -2169,7 +2795,9 @@ async function applyCommerceWebhook(event, object) {
 }
 
 function commerceClosed(res) {
-  res.status(503).json({ error: 'Securovix is free during beta, so purchases are not open yet.', code: 'COMMERCE_DISABLED' });
+  res
+    .status(503)
+    .json({ error: 'Securovix is free during beta, so purchases are not open yet.', code: 'COMMERCE_DISABLED' });
 }
 
 function orderView(order) {
@@ -2185,12 +2813,20 @@ app.get('/api/commerce/catalog', (_req, res) => {
 app.get('/api/commerce/account', async (req, res) => {
   const ctx = requirePermission(req, res, 'audit.read');
   if (!ctx) return;
-  const [orders, grants] = await Promise.all([listCommerceOrders({ orgId: ctx.org.id, limit: 50 }), listCreditGrants(ctx.org.id)]);
+  const [orders, grants] = await Promise.all([
+    listCommerceOrders({ orgId: ctx.org.id, limit: 50 }),
+    listCreditGrants(ctx.org.id),
+  ]);
   const now = Date.now();
   res.json({
-    ok: true, catalog: commerceCatalog(), credits: creditBalance(grants, now),
-    grants: grants.filter((grant) => grant.expiresAt > now).map(({ id, orderId, remaining, expiresAt }) => ({ id, orderId, remaining, expiresAt })),
-    orders: orders.map(orderView), canPurchase: can(ctx.membership.role, 'settings.manage'),
+    ok: true,
+    catalog: commerceCatalog(),
+    credits: creditBalance(grants, now),
+    grants: grants
+      .filter((grant) => grant.expiresAt > now)
+      .map(({ id, orderId, remaining, expiresAt }) => ({ id, orderId, remaining, expiresAt })),
+    orders: orders.map(orderView),
+    canPurchase: can(ctx.membership.role, 'settings.manage'),
   });
 });
 
@@ -2201,21 +2837,33 @@ app.post('/api/commerce/orders', async (req, res) => {
   if (limited(req, res, `commerce:order:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
   const item = catalogItem(req.body?.itemId);
   const method = String(req.body?.method || '');
-  const created = newOrder({ id: randomUUID(), orgId: ctx.org.id, userId: ctx.user.id, itemId: item?.id, method, methods: paymentMethods(process.env, { cardReady: stripeCardReady() }) });
+  const created = newOrder({
+    id: randomUUID(),
+    orgId: ctx.org.id,
+    userId: ctx.user.id,
+    itemId: item?.id,
+    method,
+    methods: paymentMethods(process.env, { cardReady: stripeCardReady() }),
+  });
   if (!created.ok) return res.status(400).json({ error: created.error, code: created.code });
   const order = created.order;
   if (method === 'card') {
     try {
       const base = publicBaseUrl(req);
       const session = await stripeRequest('checkout/sessions', {
-        mode: 'payment', customer_email: ctx.user.email, client_reference_id: ctx.org.id,
+        mode: 'payment',
+        customer_email: ctx.user.email,
+        client_reference_id: ctx.org.id,
         'line_items[0][quantity]': '1',
         'line_items[0][price_data][currency]': order.currency.toLowerCase(),
         'line_items[0][price_data][unit_amount]': String(Math.round(order.amount * 100)),
         'line_items[0][price_data][product_data][name]': `Securovix — ${order.itemName}`,
-        'metadata[kind]': 'commerce', 'metadata[orderId]': order.id, 'metadata[orgId]': ctx.org.id,
+        'metadata[kind]': 'commerce',
+        'metadata[orderId]': order.id,
+        'metadata[orgId]': ctx.org.id,
         'payment_intent_data[metadata][orderId]': order.id,
-        success_url: `${base}/?purchase=success#billing`, cancel_url: `${base}/?purchase=cancelled#billing`,
+        success_url: `${base}/?purchase=success#billing`,
+        cancel_url: `${base}/?purchase=cancelled#billing`,
       });
       await saveCommerceOrder({ ...order, providerRef: session.id });
       audit(ctx, 'commerce.order_created', 'commerce_order', order.id, { itemId: order.itemId, method });
@@ -2243,15 +2891,21 @@ async function ownedOrder(req, res, permission) {
 app.get('/api/commerce/orders/:id/instructions', async (req, res) => {
   const found = await ownedOrder(req, res, 'settings.manage');
   if (!found) return;
-  if (found.order.status !== 'pending_evidence') return res.status(409).json({ error: `Order is ${found.order.status}.` });
+  if (found.order.status !== 'pending_evidence')
+    return res.status(409).json({ error: `Order is ${found.order.status}.` });
   res.json({ ok: true, instructions: paymentInstructions(found.order) });
 });
 
 app.post('/api/commerce/orders/:id/evidence', async (req, res) => {
   const found = await ownedOrder(req, res, 'settings.manage');
   if (!found) return;
-  const result = submitEvidence(found.order, { reference: req.body?.reference, note: req.body?.note, userId: found.ctx.user.id });
-  if (!result.ok) return res.status(result.code === 'INVALID_STATE' ? 409 : 400).json({ error: result.error, code: result.code });
+  const result = submitEvidence(found.order, {
+    reference: req.body?.reference,
+    note: req.body?.note,
+    userId: found.ctx.user.id,
+  });
+  if (!result.ok)
+    return res.status(result.code === 'INVALID_STATE' ? 409 : 400).json({ error: result.error, code: result.code });
   await saveCommerceOrder(result.order);
   audit(found.ctx, 'commerce.evidence_submitted', 'commerce_order', result.order.id, { method: result.order.method });
   res.json({ ok: true, order: orderView(result.order) });
@@ -2269,9 +2923,22 @@ app.post('/api/commerce/orders/:id/cancel', async (req, res) => {
 
 app.get('/api/platform/commerce/orders', async (req, res) => {
   if (!requirePlatformOperator(req, res)) return;
-  const status = ['pending_review', 'pending_evidence', 'pending_payment', 'approved', 'rejected', 'cancelled'].includes(String(req.query.status)) ? String(req.query.status) : 'pending_review';
+  const status = [
+    'pending_review',
+    'pending_evidence',
+    'pending_payment',
+    'approved',
+    'rejected',
+    'cancelled',
+  ].includes(String(req.query.status))
+    ? String(req.query.status)
+    : 'pending_review';
   const orders = await listCommerceOrders({ status, limit: 200 });
-  res.json({ ok: true, status, orders: orders.map((order) => ({ ...orderView(order), orgName: getOrganization(order.orgId)?.name || null })) });
+  res.json({
+    ok: true,
+    status,
+    orders: orders.map((order) => ({ ...orderView(order), orgName: getOrganization(order.orgId)?.name || null })),
+  });
 });
 
 app.post('/api/platform/commerce/orders/:id/review', async (req, res) => {
@@ -2279,12 +2946,20 @@ app.post('/api/platform/commerce/orders/:id/review', async (req, res) => {
   if (!operator) return;
   const order = await getCommerceOrder(String(req.params.id || ''));
   if (!order) return res.status(404).json({ error: 'Order not found.' });
-  const result = reviewOrder(order, { decision: req.body?.decision, reviewer: operator.email, reason: req.body?.reason });
-  if (!result.ok) return res.status(result.code === 'INVALID_STATE' ? 409 : 400).json({ error: result.error, code: result.code });
+  const result = reviewOrder(order, {
+    decision: req.body?.decision,
+    reviewer: operator.email,
+    reason: req.body?.reason,
+  });
+  if (!result.ok)
+    return res.status(result.code === 'INVALID_STATE' ? 409 : 400).json({ error: result.error, code: result.code });
   await saveCommerceOrder(result.order);
   const grant = result.order.status === 'approved' ? await grantCreditsForOrder(result.order) : null;
   const org = getOrganization(order.orgId);
-  if (org) audit({ org, user: operator }, `commerce.order_${result.order.status}`, 'commerce_order', order.id, { reviewer: operator.email });
+  if (org)
+    audit({ org, user: operator }, `commerce.order_${result.order.status}`, 'commerce_order', order.id, {
+      reviewer: operator.email,
+    });
   res.json({ ok: true, order: orderView(result.order), grant });
 });
 
@@ -2293,7 +2968,15 @@ app.get('/api/team/:orgId/usage', async (req, res) => {
   if (!ctx) return;
   const current = await organizationPlan(ctx.org.id);
   const [usage, grants] = await Promise.all([listUsage(ctx.org.id), listCreditGrants(ctx.org.id)]);
-  res.json({ ok: true, plan: current.plan, limits: current.limits, usage, credits: creditBalance(grants), billingEnabled: billingEnabled(), commerceEnabled: commerceEnabled() });
+  res.json({
+    ok: true,
+    plan: current.plan,
+    limits: current.limits,
+    usage,
+    credits: creditBalance(grants),
+    billingEnabled: billingEnabled(),
+    commerceEnabled: commerceEnabled(),
+  });
 });
 
 // Personal Security Shield — deterministic, read-only triage for suspicious messages and links.
@@ -2306,7 +2989,8 @@ app.post('/api/personal-shield/analyze', (req, res) => {
   const message = String(req.body?.message || '');
   const link = String(req.body?.link || '');
   if (!message.trim() && !link.trim()) return res.status(400).json({ error: 'Paste a suspicious message or link.' });
-  if (message.length > 20_000 || link.length > 2_048) return res.status(413).json({ error: 'Submitted content is too large.' });
+  if (message.length > 20_000 || link.length > 2_048)
+    return res.status(413).json({ error: 'Submitted content is too large.' });
   const result = analyzePersonalThreat({ message, link });
   audit(ctx, 'personal_shield.analyzed', 'personal-threat', null, {
     risk: result.risk,
@@ -2649,7 +3333,7 @@ Consolidate everything from the transcript. Every finding must quote the vulnera
 function csBuildUser(code, filename, transcript, phase, isFinalSynth, nonce) {
   let u = `=== Source code under review ===\n${fileBlock(code, filename, nonce)}\n\n`;
   if (transcript.length > 0) {
-    u += `=== War-room transcript so far ===\n`;
+    u += '=== War-room transcript so far ===\n';
     for (const t of transcript) {
       // A turn may be up to 4,000 tokens long; it is passed on whole so nothing a reviewer found is lost.
       const trim = t.text.length > 20_000 ? `${t.text.slice(0, 20_000)}\n…(truncated)` : t.text;
@@ -2658,8 +3342,8 @@ function csBuildUser(code, filename, transcript, phase, isFinalSynth, nonce) {
   }
   u += `\n\n=== YOUR TURN ===\nStep: ${phase.step}\n`;
   u += isFinalSynth
-    ? `Produce the final JSON deliverable per the system prompt schema. Consolidate all prior turns into definitive findings, patches, fixedCode, and a markdown report.`
-    : `Contribute NEW analysis specific to this step. Reference peers by name. Be concrete.`;
+    ? 'Produce the final JSON deliverable per the system prompt schema. Consolidate all prior turns into definitive findings, patches, fixedCode, and a markdown report.'
+    : 'Contribute NEW analysis specific to this step. Reference peers by name. Be concrete.';
   return u;
 }
 
@@ -3068,7 +3752,9 @@ async function organizationAiKeys(orgId) {
   if (!orgId) return keys;
   for (const row of await listOrgSecrets(orgId, 'ai-provider', { includeSecrets: true })) {
     if (!AI_PROVIDER_NAMES.has(row.name)) continue;
-    try { keys[row.name] = String(decryptSecret(row.secretEnc)?.apiKey || ''); } catch {}
+    try {
+      keys[row.name] = String(decryptSecret(row.secretEnc)?.apiKey || '');
+    } catch {}
   }
   return keys;
 }
@@ -3105,12 +3791,24 @@ app.get('/api/settings', (req, res) => {
   });
 });
 
-app.post('/api/settings', (req, res) => {
+app.post('/api/settings', async (req, res) => {
   const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Sign in first.' });
   const current = settingsFor(req);
   const updated = { ...current, ...req.body };
-  const sanitized = { provider: updated.provider, model: updated.model, baseUrl: updated.baseUrl };
-  saveUserSettings(user.id, sanitized);
+  const baseUrl = typeof updated.baseUrl === 'string' ? updated.baseUrl.trim().slice(0, 2048) : '';
+  // Scans send the organization's AI key to this address, so it is never an internal one.
+  if (baseUrl && (!/^https?:\/\//i.test(baseUrl) || (await privateTarget(baseUrl)))) {
+    return res.status(400).json({ error: 'The AI base address must be a public http(s) address.' });
+  }
+  const sanitized = {
+    provider: String(updated.provider || '').slice(0, 40),
+    model: String(updated.model || '').slice(0, 120),
+    baseUrl,
+  };
+  // Only these three fields change; anything else stored for the account (such as the weekly
+  // summary choice) is kept.
+  saveUserSettings(user.id, { ...loadUserSettings(user.id), ...sanitized });
   res.json({ ok: true });
 });
 
@@ -3186,7 +3884,9 @@ app.put('/api/team/:orgId/repository-provider', async (req, res) => {
   }
   const previous = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
   let previousSecret = {};
-  try { previousSecret = previous ? decryptSecret(previous.secretEnc) || {} : {}; } catch {}
+  try {
+    previousSecret = previous ? decryptSecret(previous.secretEnc) || {} : {};
+  } catch {}
   const selectedToken = token || String(previousSecret.token || '');
   if (selectedToken.length < 20 || selectedToken.length > 8_192) {
     return res.status(400).json({ error: 'A valid GitHub token is required.' });
@@ -3203,7 +3903,13 @@ app.put('/api/team/:orgId/repository-provider', async (req, res) => {
     createdAt: previous?.createdAt || now,
     updatedAt: now,
   });
-  audit(ctx, previous ? 'repository_provider.rotated' : 'repository_provider.created', 'repository-provider', 'github', { repo });
+  audit(
+    ctx,
+    previous ? 'repository_provider.rotated' : 'repository_provider.created',
+    'repository-provider',
+    'github',
+    { repo },
+  );
   res.json({ ok: true, provider: 'github', configured: true, repo, updatedAt: now });
 });
 
@@ -3221,17 +3927,21 @@ app.get('/api/team/:orgId/vulnerabilities', async (req, res) => {
   if (!ctx) return;
   try {
     const [components, matches, provider] = await Promise.all([
-      listSoftwareComponents(ctx.org.id), listVulnerabilityMatches(ctx.org.id),
+      listSoftwareComponents(ctx.org.id),
+      listVulnerabilityMatches(ctx.org.id),
       getOrgSecret(ctx.org.id, 'repository-provider', 'github'),
     ]);
     const componentById = new Map(components.map((item) => [item.id, item]));
     const enriched = matches.map((item) => ({ ...item, component: componentById.get(item.componentId) || null }));
     const open = enriched.filter((item) => !['resolved', 'accepted'].includes(item.status));
     res.json({
-      ok: true, components, matches: enriched,
+      ok: true,
+      components,
+      matches: enriched,
       github: { configured: !!provider?.secretEnc, repo: String(provider?.config?.repo || '') },
       stats: {
-        components: components.length, open: open.length,
+        components: components.length,
+        open: open.length,
         critical: open.filter((item) => item.severity === 'critical').length,
         kev: open.filter((item) => item.details?.kev).length,
         overdue: open.filter((item) => item.dueAt && item.dueAt < Date.now()).length,
@@ -3239,7 +3949,9 @@ app.get('/api/team/:orgId/vulnerabilities', async (req, res) => {
     });
   } catch (error) {
     const migration = /shannon_(software_components|vulnerability_matches)/i.test(error.message || '');
-    res.status(migration ? 503 : 500).json({ error: migration ? 'Vulnerability database migration is not applied yet.' : error.message });
+    res
+      .status(migration ? 503 : 500)
+      .json({ error: migration ? 'Vulnerability database migration is not applied yet.' : error.message });
   }
 });
 
@@ -3247,22 +3959,36 @@ app.post('/api/team/:orgId/vulnerabilities/sbom', async (req, res) => {
   const ctx = orgContext(req, res, 'defender.manage');
   if (!ctx) return;
   try {
-    const projectId = req.body?.projectId || null, assetId = req.body?.assetId || null;
-    if (projectId && !listProjects(ctx.org.id).some((item) => item.id === projectId)) return res.status(400).json({ error: 'Project is not part of this organization.' });
-    if (assetId && !(await listDefenseAssets(ctx.org.id)).some((item) => item.id === assetId)) return res.status(400).json({ error: 'Asset is not part of this organization.' });
+    const projectId = req.body?.projectId || null;
+    const assetId = req.body?.assetId || null;
+    if (projectId && !listProjects(ctx.org.id).some((item) => item.id === projectId))
+      return res.status(400).json({ error: 'Project is not part of this organization.' });
+    if (assetId && !(await listDefenseAssets(ctx.org.id)).some((item) => item.id === assetId))
+      return res.status(400).json({ error: 'Asset is not part of this organization.' });
     const sourceRef = sanitizeLabel(req.body?.sourceRef || `upload-${new Date().toISOString().slice(0, 10)}`, 500);
     const parsed = parseSbom(req.body?.document, { source: 'sbom', sourceRef });
     const components = await upsertSoftwareComponents({
-      orgId: ctx.org.id, projectId, assetId, components: parsed.components,
+      orgId: ctx.org.id,
+      projectId,
+      assetId,
+      components: parsed.components,
     });
     const job = await enqueueJob({
-      orgId: ctx.org.id, userId: ctx.user.id, type: 'vulnerability-refresh', payload: { trigger: 'sbom-upload', sourceRef },
-      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:sbom:${Date.now()}`, maxAttempts: 4,
+      orgId: ctx.org.id,
+      userId: ctx.user.id,
+      type: 'vulnerability-refresh',
+      payload: { trigger: 'sbom-upload', sourceRef },
+      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:sbom:${Date.now()}`,
+      maxAttempts: 4,
     });
     audit(ctx, 'sbom.imported', 'software-inventory', sourceRef, { format: parsed.format, count: components.length });
-    res.status(202).json({ ok: true, format: parsed.format, imported: components.length, job: { id: job.id, status: job.status } });
+    res
+      .status(202)
+      .json({ ok: true, format: parsed.format, imported: components.length, job: { id: job.id, status: job.status } });
   } catch (error) {
-    res.status(/Unsupported|No software|exceeds|must be/.test(error.message) ? 400 : 500).json({ error: error.message });
+    res
+      .status(/Unsupported|No software|exceeds|must be/.test(error.message) ? 400 : 500)
+      .json({ error: error.message });
   }
 });
 
@@ -3271,20 +3997,28 @@ app.post('/api/team/:orgId/vulnerabilities/github', async (req, res) => {
   if (!ctx) return;
   try {
     const provider = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
-    if (!provider?.secretEnc) return res.status(409).json({ error: 'Configure a GitHub repository token in Settings first.' });
+    if (!provider?.secretEnc)
+      return res.status(409).json({ error: 'Configure a GitHub repository token in Settings first.' });
     const projectId = req.body?.projectId || null;
-    if (projectId && !listProjects(ctx.org.id).some((item) => item.id === projectId)) return res.status(400).json({ error: 'Project is not part of this organization.' });
+    if (projectId && !listProjects(ctx.org.id).some((item) => item.id === projectId))
+      return res.status(400).json({ error: 'Project is not part of this organization.' });
     const secret = decryptSecret(provider.secretEnc) || {};
     const repository = String(req.body?.repo || provider.config?.repo || '').trim();
     const sbom = await fetchGithubSbom(repository, secret.token);
     const parsed = parseSbom(sbom, { source: 'github', sourceRef: repository });
     const components = await upsertSoftwareComponents({ orgId: ctx.org.id, projectId, components: parsed.components });
     const job = await enqueueJob({
-      orgId: ctx.org.id, userId: ctx.user.id, type: 'vulnerability-refresh', payload: { trigger: 'github', sourceRef: repository },
-      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:github:${Date.now()}`, maxAttempts: 4,
+      orgId: ctx.org.id,
+      userId: ctx.user.id,
+      type: 'vulnerability-refresh',
+      payload: { trigger: 'github', sourceRef: repository },
+      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:github:${Date.now()}`,
+      maxAttempts: 4,
     });
     audit(ctx, 'github.dependencies.discovered', 'repository', repository, { count: components.length });
-    res.status(202).json({ ok: true, repository, imported: components.length, job: { id: job.id, status: job.status } });
+    res
+      .status(202)
+      .json({ ok: true, repository, imported: components.length, job: { id: job.id, status: job.status } });
   } catch (error) {
     res.status(/must use|not configured|Configure/.test(error.message) ? 400 : 502).json({ error: error.message });
   }
@@ -3297,10 +4031,17 @@ app.post('/api/team/:orgId/vulnerabilities/components', async (req, res) => {
     const component = manualSoftwareComponent(req.body, sanitizeLabel(req.body?.sourceRef || 'manual inventory', 500));
     const saved = await upsertSoftwareComponents({ orgId: ctx.org.id, components: [component] });
     const job = await enqueueJob({
-      orgId: ctx.org.id, userId: ctx.user.id, type: 'vulnerability-refresh', payload: { trigger: 'manual-inventory' },
-      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:manual-inventory:${Date.now()}`, maxAttempts: 4,
+      orgId: ctx.org.id,
+      userId: ctx.user.id,
+      type: 'vulnerability-refresh',
+      payload: { trigger: 'manual-inventory' },
+      idempotencyKey: `vulnerability-refresh:${ctx.org.id}:manual-inventory:${Date.now()}`,
+      maxAttempts: 4,
     });
-    audit(ctx, 'software.component.created', 'software-component', saved[0].id, { name: saved[0].name, version: saved[0].version });
+    audit(ctx, 'software.component.created', 'software-component', saved[0].id, {
+      name: saved[0].name,
+      version: saved[0].version,
+    });
     res.status(202).json({ ok: true, component: saved[0], job: { id: job.id, status: job.status } });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -3311,8 +4052,12 @@ app.post('/api/team/:orgId/vulnerabilities/refresh', async (req, res) => {
   const ctx = orgContext(req, res, 'defender.manage');
   if (!ctx) return;
   const job = await enqueueJob({
-    orgId: ctx.org.id, userId: ctx.user.id, type: 'vulnerability-refresh', payload: { trigger: 'manual' },
-    idempotencyKey: `vulnerability-refresh:${ctx.org.id}:manual:${Date.now()}`, maxAttempts: 4,
+    orgId: ctx.org.id,
+    userId: ctx.user.id,
+    type: 'vulnerability-refresh',
+    payload: { trigger: 'manual' },
+    idempotencyKey: `vulnerability-refresh:${ctx.org.id}:manual:${Date.now()}`,
+    maxAttempts: 4,
   });
   audit(ctx, 'vulnerabilities.refresh.queued', 'job', job.id);
   res.status(202).json({ ok: true, job: { id: job.id, status: job.status } });
@@ -3324,10 +4069,14 @@ app.patch('/api/team/:orgId/vulnerabilities/:id', async (req, res) => {
   let dueAt;
   if (Object.hasOwn(req.body || {}, 'dueAt')) {
     dueAt = req.body.dueAt ? Date.parse(req.body.dueAt) : null;
-    if (req.body.dueAt && !Number.isFinite(dueAt)) return res.status(400).json({ error: 'Remediation deadline is invalid.' });
+    if (req.body.dueAt && !Number.isFinite(dueAt))
+      return res.status(400).json({ error: 'Remediation deadline is invalid.' });
   }
   try {
-    const match = await updateVulnerabilityMatch(ctx.org.id, req.params.id, { status: req.body?.status, ...(dueAt !== undefined ? { dueAt } : {}) });
+    const match = await updateVulnerabilityMatch(ctx.org.id, req.params.id, {
+      status: req.body?.status,
+      ...(dueAt !== undefined ? { dueAt } : {}),
+    });
     if (!match) return res.status(404).json({ error: 'Vulnerability match not found.' });
     audit(ctx, 'vulnerability.updated', 'vulnerability-match', match.id, { status: match.status, dueAt: match.dueAt });
     res.json({ ok: true, match });
@@ -3388,23 +4137,36 @@ app.get('/api/team/:orgId/members', (req, res) => {
 app.post('/api/team/:orgId/invitations', async (req, res) => {
   const ctx = orgContext(req, res, 'members.manage');
   if (!ctx) return;
-  const email = String(req.body?.email || '').trim().toLowerCase();
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase();
   const role = String(req.body?.role || 'viewer');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
-  if (!ROLES.includes(role) || role === 'owner') return res.status(400).json({ error: 'Choose a valid non-owner role.' });
+  if (!ROLES.includes(role) || role === 'owner')
+    return res.status(400).json({ error: 'Choose a valid non-owner role.' });
   const existing = findUserByEmail(email);
-  if (existing && getMembership(ctx.org.id, existing.id)) return res.status(409).json({ error: 'That user is already a member.' });
+  if (existing && getMembership(ctx.org.id, existing.id))
+    return res.status(409).json({ error: 'That user is already a member.' });
   try {
     const invitation = await issueAuthToken(req, {
-      kind: 'invitation', email, userId: existing?.id || null, orgId: ctx.org.id, role,
-      createdBy: ctx.user.id, ttlMs: 7 * 24 * 60 * 60_000,
-      linkPath: '/?invite=', subject: `You were invited to ${ctx.org.name}`,
+      kind: 'invitation',
+      email,
+      userId: existing?.id || null,
+      orgId: ctx.org.id,
+      role,
+      createdBy: ctx.user.id,
+      ttlMs: 7 * 24 * 60 * 60_000,
+      linkPath: '/?invite=',
+      subject: `You were invited to ${ctx.org.name}`,
       message: `${ctx.user.name || ctx.user.email} invited you to join ${ctx.org.name} as ${role}. This invitation expires in 7 days.`,
     });
     audit(ctx, 'invitation.created', 'invitation', email, { role });
     res.status(201).json({
-      ok: true, email, role, expiresInDays: 7,
-      ...(process.env.NODE_ENV !== 'production' ? { developmentToken: invitation.token } : {}),
+      ok: true,
+      email,
+      role,
+      expiresInDays: 7,
+      ...(DEV_TOKENS ? { developmentToken: invitation.token } : {}),
     });
   } catch (error) {
     res.status(502).json({ error: `Unable to send invitation: ${error.message}` });
@@ -3414,11 +4176,14 @@ app.post('/api/team/:orgId/invitations', async (req, res) => {
 app.post('/api/team/:orgId/members', (req, res) => {
   const ctx = orgContext(req, res, 'members.manage');
   if (!ctx) return;
-  const email = String(req.body?.email || '').trim().toLowerCase();
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase();
   const role = String(req.body?.role || 'viewer');
   const user = findUserByEmail(email);
   if (!user) return res.status(404).json({ error: 'That user must create a Securovix account before being added.' });
-  if (!ROLES.includes(role) || role === 'owner') return res.status(400).json({ error: 'Choose a valid non-owner role.' });
+  if (!ROLES.includes(role) || role === 'owner')
+    return res.status(400).json({ error: 'Choose a valid non-owner role.' });
   if (getMembership(ctx.org.id, user.id)) return res.status(409).json({ error: 'That user is already a member.' });
   const membership = { orgId: ctx.org.id, userId: user.id, role, createdAt: Date.now() };
   saveMembership(membership);
@@ -3432,8 +4197,13 @@ app.patch('/api/team/:orgId/members/:userId', (req, res) => {
   const target = getMembership(ctx.org.id, req.params.userId);
   const role = String(req.body?.role || '');
   if (!target) return res.status(404).json({ error: 'Member not found.' });
-  if (!canChangeMember(ctx.membership, target, role)) return res.status(403).json({ error: 'Role change not permitted.' });
-  if (target.role === 'owner' && role !== 'owner' && listMembers(ctx.org.id).filter((m) => m.role === 'owner').length === 1)
+  if (!canChangeMember(ctx.membership, target, role))
+    return res.status(403).json({ error: 'Role change not permitted.' });
+  if (
+    target.role === 'owner' &&
+    role !== 'owner' &&
+    listMembers(ctx.org.id).filter((m) => m.role === 'owner').length === 1
+  )
     return res.status(409).json({ error: 'An organization must always have an owner.' });
   saveMembership({ ...target, role });
   audit(ctx, 'membership.role_changed', 'membership', target.userId, { from: target.role, to: role });
@@ -3446,7 +4216,8 @@ app.delete('/api/team/:orgId/members/:userId', (req, res) => {
   const target = getMembership(ctx.org.id, req.params.userId);
   if (!target) return res.status(404).json({ error: 'Member not found.' });
   if (target.role === 'owner') return res.status(409).json({ error: 'Transfer ownership before removing the owner.' });
-  if (!canChangeMember(ctx.membership, target, 'viewer')) return res.status(403).json({ error: 'Member removal not permitted.' });
+  if (!canChangeMember(ctx.membership, target, 'viewer'))
+    return res.status(403).json({ error: 'Member removal not permitted.' });
   removeMembership(ctx.org.id, target.userId);
   audit(ctx, 'membership.removed', 'membership', target.userId, { role: target.role });
   res.json({ ok: true });
@@ -3519,18 +4290,25 @@ app.post('/api/team/:orgId/findings', (req, res) => {
     updatedAt: now,
   });
   audit(ctx, 'finding.created', 'finding', finding.id, { severity, source: finding.source });
-  queueIntegrationEvent(ctx.org.id, {
-    id: `finding-created:${finding.id}`,
-    type: 'finding.created',
-    at: new Date().toISOString(),
-    data: finding,
-  }, ctx.user.id).catch((error) => console.error('[integrations] finding event enqueue failed:', error.message));
+  queueIntegrationEvent(
+    ctx.org.id,
+    {
+      id: `finding-created:${finding.id}`,
+      type: 'finding.created',
+      at: new Date().toISOString(),
+      data: finding,
+    },
+    ctx.user.id,
+  ).catch((error) => console.error('[integrations] finding event enqueue failed:', error.message));
   res.status(201).json({ ok: true, finding });
 });
 
 app.patch('/api/team/:orgId/findings/:findingId', (req, res) => {
   const ctx = orgContext(req, res, 'findings.read');
   if (!ctx) return;
+  if (!can(ctx.membership.role, 'findings.triage') && !can(ctx.membership.role, 'findings.remediate')) {
+    return res.status(403).json({ error: `Your ${ctx.membership.role} role cannot change findings.` });
+  }
   const finding = getFinding(ctx.org.id, req.params.findingId);
   if (!finding) return res.status(404).json({ error: 'Finding not found.' });
   const next = { ...finding, updatedAt: Date.now() };
@@ -3545,13 +4323,20 @@ app.patch('/api/team/:orgId/findings/:findingId', (req, res) => {
     if (!check.ok) return res.status(403).json({ error: check.error });
     next.status = req.body.status;
     next.decision = ['risk-accepted', 'false-positive'].includes(next.status)
-      ? { reason: sanitizeLabel(req.body.reason, 1000), expiresAt: req.body.expiresAt || null, by: ctx.user.id, at: Date.now() }
+      ? {
+          reason: sanitizeLabel(req.body.reason, 1000),
+          expiresAt: req.body.expiresAt || null,
+          by: ctx.user.id,
+          at: Date.now(),
+        }
       : null;
   }
   if (Object.hasOwn(req.body || {}, 'assigneeUserId')) {
-    if (!can(ctx.membership.role, 'findings.triage')) return res.status(403).json({ error: 'Assignment not permitted.' });
+    if (!can(ctx.membership.role, 'findings.triage'))
+      return res.status(403).json({ error: 'Assignment not permitted.' });
     const assignee = req.body.assigneeUserId ? getMembership(ctx.org.id, req.body.assigneeUserId) : null;
-    if (req.body.assigneeUserId && !assignee) return res.status(400).json({ error: 'Assignee must be an organization member.' });
+    if (req.body.assigneeUserId && !assignee)
+      return res.status(400).json({ error: 'Assignee must be an organization member.' });
     next.assigneeUserId = req.body.assigneeUserId || null;
     if (next.assigneeUserId && next.status === 'new') next.status = 'assigned';
   }
@@ -3561,12 +4346,16 @@ app.patch('/api/team/:orgId/findings/:findingId', (req, res) => {
     toStatus: next.status,
     assigneeUserId: next.assigneeUserId,
   });
-  queueIntegrationEvent(ctx.org.id, {
-    id: `finding-updated:${next.id}:${next.updatedAt}`,
-    type: 'finding.updated',
-    at: new Date().toISOString(),
-    data: next,
-  }, ctx.user.id).catch((error) => console.error('[integrations] finding event enqueue failed:', error.message));
+  queueIntegrationEvent(
+    ctx.org.id,
+    {
+      id: `finding-updated:${next.id}:${next.updatedAt}`,
+      type: 'finding.updated',
+      at: new Date().toISOString(),
+      data: next,
+    },
+    ctx.user.id,
+  ).catch((error) => console.error('[integrations] finding event enqueue failed:', error.message));
   res.json({ ok: true, finding: next });
 });
 
@@ -3598,31 +4387,51 @@ function integrationInput(type, rawConfig, rawSecret, existingHasSecret = false)
   for (const key of fields.secret) {
     if (rawSecret?.[key] === undefined) continue;
     if (key === 'headers') {
-      if (!rawSecret.headers || typeof rawSecret.headers !== 'object' || Array.isArray(rawSecret.headers)) throw new Error('headers must be an object.');
-      secret.headers = Object.fromEntries(Object.entries(rawSecret.headers).slice(0, 20).map(([name, value]) => {
-        const headerName = String(name).slice(0, 100);
-        const headerValue = String(value).slice(0, 2000);
-        if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(headerName) || /[\r\n]/.test(headerValue)) throw new Error('headers contain an invalid name or value.');
-        if (['host', 'content-length', 'transfer-encoding', 'connection'].includes(headerName.toLowerCase())) throw new Error(`${headerName} cannot be overridden.`);
-        return [headerName, headerValue];
-      }));
+      if (!rawSecret.headers || typeof rawSecret.headers !== 'object' || Array.isArray(rawSecret.headers))
+        throw new Error('headers must be an object.');
+      secret.headers = Object.fromEntries(
+        Object.entries(rawSecret.headers)
+          .slice(0, 20)
+          .map(([name, value]) => {
+            const headerName = String(name).slice(0, 100);
+            const headerValue = String(value).slice(0, 2000);
+            if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(headerName) || /[\r\n]/.test(headerValue))
+              throw new Error('headers contain an invalid name or value.');
+            if (['host', 'content-length', 'transfer-encoding', 'connection'].includes(headerName.toLowerCase()))
+              throw new Error(`${headerName} cannot be overridden.`);
+            return [headerName, headerValue];
+          }),
+      );
     } else secret[key] = String(rawSecret[key]).trim().slice(0, 4096);
   }
-  const required = {
-    webhook: ['config.url'], 'siem-http': ['config.url'], slack: ['secret.webhookUrl'], teams: ['secret.webhookUrl'],
-    jira: ['config.baseUrl', 'config.projectKey', 'secret.email', 'secret.apiToken'],
-    linear: ['config.teamId', 'secret.apiKey'],
-  }[type] || [];
+  const required =
+    {
+      webhook: ['config.url'],
+      'siem-http': ['config.url'],
+      slack: ['secret.webhookUrl'],
+      teams: ['secret.webhookUrl'],
+      jira: ['config.baseUrl', 'config.projectKey', 'secret.email', 'secret.apiToken'],
+      linear: ['config.teamId', 'secret.apiKey'],
+    }[type] || [];
   for (const path of required) {
     const [group, key] = path.split('.');
     if (group === 'secret' && existingHasSecret && rawSecret === undefined) continue;
     if (!(group === 'config' ? config : secret)[key]) throw new Error(`${path} is required.`);
   }
-  for (const [label, value] of [['config.url', config.url], ['config.baseUrl', config.baseUrl], ['secret.webhookUrl', secret.webhookUrl]]) {
+  for (const [label, value] of [
+    ['config.url', config.url],
+    ['config.baseUrl', config.baseUrl],
+    ['secret.webhookUrl', secret.webhookUrl],
+  ]) {
     if (!value) continue;
     let parsed;
-    try { parsed = new URL(value); } catch { throw new Error(`${label} must be a valid HTTPS URL.`); }
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error(`${label} must be an HTTPS URL without embedded credentials.`);
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new Error(`${label} must be a valid HTTPS URL.`);
+    }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password)
+      throw new Error(`${label} must be an HTTPS URL without embedded credentials.`);
   }
   return { config, secret };
 }
@@ -3638,10 +4447,14 @@ app.post('/api/team/:orgId/integrations', async (req, res) => {
   if (!ctx) return;
   const type = String(req.body?.type || '');
   const name = sanitizeLabel(req.body?.name, 100);
-  if (!INTEGRATION_TYPES.has(type) || !name) return res.status(400).json({ error: 'A valid integration type and name are required.' });
+  if (!INTEGRATION_TYPES.has(type) || !name)
+    return res.status(400).json({ error: 'A valid integration type and name are required.' });
   let input;
-  try { input = integrationInput(type, req.body?.config, req.body?.secret); }
-  catch (error) { return res.status(400).json({ error: error.message }); }
+  try {
+    input = integrationInput(type, req.body?.config, req.body?.secret);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
   const now = Date.now();
   const integration = await saveIntegration({
     id: `int_${randomUUID().replaceAll('-', '').slice(0, 16)}`,
@@ -3656,7 +4469,9 @@ app.post('/api/team/:orgId/integrations', async (req, res) => {
     updatedAt: now,
   });
   audit(ctx, 'integration.created', 'integration', integration.id, { type });
-  res.status(201).json({ ok: true, integration: { ...integration, secretEnc: undefined, hasSecret: !!integration.secretEnc } });
+  res
+    .status(201)
+    .json({ ok: true, integration: { ...integration, secretEnc: undefined, hasSecret: !!integration.secretEnc } });
 });
 
 app.patch('/api/team/:orgId/integrations/:id', async (req, res) => {
@@ -3667,9 +4482,19 @@ app.patch('/api/team/:orgId/integrations/:id', async (req, res) => {
   let input = { config: current.config, secretEnc: current.secretEnc };
   if (req.body?.config !== undefined || req.body?.secret !== undefined) {
     try {
-      const parsed = integrationInput(current.type, req.body?.config ?? current.config, req.body?.secret, !!current.secretEnc);
-      input = { config: parsed.config, secretEnc: req.body?.secret === undefined ? current.secretEnc : encryptSecret(parsed.secret) };
-    } catch (error) { return res.status(400).json({ error: error.message }); }
+      const parsed = integrationInput(
+        current.type,
+        req.body?.config ?? current.config,
+        req.body?.secret,
+        !!current.secretEnc,
+      );
+      input = {
+        config: parsed.config,
+        secretEnc: req.body?.secret === undefined ? current.secretEnc : encryptSecret(parsed.secret),
+      };
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
   }
   const integration = await saveIntegration({
     ...current,
@@ -3679,14 +4504,18 @@ app.patch('/api/team/:orgId/integrations/:id', async (req, res) => {
     enabled: req.body?.enabled === undefined ? current.enabled : req.body.enabled === true,
     updatedAt: Date.now(),
   });
-  audit(ctx, 'integration.updated', 'integration', integration.id, { type: integration.type, enabled: integration.enabled });
+  audit(ctx, 'integration.updated', 'integration', integration.id, {
+    type: integration.type,
+    enabled: integration.enabled,
+  });
   res.json({ ok: true, integration: { ...integration, secretEnc: undefined, hasSecret: !!integration.secretEnc } });
 });
 
 app.delete('/api/team/:orgId/integrations/:id', async (req, res) => {
   const ctx = orgContext(req, res, 'integrations.manage');
   if (!ctx) return;
-  if (!(await getIntegration(ctx.org.id, req.params.id))) return res.status(404).json({ error: 'Integration not found.' });
+  if (!(await getIntegration(ctx.org.id, req.params.id)))
+    return res.status(404).json({ error: 'Integration not found.' });
   await deleteIntegration(ctx.org.id, req.params.id);
   audit(ctx, 'integration.deleted', 'integration', req.params.id);
   res.json({ ok: true });
@@ -3697,12 +4526,17 @@ app.post('/api/team/:orgId/integrations/:id/test', async (req, res) => {
   if (!ctx) return;
   const integration = await getIntegration(ctx.org.id, req.params.id);
   if (!integration) return res.status(404).json({ error: 'Integration not found.' });
-  const jobs = await queueIntegrationEvent(ctx.org.id, {
-    id: `integration-test:${randomUUID()}`,
-    type: 'integration.test',
-    at: new Date().toISOString(),
-    data: { title: `Test event for ${integration.name}`, severity: 'info' },
-  }, ctx.user.id, integration.id);
+  const jobs = await queueIntegrationEvent(
+    ctx.org.id,
+    {
+      id: `integration-test:${randomUUID()}`,
+      type: 'integration.test',
+      at: new Date().toISOString(),
+      data: { title: `Test event for ${integration.name}`, severity: 'info' },
+    },
+    ctx.user.id,
+    integration.id,
+  );
   audit(ctx, 'integration.test_queued', 'integration', integration.id);
   res.status(202).json({ ok: true, jobs: jobs.map((job) => ({ id: job.id, status: job.status })) });
 });
@@ -3719,7 +4553,7 @@ app.get('/api/team/:orgId/jobs', async (req, res) => {
   const jobs = await listJobs(ctx.org.id, Number(req.query.limit) || 100);
   res.json({
     ok: true,
-    jobs: jobs.map(({ secretEnc: _secret, ...job }) => job),
+    jobs: jobs.map(publicJob),
   });
 });
 
@@ -3728,7 +4562,11 @@ app.post('/api/team/:orgId/jobs/:id/cancel', async (req, res) => {
   if (!ctx) return;
   const job = (await listJobs(ctx.org.id, 500)).find((item) => item.id === req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found.' });
-  if (!['queued', 'running'].includes(job.status)) return res.status(409).json({ error: `Cannot cancel a ${job.status} job.` });
+  if (job.type !== 'scan' && !can(ctx.membership.role, 'settings.manage')) {
+    return res.status(403).json({ error: `Your ${ctx.membership.role} role can cancel scans only.` });
+  }
+  if (!['queued', 'running'].includes(job.status))
+    return res.status(409).json({ error: `Cannot cancel a ${job.status} job.` });
   await updateJob(job.id, { status: 'cancelled', error: 'Cancelled by user', lockedBy: null, lockedAt: null });
   audit(ctx, 'job.cancelled', 'job', job.id, { type: job.type });
   res.json({ ok: true });
@@ -3743,7 +4581,9 @@ app.get('/api/team/:orgId/artifacts', async (req, res) => {
 app.post('/api/team/:orgId/artifacts/:id/url', async (req, res) => {
   const ctx = orgContext(req, res, 'scans.read');
   if (!ctx) return;
-  const artifact = (await listArtifacts(ctx.org.id, req.body?.scanId || null)).find((item) => item.id === req.params.id);
+  const artifact = (await listArtifacts(ctx.org.id, req.body?.scanId || null)).find(
+    (item) => item.id === req.params.id,
+  );
   if (!artifact) return res.status(404).json({ error: 'Artifact not found.' });
   res.json({ ok: true, ...(await signedArtifactUrl(artifact, 300)) });
 });
@@ -3862,12 +4702,22 @@ app.get(['/api/scans/:id', '/api/v1/scans/:id'], async (req, res) => {
     const readText = async (path) => {
       const artifact = byPath.get(path);
       if (!artifact) return null;
-      try { return (await readArtifact(artifact)).toString('utf8'); } catch { return null; }
+      try {
+        return (await readArtifact(artifact)).toString('utf8');
+      } catch {
+        return null;
+      }
     };
-    let session = job.result || { status: job.status, target: job.payload?.targetUrl, startedAt: new Date(job.createdAt).toISOString() };
+    let session = job.result || {
+      status: job.status,
+      target: job.payload?.targetUrl,
+      startedAt: new Date(job.createdAt).toISOString(),
+    };
     const sessionRaw = await readText('session.json');
     if (sessionRaw) {
-      try { session = JSON.parse(sessionRaw); } catch {}
+      try {
+        session = JSON.parse(sessionRaw);
+      } catch {}
     }
     // A scanner that was stopped never marks its own session as ended; the job knows how it ended.
     if (!['queued', 'running', 'succeeded'].includes(job.status)) {
@@ -3875,7 +4725,8 @@ app.get(['/api/scans/:id', '/api/v1/scans/:id'], async (req, res) => {
         ...session,
         status: scanStatusOfJob(job),
         failReason: job.error || session.failReason || null,
-        completedAt: session.completedAt || job.result?.completedAt || new Date(job.updatedAt || Date.now()).toISOString(),
+        completedAt:
+          session.completedAt || job.result?.completedAt || new Date(job.updatedAt || Date.now()).toISOString(),
       };
     }
     const files = {
@@ -3893,15 +4744,35 @@ app.get(['/api/scans/:id', '/api/v1/scans/:id'], async (req, res) => {
       purpleConclusion: await readText('purple-team/conclusion.md'),
       exploitVerify: await readText('exploit-verify/verification.md'),
       securityHeaders: await readText('pre-recon/security-headers.json'),
-      vulns: {}, exploits: {}, queues: {},
+      vulns: {},
+      exploits: {},
+      queues: {},
     };
-    for (const category of ['sqli', 'xss', 'auth-bypass', 'authz-bypass', 'ssrf', 'business-logic', 'misconfig', 'info-disclosure']) {
+    for (const category of [
+      'sqli',
+      'xss',
+      'auth-bypass',
+      'authz-bypass',
+      'ssrf',
+      'business-logic',
+      'misconfig',
+      'info-disclosure',
+    ]) {
       files.vulns[category] = await readText(`vuln/${category}/analysis.md`);
       files.exploits[category] = await readText(`exploit/${category}/exploit-report.md`);
       const queue = await readText(`vuln/${category}/exploitation-queue.json`);
-      try { files.queues[category] = queue ? JSON.parse(queue) : null; } catch { files.queues[category] = null; }
+      try {
+        files.queues[category] = queue ? JSON.parse(queue) : null;
+      } catch {
+        files.queues[category] = null;
+      }
     }
-    return res.json({ session, files, durable: true, job: { id: job.id, status: job.status, attempts: job.attempts, error: job.error } });
+    return res.json({
+      session,
+      files,
+      durable: true,
+      job: { id: job.id, status: job.status, attempts: job.attempts, error: job.error },
+    });
   }
   const session = existsSync(join(wsDir, 'session.json'))
     ? JSON.parse(readFileSync(join(wsDir, 'session.json'), 'utf-8'))
@@ -3973,7 +4844,9 @@ app.get(['/api/scans/:id/report', '/api/v1/scans/:id/report'], async (req, res) 
   if (req.query.format === 'sarif') {
     const sp = join(WORKSPACES, req.params.id, 'purple', 'report.sarif');
     if (!existsSync(sp)) {
-      const artifact = (await listArtifacts(ctx.org.id, req.params.id)).find((item) => item.metadata?.relativePath === 'purple/report.sarif');
+      const artifact = (await listArtifacts(ctx.org.id, req.params.id)).find(
+        (item) => item.metadata?.relativePath === 'purple/report.sarif',
+      );
       if (!artifact) return res.status(404).json({ error: 'No SARIF report for this scan yet.' });
       res.setHeader('content-type', 'application/sarif+json; charset=utf-8');
       res.setHeader('content-disposition', `attachment; filename="shannon-${req.params.id}.sarif"`);
@@ -3992,8 +4865,10 @@ app.get(['/api/scans/:id/report', '/api/v1/scans/:id/report'], async (req, res) 
     if (!artifact) return res.status(404).json({ error: 'No evidence report for this scan yet.' });
     res.setHeader('content-type', fmt === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
     res.setHeader('content-disposition', `inline; filename="shannon-pentest-${req.params.id}.${fmt}"`);
+    res.setHeader('content-security-policy', REPORT_SANDBOX);
     return res.end(await readArtifact(artifact));
   }
+  res.setHeader('content-security-policy', REPORT_SANDBOX);
   res.setHeader('content-type', fmt === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
   res.setHeader('content-disposition', `inline; filename="shannon-pentest-${req.params.id}.${fmt}"`);
   res.end(readFileSync(p, 'utf-8'));
@@ -4078,36 +4953,30 @@ function hostOf(u) {
     return '';
   }
 }
-function isLocalHost(h) {
-  return h === 'localhost' || h === '::1' || /^127\./.test(h) || h.endsWith('.local');
+// A target on this machine (localhost, 127.*, *.local) needs no proof of ownership when the
+// dashboard runs on someone's own computer. On the hosted service "this machine" is the service
+// itself, so there a local target is treated like any other: unproven, and refused.
+export function localTargetsAllowed(env = process.env) {
+  return env.NODE_ENV !== 'production' || env.SHANNON_ALLOW_LOCAL_TARGETS === '1';
 }
-function isPrivateAddress(address) {
-  const value = String(address || '').toLowerCase();
-  if (isIP(value) === 4) {
-    const [a, b] = value.split('.').map(Number);
-    return (
-      a === 10 ||
-      a === 127 ||
-      a === 0 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 100 && b >= 64 && b <= 127)
-    );
-  }
-  if (isIP(value) === 6) {
-    return value === '::1' || value === '::' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe8') || value.startsWith('fe9') || value.startsWith('fea') || value.startsWith('feb');
-  }
-  return false;
-}
-async function publicOriginAllowed(url) {
-  const parsed = url instanceof URL ? url : new URL(url);
-  if (!['http:', 'https:'].includes(parsed.protocol) || isLocalHost(parsed.hostname) || isPrivateAddress(parsed.hostname)) return false;
+const LOCAL_TARGETS = localTargetsAllowed();
+const localExempt = (h) => LOCAL_TARGETS && isLocalHost(h);
+// Engine-generated report HTML quotes what the scanned site answered. It is always shown sandboxed,
+// so nothing in it can run as script on this origin.
+const REPORT_SANDBOX = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:";
+// On the hosted service a test target must be on the public internet. Owning a domain name does not
+// make the address it points to yours: a name can be pointed at this server's own network, and the
+// checks would then be sent there. (Checked when a test is requested. The engine also refuses
+// internal addresses written out as such.)
+const PRIVATE_TARGET = 'This address points to a private or internal network, which the hosted service does not test.';
+export async function privateTarget(hostOrUrl, allowLocal = LOCAL_TARGETS) {
+  if (allowLocal) return false;
+  const given = String(hostOrUrl);
+  const url = given.startsWith('http://') || given.startsWith('https://') ? given : `https://${given}`;
   try {
-    const addresses = await lookup(parsed.hostname, { all: true, verbatim: true });
-    return addresses.length > 0 && addresses.every((x) => !isPrivateAddress(x.address));
+    return !(await publicOriginAllowed(url));
   } catch {
-    return false;
+    return true;
   }
 }
 // Deterministic per-(user,domain) token — recomputable, so we don't need to store the token itself.
@@ -4150,10 +5019,21 @@ app.post('/api/verify/check', async (req, res) => {
   const token = domainToken(user.id, domain);
   const tryFetch = async (url) => {
     try {
-      if (!(await publicOriginAllowed(url))) return '';
       const c = new AbortController();
       const t = setTimeout(() => c.abort(), 8000);
-      const r = await fetch(url, { redirect: 'follow', signal: c.signal });
+      let at = url;
+      let r;
+      // Followed by hand, at most four steps, each one checked: a site's own redirect (to "www",
+      // to https) is normal, a redirect into a private network is not.
+      for (let hop = 0; hop < 5; hop++) {
+        if (!(await publicOriginAllowed(at))) return '';
+        r = await fetch(at, { redirect: 'manual', signal: c.signal });
+        const next = r.status >= 300 && r.status < 400 ? r.headers.get('location') : null;
+        if (!next) break;
+        at = new URL(next, at).toString();
+        r = null;
+      }
+      if (!r) return '';
       const body = await r.text().catch(() => '');
       clearTimeout(t);
       return r.status === 200 ? body : '';
@@ -4190,7 +5070,7 @@ app.post('/api/verify/check', async (req, res) => {
   // (c) Homepage meta tag.
   if (!method) {
     const html = (await tryFetch(`https://${domain}/`)) || (await tryFetch(`http://${domain}/`));
-    if (html.includes(`shannon-site-verification`) && html.includes(token)) method = 'meta';
+    if (html.includes('shannon-site-verification') && html.includes(token)) method = 'meta';
   }
   if (!method)
     return res.json({
@@ -4239,6 +5119,7 @@ app.post('/api/verify/ip/check', async (req, res) => {
   const ip = String(req.body?.ip || '').trim();
   if (!parseCidr(cidr)) return res.status(400).json({ error: 'Invalid CIDR.' });
   if (!ipInCidr(ip, cidr)) return res.status(400).json({ error: 'The proof IP must be inside the range.' });
+  if (await privateTarget(ip)) return res.status(400).json({ error: PRIVATE_TARGET });
   const token = ipVerifyToken(SESSION_SECRET, user.id, cidr);
   const controlled = await checkIpControl(ip, token);
   if (!controlled)
@@ -4283,9 +5164,7 @@ async function aiNarrative(understanding, key) {
       messages: [
         {
           role: 'user',
-          content:
-            'You are a penetration-test lead. In 2-3 sentences, say what this web app appears to be and where its risk concentrates, based ONLY on this reconnaissance JSON. Be concrete; do NOT invent findings or claim anything is exploitable.\n\n' +
-            JSON.stringify(understanding).slice(0, 4000),
+          content: `You are a penetration-test lead. In 2-3 sentences, say what this web app appears to be and where its risk concentrates, based ONLY on this reconnaissance JSON. Be concrete; do NOT invent findings or claim anything is exploitable.\n\n${JSON.stringify(understanding).slice(0, 4000)}`,
         },
       ],
     });
@@ -4323,7 +5202,12 @@ function agentDeps(target, headers = {}) {
   };
   const fetchText = async (url) => (await fetchT(url)).body || ''; // host-gated to the target origin
   const fetchStatus = async (url) => (await fetchT(url)).status || 0;
-  return { probe, escalate, recrawl, fetchText, fetchStatus };
+  // The status of a plain request, and which protection sent it when it is a refusal.
+  const fetchAnswer = async (url) => {
+    const reply = await fetchT(url);
+    return { status: reply.status || 0, by: refusedBy(reply.headers, reply.body) };
+  };
+  return { probe, escalate, recrawl, fetchText, fetchStatus, fetchAnswer };
 }
 
 // The checking engine keeps the site it is aimed at, and that site's login session, in one shared
@@ -4335,7 +5219,9 @@ let engineWaiting = 0;
 // requests as the organization's own test instead of as attacks (see defender-own-test.mjs).
 function ownTestMark(orgId, target, kind) {
   const signed = signOwnTest(SESSION_SECRET, { orgId, target, kind });
-  return signed ? { header: signed.header, value: signed.value, applies: (url) => siteName(url) === signed.site } : null;
+  return signed
+    ? { header: signed.header, value: signed.value, applies: (url) => siteName(url) === signed.site }
+    : null;
 }
 // `mark` is a function so the mark is signed when the run's turn comes, not while it waits in line.
 function withEngine(work, { onWait, mark } = {}) {
@@ -4386,7 +5272,9 @@ async function agentCampaign(target, surface, headers, { depth = 'quick', onStep
       : status
         ? `it answered ${status}`
         : 'it did not answer';
-    const error = new Error(`No page of ${origin} could be read (${reason}), so nothing was checked.${status === 401 || status === 403 ? ' If the site needs a login, add it under "Login / session" and run again.' : ''}`);
+    const error = new Error(
+      `No page of ${origin} could be read (${reason}), so nothing was checked.${status === 401 || status === 403 ? ' If the site needs a login, add it under "Login / session" and run again.' : ''}`,
+    );
     error.status = 502;
     throw error;
   }
@@ -4414,7 +5302,8 @@ async function agentCampaign(target, surface, headers, { depth = 'quick', onStep
   const mapped = run.surface || surface;
   run.surface = undefined;
   // Did the site start refusing the requests while it was being checked?
-  const after = await deps.fetchStatus(target).catch(() => 0);
+  const answer = await deps.fetchAnswer(target).catch(() => ({ status: 0, by: null }));
+  const after = answer.status;
   const blocked = REFUSED.has(after) || after === 0;
   run.coverage = {
     depth: agentDepth(depth),
@@ -4425,6 +5314,8 @@ async function agentCampaign(target, surface, headers, { depth = 'quick', onStep
     checksFailed: run.stats.errors || 0,
     blocked,
     siteStatus: after,
+    // Whose firewall refused, when the refusal says: the owner needs to know where to allow the test.
+    refusedBy: blocked ? answer.by : null,
   };
   const note = (detail) => {
     const step = { phase: 'warning', detail, t: run.steps.length };
@@ -4433,7 +5324,7 @@ async function agentCampaign(target, surface, headers, { depth = 'quick', onStep
   };
   if (blocked)
     note(
-      `By the end the site answered ${after || 'nothing'} to a plain request. A firewall or rate limit was refusing these checks, so the result is incomplete: "nothing confirmed" here does not mean the site is clean.`,
+      `By the end the site answered ${after || 'nothing'} to a plain request. ${answer.by ? `The refusal came from ${answer.by}, which` : 'A firewall or rate limit'} was refusing these checks, so the result is incomplete: "nothing confirmed" here does not mean the site is clean.`,
     );
   if (run.coverage.checksPossible > run.coverage.checksRun)
     note(
@@ -4470,7 +5361,10 @@ async function resolveAuthHeaders(req, target) {
     if (!ctx) throw Object.assign(new Error('Authentication required.'), { status: 401 });
     const targetOrigin = new URL(target).origin;
     const grant = await consumeScanAuthGrant(grantId, ctx.user.id, ctx.org.id, targetOrigin);
-    if (!grant) throw Object.assign(new Error('The authenticated-session grant is invalid, expired, or already used.'), { status: 401 });
+    if (!grant)
+      throw Object.assign(new Error('The authenticated-session grant is invalid, expired, or already used.'), {
+        status: 401,
+      });
     credentials = decryptSecret(grant.secretEnc) || {};
   }
   const cookie = String(credentials.cookie || '').trim();
@@ -4482,7 +5376,8 @@ async function resolveAuthHeaders(req, target) {
   try {
     const lh = hostOf(loginUrl);
     const th = hostOf(target);
-    if (!isLocalHost(lh) && registrable(lh) !== registrable(th)) return {}; // cross-domain login → refuse
+    if (!localExempt(lh) && registrable(lh) !== registrable(th)) return {}; // cross-domain login → refuse
+    if (await privateTarget(lh)) return {};
     const sess = await login({ loginUrl, username, password });
     return sess?.Cookie ? sess : {};
   } catch (error) {
@@ -4504,7 +5399,8 @@ function annotateFixes(run) {
 async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
   const ctx = requestContext(req);
   if (!ctx) return { status: 401, error: 'Sign in first.' };
-  if (!can(ctx.membership.role, 'scans.run')) return { status: 403, error: 'Your role cannot run active security tests.' };
+  if (!can(ctx.membership.role, 'scans.run'))
+    return { status: 403, error: 'Your role cannot run active security tests.' };
   const raw = (rawTarget || '').trim();
   if (!raw) return { status: 400, error: 'Provide a target URL.' };
   const target = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
@@ -4514,7 +5410,7 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
   } catch {
     return { status: 400, error: 'That does not look like a valid URL.' };
   }
-  if (!isLocalHost(host)) {
+  if (!localExempt(host)) {
     if (!isVerified(ctx.user.id, host))
       return {
         status: 403,
@@ -4522,10 +5418,15 @@ async function agentGateAndCrawl(req, rawTarget = req.body?.target) {
         needsVerification: registrable(host),
       };
   }
+  if (await privateTarget(host)) return { status: 400, error: PRIVATE_TARGET };
   try {
     const headers = await resolveAuthHeaders(req, target);
     const quota = await consumeOrgAllowance(ctx.org.id, 'agentRuns', 1);
-    if (!quota.allowed) return { status: 429, error: `Daily organization limit reached for agent runs (${quota.used}/${quota.limit}) and no prepaid credits remain.` };
+    if (!quota.allowed)
+      return {
+        status: 429,
+        error: `Daily organization limit reached for agent runs (${quota.used}/${quota.limit}) and no prepaid credits remain.`,
+      };
     const depth = agentDepth(String(req.body?.depth || req.query?.depth || ''));
     const { maxPages, maxRequests } = AGENT_DEPTHS[depth];
     const surface = await crawl({ target, maxPages, timeoutMs: 7000, maxRequests, headers });
@@ -4551,8 +5452,10 @@ app.post('/api/agent/auth-grant', async (req, res) => {
     return res.status(400).json({ error: 'That does not look like a valid URL.' });
   }
   const host = target.hostname.toLowerCase();
-  if (!isLocalHost(host) && !isVerified(ctx.user.id, host)) {
-    return res.status(403).json({ error: `Verify ownership of ${registrable(host)} first.`, needsVerification: registrable(host) });
+  if (!localExempt(host) && !isVerified(ctx.user.id, host)) {
+    return res
+      .status(403)
+      .json({ error: `Verify ownership of ${registrable(host)} first.`, needsVerification: registrable(host) });
   }
   const cookie = String(req.body?.cookie || '').trim();
   const loginUrl = String(req.body?.loginUrl || '').trim();
@@ -4564,10 +5467,15 @@ app.post('/api/agent/auth-grant', async (req, res) => {
   }
   if (loginUrl) {
     let loginHost;
-    try { loginHost = hostOf(loginUrl); } catch { return res.status(400).json({ error: 'Login URL is invalid.' }); }
-    if (!isLocalHost(loginHost) && registrable(loginHost) !== registrable(host)) {
+    try {
+      loginHost = hostOf(loginUrl);
+    } catch {
+      return res.status(400).json({ error: 'Login URL is invalid.' });
+    }
+    if (!localExempt(loginHost) && registrable(loginHost) !== registrable(host)) {
       return res.status(400).json({ error: 'The login URL must use the same registrable domain as the scan target.' });
     }
+    if (await privateTarget(loginHost)) return res.status(400).json({ error: PRIVATE_TARGET });
   }
   const now = Date.now();
   const id = `sag_${randomToken(32)}`;
@@ -4580,7 +5488,10 @@ app.post('/api/agent/auth-grant', async (req, res) => {
     expiresAt: now + 5 * 60_000,
     createdAt: now,
   });
-  audit(ctx, 'agent.auth_grant_created', 'scan-auth-grant', id, { targetOrigin: target.origin, expiresAt: now + 5 * 60_000 });
+  audit(ctx, 'agent.auth_grant_created', 'scan-auth-grant', id, {
+    targetOrigin: target.origin,
+    expiresAt: now + 5 * 60_000,
+  });
   res.status(201).json({ ok: true, authGrantId: id, expiresInSeconds: 300 });
 });
 
@@ -4616,6 +5527,7 @@ app.post('/api/agent/run', async (req, res) => {
 // step-by-step. EventSource is GET-only and same-origin (cookies carry auth); the target is a query
 // param. Gate/crawl errors are delivered as an SSE `error` event (the stream itself is always 200).
 app.get('/api/agent/run/stream', async (req, res) => {
+  if (fromAnotherSite(req)) return res.status(403).json({ error: 'Cross-site request rejected.' });
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache, no-transform',
@@ -4688,6 +5600,7 @@ app.post('/api/agent/team', async (req, res) => {
 // Streamed live over SSE so the dashboard watches the team coordinate step by step (same transport
 // contract as /api/agent/run/stream: GET, same-origin cookie auth, target as a query param).
 app.get('/api/agent/team/stream', async (req, res) => {
+  if (fromAnotherSite(req)) return res.status(403).json({ error: 'Cross-site request rejected.' });
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache, no-transform',
@@ -4827,7 +5740,26 @@ async function runDueMonitors() {
       try {
         const prevSummary = listAgentRuns(m.userId, m.target)[0];
         const prev = prevSummary ? getAgentRun(m.userId, prevSummary.id) : null;
-        const org = listOrganizations(m.userId)[0];
+        const creator = loadUsers()[m.userId];
+        const org = creator && !creator.disabledAt ? listOrganizations(m.userId)[0] : null;
+        const role = org ? getMembership(org.id, m.userId)?.role : null;
+        let monitored = '';
+        try {
+          monitored = hostOf(m.target);
+        } catch {}
+        // The schedule outlives the click that made it. Each time, the person who made it must still
+        // be allowed to run tests, and must still hold the proof that the site is theirs.
+        if (
+          !role ||
+          !can(role, 'scans.run') ||
+          !monitored ||
+          (!localExempt(monitored) && !isVerified(m.userId, monitored)) ||
+          (await privateTarget(monitored))
+        ) {
+          console.warn(`[monitor] skipped ${m.target}: its creator may no longer test this site`);
+          touchMonitor(m.userId, m.id, Date.now());
+          continue;
+        }
         const run = await executeAgentRun(m.target, org?.id);
         const runId = randomUUID().slice(0, 12);
         saveAgentRun(m.userId, {
@@ -4845,7 +5777,10 @@ async function runDueMonitors() {
         const fresh = prev ? diffRuns(prev, run).added : run.findings || [];
         if (org && fresh.length) {
           try {
-            persistConfirmedFindings({ org, user: { id: m.userId } }, fresh, { source: 'agent-monitor', scanId: runId });
+            persistConfirmedFindings({ org, user: { id: m.userId } }, fresh, {
+              source: 'agent-monitor',
+              scanId: runId,
+            });
             queueIntegrationEvent(
               org.id,
               {
@@ -4869,8 +5804,12 @@ async function runDueMonitors() {
             console.error('[monitor] could not record findings:', error.message);
           }
         }
-        if (run.coverage?.blocked) console.warn(`[monitor] ${m.target} refused the checks (answered ${run.coverage.siteStatus}); this run is incomplete`);
-        if (m.webhookUrl && prev) {
+        if (run.coverage?.blocked)
+          console.warn(
+            `[monitor] ${m.target} refused the checks (answered ${run.coverage.siteStatus}${run.coverage.refusedBy ? `, from ${run.coverage.refusedBy}` : ''}); this run is incomplete`,
+          );
+        // The alert address was typed by a user: it is only ever a public one.
+        if (m.webhookUrl && prev && (await publicOriginAllowed(m.webhookUrl).catch(() => false))) {
           const diff = diffRuns(prev, run);
           if (diff.summary.new > 0) {
             const previousScanAt = prev.createdAt ? new Date(prev.createdAt).toISOString().slice(0, 16) : null;
@@ -4891,7 +5830,7 @@ async function runDueMonitors() {
   }
 }
 
-app.post('/api/agent/monitors', (req, res) => {
+app.post('/api/agent/monitors', async (req, res) => {
   const ctx = requirePermission(req, res, 'scans.run');
   if (!ctx) return;
   const user = ctx.user;
@@ -4904,13 +5843,17 @@ app.post('/api/agent/monitors', (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
-  if (!isLocalHost(host) && !isVerified(user.id, host))
+  if (!localExempt(host) && !isVerified(user.id, host))
     return res.status(403).json({
       error: `Verify ownership of ${registrable(host)} first (Domains page).`,
       needsVerification: registrable(host),
     });
+  if (await privateTarget(host)) return res.status(400).json({ error: PRIVATE_TARGET });
   const intervalHours = Math.max(1, Math.min(168, Number(req.body?.intervalHours) || 24));
-  const webhookUrl = (req.body?.webhookUrl || '').trim() || null;
+  const webhookUrl = (typeof req.body?.webhookUrl === 'string' ? req.body.webhookUrl : '').trim() || null;
+  if (webhookUrl && !(await publicOriginAllowed(webhookUrl).catch(() => false))) {
+    return res.status(400).json({ error: 'The alert address must be a public http(s) address.' });
+  }
   const monitor = {
     id: randomUUID().slice(0, 12),
     target,
@@ -4963,7 +5906,8 @@ app.post('/api/agent/replay', async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
-  if (!isLocalHost(host)) {
+  if (await privateTarget(host)) return res.status(400).json({ error: PRIVATE_TARGET });
+  if (!localExempt(host)) {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Sign in first.' });
     if (!isVerified(user.id, host))
@@ -4982,7 +5926,10 @@ app.post('/api/agent/replay', async (req, res) => {
     const timeMs = Date.now() - t0;
     const hdrs = {};
     try {
-      if (r.headers?.forEach) r.headers.forEach((v, k) => (hdrs[k] = v));
+      if (r.headers?.forEach)
+        r.headers.forEach((v, k) => {
+          hdrs[k] = v;
+        });
     } catch {}
     res.json({ ok: true, status: r.status, timeMs, headers: hdrs, body: String(r.body || '').slice(0, 200_000) });
   } catch (e) {
@@ -5026,7 +5973,8 @@ app.post('/api/agent/custom-check', async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
-  if (!isLocalHost(host)) {
+  if (await privateTarget(host)) return res.status(400).json({ error: PRIVATE_TARGET });
+  if (!localExempt(host)) {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Sign in first.' });
     if (!isVerified(user.id, host))
@@ -5118,7 +6066,8 @@ app.post('/api/agent/sandbox', async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid URL.' });
   }
-  if (!isLocalHost(host)) {
+  if (await privateTarget(host)) return res.status(400).json({ error: PRIVATE_TARGET });
+  if (!localExempt(host)) {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Sign in first.' });
     if (!isVerified(user.id, host))
@@ -5128,13 +6077,11 @@ app.post('/api/agent/sandbox', async (req, res) => {
       });
   }
   if (!(await sandboxAvailable()))
-    return res
-      .status(400)
-      .json({
-        error:
-          'The code sandbox needs Docker on the host (for isolation). It is unavailable here — deploy where Docker is present, or use the AI custom check instead.',
-        unavailable: true,
-      });
+    return res.status(400).json({
+      error:
+        'The code sandbox needs Docker on the host (for isolation). It is unavailable here — deploy where Docker is present, or use the AI custom check instead.',
+      unavailable: true,
+    });
   let src = code;
   if (!src && instruction) {
     const key = (await aiKeysForRequest(req)).claude;
@@ -5223,6 +6170,7 @@ async function llmPatch({ snippet, cls, key }) {
 }
 
 app.post('/api/agent/patch', async (req, res) => {
+  if (!requirePermission(req, res, 'findings.remediate')) return;
   const { finding, snippet } = req.body || {};
   if (!finding || !snippet) return res.status(400).json({ error: 'Provide a finding and the code snippet.' });
   const cls = String(finding.cls || finding.tool || '')
@@ -5249,11 +6197,21 @@ app.post('/api/agent/pr', async (req, res) => {
   const { repo, path: filePath, content, token, finding } = req.body || {};
   const provider = await getOrgSecret(ctx.org.id, 'repository-provider', 'github');
   let providerSecret = {};
-  try { providerSecret = provider ? decryptSecret(provider.secretEnc) || {} : {}; } catch {}
-  const tok = String(token || providerSecret.token || process.env.GITHUB_TOKEN || '').trim();
+  try {
+    providerSecret = provider ? decryptSecret(provider.secretEnc) || {} : {};
+  } catch {}
+  // The server's own GITHUB_TOKEN belongs to whoever runs the service. Another organization uses
+  // the credential it saved, or one sent with the request, never the operator's.
+  const platformToken =
+    process.env.NODE_ENV !== 'production' || ctx.org.id === process.env.SHANNON_PLATFORM_ORG_ID
+      ? process.env.GITHUB_TOKEN
+      : '';
+  const tok = String(token || providerSecret.token || platformToken || '').trim();
   const selectedRepo = String(repo || provider?.config?.repo || '').trim();
   if (!tok)
-    return res.status(400).json({ error: 'Configure the organization GitHub credential in Settings before opening PRs.' });
+    return res
+      .status(400)
+      .json({ error: 'Configure the organization GitHub credential in Settings before opening PRs.' });
   if (!selectedRepo || !filePath || !content)
     return res.status(400).json({ error: 'Provide the repo, file path, and the fixed content.' });
   const cls = String(finding?.cls || finding?.tool || 'vulnerability').replace(/^impact[-:]/, '');
@@ -5288,16 +6246,7 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
   const ctx = requirePermission(req, res, 'scans.run');
   if (!ctx) return;
   if (limited(req, res, `scan:${ctx.user.id}`, 20, 60 * 60 * 1000)) return;
-  const {
-    targetUrl,
-    authType,
-    username,
-    password,
-    retryPreset,
-    focusUrls,
-    avoidUrls,
-    warRoom,
-  } = req.body;
+  const { targetUrl, authType, username, password, retryPreset, focusUrls, avoidUrls, warRoom } = req.body;
   if (!targetUrl) return res.status(400).json({ error: 'Target URL is required' });
 
   // ---- AUTHORIZATION GATE ----
@@ -5305,7 +6254,8 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
   // user, an explicit authorization attestation, AND proven domain ownership. Localhost is exempt
   // (built-in labs / self-demo). This is the safety boundary for multi-tenant / client use.
   const targetHost = hostOf(targetUrl);
-  if (!isLocalHost(targetHost)) {
+  if (await privateTarget(targetHost)) return res.status(400).json({ error: PRIVATE_TARGET });
+  if (!localExempt(targetHost)) {
     if (req.body.authorized !== true)
       return res
         .status(403)
@@ -5388,19 +6338,37 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
       return o;
     })
     .filter((o) => o.cookie || o.header || o.loginUrl);
+  for (const identity of cleanIds) {
+    if (!identity.loginUrl) continue;
+    let loginHost = '';
+    try {
+      loginHost = hostOf(identity.loginUrl);
+    } catch {}
+    if (
+      !loginHost ||
+      (!localExempt(loginHost) && registrable(loginHost) !== registrable(targetHost)) ||
+      (await privateTarget(loginHost))
+    ) {
+      return res.status(400).json({ error: 'Each login URL must be on the same domain as the scan target.' });
+    }
+  }
   if (cleanIds.length >= 2) env.SHANNON_AC = JSON.stringify({ identities: cleanIds });
 
   // Advanced scan options. Continuous monitoring diffs against the last baseline; an alert webhook
   // pings on new exposures. Network scanning (unauth services on the verified host) requires an
   // explicit authorization acknowledgment in addition to the domain-ownership gate.
   if (req.body.monitor) env.SHANNON_MONITOR = '1';
-  if (typeof req.body.alertWebhook === 'string' && /^https:\/\//i.test(req.body.alertWebhook))
+  if (typeof req.body.alertWebhook === 'string' && /^https:\/\//i.test(req.body.alertWebhook)) {
+    if (!(await publicOriginAllowed(req.body.alertWebhook.slice(0, 2048)).catch(() => false))) {
+      return res.status(400).json({ error: 'The alert address must be a public https address.' });
+    }
     env.SHANNON_ALERT_WEBHOOK = req.body.alertWebhook.slice(0, 2048);
+  }
   if (req.body.networkScan && req.body.networkAuthorized === true) {
     // Authorization: a DOMAIN target already passed the domain-ownership gate (its host serves the
     // verified domain). A raw-IP target must fall inside a VERIFIED CIDR range. Localhost is exempt.
     const isRawIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(targetHost);
-    let netOk = isLocalHost(targetHost) || !isRawIp;
+    let netOk = localExempt(targetHost) || !isRawIp;
     if (isRawIp && !netOk) {
       const cidrs = Object.keys(listCidrs(getUser(req)?.id));
       netOk = cidrs.some((c) => ipInCidr(targetHost, c));
@@ -5410,7 +6378,7 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
 
   if (isSupabase() && process.env.SHANNON_DURABLE_JOBS !== '0') {
     const durableConfig = structuredClone(config);
-    delete durableConfig.authentication;
+    Reflect.deleteProperty(durableConfig, 'authentication');
     const job = await enqueueJob({
       orgId: ctx.org.id,
       userId: ctx.user.id,
@@ -5429,11 +6397,13 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
       secretEnc: encryptSecret({
         apiKey,
         authentication: config.authentication || null,
-        providerKeys: warRoom ? {
-          openai: providerKeys?.openai || null,
-          gemini: providerKeys?.gemini || null,
-          glm: providerKeys?.glm || null,
-        } : null,
+        providerKeys: warRoom
+          ? {
+              openai: providerKeys?.openai || null,
+              gemini: providerKeys?.gemini || null,
+              glm: providerKeys?.glm || null,
+            }
+          : null,
         accessControl: cleanIds,
         alertWebhook: env.SHANNON_ALERT_WEBHOOK || null,
       }),
@@ -5448,7 +6418,7 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
   // Durable jobs already keep it in the encrypted job secret above.
   const scanTempDir = mkdtempSync(join(os.tmpdir(), 'shannon-dashboard-scan-'));
   const configPath = join(scanTempDir, 'scan.yaml');
-  writeFileSync(configPath, yamlDump(config, 0), { mode: 0o600 });
+  writeFileSync(configPath, stringifyYaml(config), { mode: 0o600 });
 
   const child = spawn('node', [join(ROOT, 'run-scan.mjs'), '--config', configPath], {
     cwd: ROOT,
@@ -5553,9 +6523,12 @@ app.post('/api/scans/:id/stop', async (req, res) => {
   if (!ctx) return;
   const scan = runningScans.get(req.params.id);
   if (!scan) {
-    const job = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
+    const job = (await listJobs(ctx.org.id, 500)).find(
+      (item) => item.type === 'scan' && item.payload?.scanId === req.params.id,
+    );
     if (!job) return res.status(404).json({ error: 'Scan not found or already finished' });
-    if (!['queued', 'running'].includes(job.status)) return res.status(409).json({ error: `Cannot stop a ${job.status} scan.` });
+    if (!['queued', 'running'].includes(job.status))
+      return res.status(409).json({ error: `Cannot stop a ${job.status} scan.` });
     await updateJob(job.id, { status: 'cancelled', error: 'Cancelled by user', lockedBy: null, lockedAt: null });
     audit(ctx, 'scan.stopped', 'scan', req.params.id, { jobId: job.id });
     return res.json({ ok: true, message: 'Scan cancellation requested' });
@@ -5583,7 +6556,9 @@ app.post('/api/scans/:id/mark-failed', async (req, res) => {
   const wsDir = join(WORKSPACES, req.params.id);
   const sessionPath = join(wsDir, 'session.json');
   if (!existsSync(sessionPath)) {
-    const job = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
+    const job = (await listJobs(ctx.org.id, 500)).find(
+      (item) => item.type === 'scan' && item.payload?.scanId === req.params.id,
+    );
     if (!job) return res.status(404).json({ error: 'Scan not found' });
     if (job.status === 'succeeded') return res.json({ ok: true, message: 'Already completed' });
     await updateJob(job.id, { status: 'dead-letter', error: 'Manually marked failed', lockedBy: null, lockedAt: null });
@@ -5636,12 +6611,18 @@ app.get('/api/scans/:id/live', async (req, res) => {
     const session = JSON.parse(readFileSync(join(wsDir, 'session.json'), 'utf-8'));
     return res.json({ status: session.status || 'completed' });
   }
-  const job = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
-  if (job) return res.json({
-    status: scanStatusOfJob(job),
-    output: job.result?.outputTail || '', target: job.result?.target || job.payload?.targetUrl,
-    phases: Array.isArray(job.result?.phases) ? job.result.phases : [], attempts: job.attempts, error: job.error || null,
-  });
+  const job = (await listJobs(ctx.org.id, 500)).find(
+    (item) => item.type === 'scan' && item.payload?.scanId === req.params.id,
+  );
+  if (job)
+    return res.json({
+      status: scanStatusOfJob(job),
+      output: job.result?.outputTail || '',
+      target: job.result?.target || job.payload?.targetUrl,
+      phases: Array.isArray(job.result?.phases) ? job.result.phases : [],
+      attempts: job.attempts,
+      error: job.error || null,
+    });
   res.status(404).json({ error: 'Not found' });
 });
 
@@ -5651,9 +6632,16 @@ app.get('/api/scans/:id/events', async (req, res) => {
   if (!ctx) return;
   const scan = runningScans.get(req.params.id);
   if (!scan) {
-    const initial = (await listJobs(ctx.org.id, 500)).find((item) => item.type === 'scan' && item.payload?.scanId === req.params.id);
+    const initial = (await listJobs(ctx.org.id, 500)).find(
+      (item) => item.type === 'scan' && item.payload?.scanId === req.params.id,
+    );
     if (!initial) return res.status(404).json({ error: 'Not found' });
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
     // The worker runs this scan in another process. It stores what the scanner printed and the
     // phases so far; each viewer is sent what it has not seen yet, as the same events a scan run
     // by this process sends.
@@ -5684,11 +6672,18 @@ app.get('/api/scans/:id/events', async (req, res) => {
         clearInterval(timer);
         if (seen.carry.trim()) write({ type: 'output', line: seen.carry.trim() });
         const type = job.status === 'succeeded' ? 'complete' : job.status === 'cancelled' ? 'stopped' : 'failed';
-        write({ type, status: job.status, ...(type === 'failed' ? { error: String(job.error || '').slice(0, 600) || null } : {}) });
+        write({
+          type,
+          status: job.status,
+          ...(type === 'failed' ? { error: String(job.error || '').slice(0, 600) || null } : {}),
+        });
         res.end();
       }
     };
-    const timer = setInterval(() => send().catch(() => {}), Math.max(100, Number(process.env.SHANNON_SCAN_EVENTS_POLL_MS || 2_000)));
+    const timer = setInterval(
+      () => send().catch(() => {}),
+      Math.max(100, Number(process.env.SHANNON_SCAN_EVENTS_POLL_MS || 2_000)),
+    );
     timer.unref?.();
     req.on('close', () => clearInterval(timer));
     await send();
@@ -5753,24 +6748,8 @@ app.get('/api/models', (req, res) => {
   ]);
 });
 
-function yamlDump(obj, indent = 0) {
-  const pad = '  '.repeat(indent);
-  let out = '';
-  for (const [k, v] of Object.entries(obj)) {
-    if (v == null) continue;
-    if (typeof v === 'object' && !Array.isArray(v)) out += `${pad}${k}:\n${yamlDump(v, indent + 1)}`;
-    else if (Array.isArray(v)) {
-      out += `${pad}${k}:\n`;
-      for (const i of v) out += `${pad}  - ${i}\n`;
-    } else out += `${pad}${k}: ${v}\n`;
-  }
-  return out;
-}
-
 // Health-check endpoint — Railway will hit this to confirm the container is alive.
-app.get('/healthz', (_req, res) =>
-  res.json({ ok: true, service: 'dashboard', uptime: process.uptime() }),
-);
+app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'dashboard', uptime: process.uptime() }));
 
 app.get('/readyz', async (_req, res) => {
   try {
@@ -5786,7 +6765,8 @@ app.get('/api/system/readiness', async (req, res) => {
   if (!ctx) return;
   const now = Date.now();
   const strong = (value) => !!value && String(value).length >= 32 && !/replace-me|change-me/i.test(String(value));
-  const recentDate = (value, maxAgeDays) => Number.isFinite(Date.parse(value || '')) && now - Date.parse(value) <= maxAgeDays * 86_400_000;
+  const recentDate = (value, maxAgeDays) =>
+    Number.isFinite(Date.parse(value || '')) && now - Date.parse(value) <= maxAgeDays * 86_400_000;
   const [database, workerEvents, edgeEvents, dockerSandbox, browserRuntime, orgOidc, orgScim] = await Promise.all([
     enterpriseHealth().catch((error) => ({ ok: false, error: error.message })),
     listOperationalEvents('worker', 5).catch(() => []),
@@ -5800,21 +6780,119 @@ app.get('/api/system/readiness', async (req, res) => {
   const edgeHeartbeat = edgeEvents.find((event) => event.event === 'edge.heartbeat');
   const recent = (event, maxAge) => !!event && now - Number(event.createdAt || 0) <= maxAge;
   const checks = [
-    { key: 'database', label: 'Supabase database', status: database.ok && database.backend === 'supabase' ? 'ready' : 'configure', detail: database.ok ? `Backend: ${database.backend}` : database.error },
-    { key: 'secrets', label: 'Session and encryption secrets', status: strong(process.env.SHANNON_SESSION_SECRET) && strong(process.env.SHANNON_ENCRYPTION_KEY) ? 'ready' : 'configure', detail: 'Two independent secrets of at least 32 characters' },
-    { key: 'public-url', label: 'Public application URL', status: /^https:\/\//.test(process.env.SHANNON_PUBLIC_URL || '') ? 'ready' : 'configure', detail: process.env.SHANNON_PUBLIC_URL || 'Set SHANNON_PUBLIC_URL' },
-    { key: 'email', label: 'Transactional email', status: process.env.RESEND_API_KEY || process.env.SHANNON_EMAIL_WEBHOOK_URL ? 'ready' : 'configure', detail: process.env.RESEND_API_KEY ? 'Resend configured' : process.env.SHANNON_EMAIL_WEBHOOK_URL ? 'HTTPS relay configured' : 'Verification, reset and invitation mail cannot be delivered' },
-    { key: 'worker', label: 'Durable background worker', status: recent(workerHeartbeat, 180_000) ? 'ready' : 'configure', detail: workerHeartbeat ? `Last heartbeat ${new Date(workerHeartbeat.createdAt).toISOString()}` : 'Deploy railway.worker.json' },
-    { key: 'browser', label: 'Headless browser proofs', status: process.env.SHANNON_HEADLESS === '1' && browserRuntime ? 'ready' : 'configure', detail: browserRuntime ? 'Set SHANNON_HEADLESS=1' : 'Playwright runtime is not installed' },
-    { key: 'sandbox', label: 'Isolated code sandbox', status: dockerSandbox ? 'ready' : process.env.SHANNON_SANDBOX_RUNNER_URL ? 'configure' : 'optional', detail: dockerSandbox ? 'Authenticated dedicated runner and Docker isolation available' : process.env.SHANNON_SANDBOX_RUNNER_URL ? 'Configured runner is unreachable or Docker is unavailable' : 'Requires a Docker-capable dedicated runner; custom checks remain available' },
-    { key: 'edge', label: 'Public Defender Edge', status: recent(edgeHeartbeat, 300_000) ? 'ready' : 'optional', detail: edgeHeartbeat ? `Last heartbeat ${new Date(edgeHeartbeat.createdAt).toISOString()}` : 'Deploy railway.edge.json when public reverse-proxy protection is required' },
-    { key: 'sso', label: 'Company SSO', status: orgOidc || (process.env.OIDC_ISSUER && process.env.OIDC_CLIENT_ID && process.env.OIDC_CLIENT_SECRET) ? 'ready' : 'optional', detail: orgOidc?.config?.issuer || process.env.OIDC_ISSUER || 'OIDC is optional' },
-    { key: 'scim', label: 'SCIM provisioning', status: orgScim || (strong(process.env.SHANNON_SCIM_TOKEN) && process.env.SHANNON_SCIM_ORG_ID) ? 'ready' : 'optional', detail: orgScim ? `Configured for ${ctx.org.name}` : process.env.SHANNON_SCIM_ORG_ID || 'SCIM is optional' },
-    { key: 'metrics', label: 'Protected metrics', status: strong(process.env.SHANNON_METRICS_TOKEN) ? 'ready' : 'configure', detail: 'Prometheus endpoint bearer token' },
-    { key: 'backups', label: 'Backup restore test', status: recentDate(process.env.SHANNON_BACKUPS_VERIFIED_AT, 100) ? 'ready' : 'configure', detail: process.env.SHANNON_BACKUPS_VERIFIED_AT || 'Set SHANNON_BACKUPS_VERIFIED_AT after a successful staging restore (repeat quarterly)' },
-    { key: 'alerts', label: 'Production alert test', status: recentDate(process.env.SHANNON_ALERTS_VERIFIED_AT, 45) ? 'ready' : 'configure', detail: process.env.SHANNON_ALERTS_VERIFIED_AT || 'Set SHANNON_ALERTS_VERIFIED_AT after an end-to-end on-call alert test' },
-    { key: 'incident-contact', label: 'Security incident contact', status: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(process.env.SHANNON_SECURITY_CONTACT || '') ? 'ready' : 'configure', detail: process.env.SHANNON_SECURITY_CONTACT || 'Set the monitored security contact address' },
-    { key: 'billing', label: 'Stripe billing', status: billingEnabled() ? 'ready' : 'optional', detail: billingEnabled() ? 'Checkout and signed webhooks configured' : 'Optional; paid checkout remains disabled' },
+    {
+      key: 'database',
+      label: 'Supabase database',
+      status: database.ok && database.backend === 'supabase' ? 'ready' : 'configure',
+      detail: database.ok ? `Backend: ${database.backend}` : database.error,
+    },
+    {
+      key: 'secrets',
+      label: 'Session and encryption secrets',
+      status:
+        strong(process.env.SHANNON_SESSION_SECRET) && strong(process.env.SHANNON_ENCRYPTION_KEY)
+          ? 'ready'
+          : 'configure',
+      detail: 'Two independent secrets of at least 32 characters',
+    },
+    {
+      key: 'public-url',
+      label: 'Public application URL',
+      status: /^https:\/\//.test(process.env.SHANNON_PUBLIC_URL || '') ? 'ready' : 'configure',
+      detail: process.env.SHANNON_PUBLIC_URL || 'Set SHANNON_PUBLIC_URL',
+    },
+    {
+      key: 'email',
+      label: 'Transactional email',
+      status: process.env.RESEND_API_KEY || process.env.SHANNON_EMAIL_WEBHOOK_URL ? 'ready' : 'configure',
+      detail: process.env.RESEND_API_KEY
+        ? 'Resend configured'
+        : process.env.SHANNON_EMAIL_WEBHOOK_URL
+          ? 'HTTPS relay configured'
+          : 'Verification, reset and invitation mail cannot be delivered',
+    },
+    {
+      key: 'worker',
+      label: 'Durable background worker',
+      status: recent(workerHeartbeat, 180_000) ? 'ready' : 'configure',
+      detail: workerHeartbeat
+        ? `Last heartbeat ${new Date(workerHeartbeat.createdAt).toISOString()}`
+        : 'Deploy railway.worker.json',
+    },
+    {
+      key: 'browser',
+      label: 'Headless browser proofs',
+      status: process.env.SHANNON_HEADLESS === '1' && browserRuntime ? 'ready' : 'configure',
+      detail: browserRuntime ? 'Set SHANNON_HEADLESS=1' : 'Playwright runtime is not installed',
+    },
+    {
+      key: 'sandbox',
+      label: 'Isolated code sandbox',
+      status: dockerSandbox ? 'ready' : process.env.SHANNON_SANDBOX_RUNNER_URL ? 'configure' : 'optional',
+      detail: dockerSandbox
+        ? 'Authenticated dedicated runner and Docker isolation available'
+        : process.env.SHANNON_SANDBOX_RUNNER_URL
+          ? 'Configured runner is unreachable or Docker is unavailable'
+          : 'Requires a Docker-capable dedicated runner; custom checks remain available',
+    },
+    {
+      key: 'edge',
+      label: 'Public Defender Edge',
+      status: recent(edgeHeartbeat, 300_000) ? 'ready' : 'optional',
+      detail: edgeHeartbeat
+        ? `Last heartbeat ${new Date(edgeHeartbeat.createdAt).toISOString()}`
+        : 'Deploy railway.edge.json when public reverse-proxy protection is required',
+    },
+    {
+      key: 'sso',
+      label: 'Company SSO',
+      status:
+        orgOidc || (process.env.OIDC_ISSUER && process.env.OIDC_CLIENT_ID && process.env.OIDC_CLIENT_SECRET)
+          ? 'ready'
+          : 'optional',
+      detail: orgOidc?.config?.issuer || process.env.OIDC_ISSUER || 'OIDC is optional',
+    },
+    {
+      key: 'scim',
+      label: 'SCIM provisioning',
+      status:
+        orgScim || (strong(process.env.SHANNON_SCIM_TOKEN) && process.env.SHANNON_SCIM_ORG_ID) ? 'ready' : 'optional',
+      detail: orgScim ? `Configured for ${ctx.org.name}` : process.env.SHANNON_SCIM_ORG_ID || 'SCIM is optional',
+    },
+    {
+      key: 'metrics',
+      label: 'Protected metrics',
+      status: strong(process.env.SHANNON_METRICS_TOKEN) ? 'ready' : 'configure',
+      detail: 'Prometheus endpoint bearer token',
+    },
+    {
+      key: 'backups',
+      label: 'Backup restore test',
+      status: recentDate(process.env.SHANNON_BACKUPS_VERIFIED_AT, 100) ? 'ready' : 'configure',
+      detail:
+        process.env.SHANNON_BACKUPS_VERIFIED_AT ||
+        'Set SHANNON_BACKUPS_VERIFIED_AT after a successful staging restore (repeat quarterly)',
+    },
+    {
+      key: 'alerts',
+      label: 'Production alert test',
+      status: recentDate(process.env.SHANNON_ALERTS_VERIFIED_AT, 45) ? 'ready' : 'configure',
+      detail:
+        process.env.SHANNON_ALERTS_VERIFIED_AT ||
+        'Set SHANNON_ALERTS_VERIFIED_AT after an end-to-end on-call alert test',
+    },
+    {
+      key: 'incident-contact',
+      label: 'Security incident contact',
+      status: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(process.env.SHANNON_SECURITY_CONTACT || '') ? 'ready' : 'configure',
+      detail: process.env.SHANNON_SECURITY_CONTACT || 'Set the monitored security contact address',
+    },
+    {
+      key: 'billing',
+      label: 'Stripe billing',
+      status: billingEnabled() ? 'ready' : 'optional',
+      detail: billingEnabled() ? 'Checkout and signed webhooks configured' : 'Optional; paid checkout remains disabled',
+    },
   ];
   const operatorActions = {
     backups: {
@@ -5843,13 +6921,27 @@ app.get('/api/system/readiness', async (req, res) => {
   for (const check of checks) {
     if (operatorActions[check.key]) check.action = operatorActions[check.key];
   }
-  const requiredKeys = new Set(['database', 'secrets', 'public-url', 'email', 'worker', 'browser', 'metrics', 'backups', 'alerts', 'incident-contact']);
+  const requiredKeys = new Set([
+    'database',
+    'secrets',
+    'public-url',
+    'email',
+    'worker',
+    'browser',
+    'metrics',
+    'backups',
+    'alerts',
+    'incident-contact',
+  ]);
   const required = checks.filter((item) => requiredKeys.has(item.key));
+  // Every organization's owner may see whether the service is ready. The details (addresses,
+  // contacts, which variables to set) describe the platform, so only its operator gets them.
+  const operator = isPlatformOperator(req, ctx.user);
   res.json({
     ok: required.every((item) => item.status === 'ready'),
     ready: required.filter((item) => item.status === 'ready').length,
     required: required.length,
-    checks,
+    checks: operator ? checks : checks.map(({ key, label, status }) => ({ key, label, status })),
     generatedAt: now,
     organization: { id: ctx.org.id, name: ctx.org.name },
   });
@@ -5858,7 +6950,10 @@ app.get('/api/system/readiness', async (req, res) => {
 app.get('/metrics', async (req, res) => {
   const configured = String(process.env.SHANNON_METRICS_TOKEN || '');
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  const valid = configured && supplied.length === configured.length && _crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
+  const valid =
+    configured &&
+    supplied.length === configured.length &&
+    _crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
   if (!valid) return res.status(401).type('text/plain').send('unauthorized\n');
   const jobs = await listJobs(null, 500);
   const counts = {};
@@ -5898,8 +6993,15 @@ app.get('/api/defender/self', (req, res) => {
 app.get('/api/defender/self/events', (req, res) => {
   if (!requirePlatformOperator(req, res)) return;
   if (!SELF_DEFENSE) return res.status(409).json({ error: 'self-defense is not enabled' });
-  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
-  res.write(`data: ${JSON.stringify({ type: 'hello', mode: SELF_DEFENSE.getMode(), stats: SELF_DEFENSE.stats(), bans: SELF_DEFENSE.bans(), banPolicy: SELF_DEFENSE.banPolicy() })}\n\n`);
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  res.write(
+    `data: ${JSON.stringify({ type: 'hello', mode: SELF_DEFENSE.getMode(), stats: SELF_DEFENSE.stats(), bans: SELF_DEFENSE.bans(), banPolicy: SELF_DEFENSE.banPolicy() })}\n\n`,
+  );
   SELF_SSE.add(res);
   const heartbeat = setInterval(() => {
     try {
@@ -5916,7 +7018,9 @@ app.get('/api/defender/self/events', (req, res) => {
 app.post('/api/defender/self/unban', (req, res) => {
   if (!requirePlatformOperator(req, res)) return;
   if (!SELF_DEFENSE) return res.status(409).json({ error: 'self-defense is not enabled' });
-  const ip = String(req.body?.ip || '').trim().slice(0, 64);
+  const ip = String(req.body?.ip || '')
+    .trim()
+    .slice(0, 64);
   if (!ip) return res.status(400).json({ error: 'ip required' });
   const lifted = SELF_DEFENSE.unban(ip);
   audit(requestContext(req), 'defender.self_unban', 'defender', ip, { lifted });
@@ -5936,7 +7040,9 @@ app.post('/api/defender/self/mode', (req, res) => {
 // The key carries its user, organization and revocation version and is verified by HMAC. A per-user
 // version permits targeted rotation while SHANNON_SESSION_SECRET remains the emergency global reset.
 function defenderApiKey(userId, orgId, version = 0) {
-  const payload = Buffer.from(JSON.stringify({ uid: userId, oid: orgId, v: Number(version || 0) })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ uid: userId, oid: orgId, v: Number(version || 0) })).toString(
+    'base64url',
+  );
   const sig = _crypto.createHmac('sha256', SESSION_SECRET).update(`defender-key:${payload}`).digest('base64url');
   return `sk_${payload}.${sig}`;
 }
@@ -5944,13 +7050,16 @@ function verifyDefenderKey(key) {
   const m = /^sk_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(key || ''));
   if (!m) return null;
   const expected = _crypto.createHmac('sha256', SESSION_SECRET).update(`defender-key:${m[1]}`).digest('base64url');
-  if (expected.length !== m[2].length || !_crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(m[2]))) return null;
+  if (expected.length !== m[2].length || !_crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(m[2])))
+    return null;
   try {
     const payload = JSON.parse(Buffer.from(m[1], 'base64url').toString());
     const membership = getMembership(payload.oid, payload.uid);
     const user = loadUsers()[payload.uid];
     const versionMatches = user && Number(payload.v || 0) === Number(user.defenderKeyVersion || 0);
-    return membership && versionMatches && can(membership.role, 'defender.manage') ? { userId: payload.uid, orgId: payload.oid } : null;
+    return membership && versionMatches && !user.disabledAt && can(membership.role, 'defender.manage')
+      ? { userId: payload.uid, orgId: payload.oid }
+      : null;
   } catch {
     return null;
   }
@@ -5978,17 +7087,19 @@ async function loadCisaKev() {
       if (raw.length > 12_000_000) throw new Error('CISA KEV response exceeded the safety limit');
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed.vulnerabilities)) throw new Error('CISA KEV response is invalid');
-      const vulnerabilities = parsed.vulnerabilities.map((item) => ({
-        cveId: String(item.cveID || '').slice(0, 32),
-        vendor: String(item.vendorProject || '').slice(0, 120),
-        product: String(item.product || '').slice(0, 160),
-        name: String(item.vulnerabilityName || '').slice(0, 240),
-        dateAdded: String(item.dateAdded || '').slice(0, 20),
-        dueDate: String(item.dueDate || '').slice(0, 20),
-        ransomwareUse: String(item.knownRansomwareCampaignUse || 'Unknown').slice(0, 24),
-        action: String(item.requiredAction || '').slice(0, 600),
-        notes: String(item.notes || '').slice(0, 500),
-      })).filter((item) => /^CVE-\d{4}-\d+$/i.test(item.cveId));
+      const vulnerabilities = parsed.vulnerabilities
+        .map((item) => ({
+          cveId: String(item.cveID || '').slice(0, 32),
+          vendor: String(item.vendorProject || '').slice(0, 120),
+          product: String(item.product || '').slice(0, 160),
+          name: String(item.vulnerabilityName || '').slice(0, 240),
+          dateAdded: String(item.dateAdded || '').slice(0, 20),
+          dueDate: String(item.dueDate || '').slice(0, 20),
+          ransomwareUse: String(item.knownRansomwareCampaignUse || 'Unknown').slice(0, 24),
+          action: String(item.requiredAction || '').slice(0, 600),
+          notes: String(item.notes || '').slice(0, 500),
+        }))
+        .filter((item) => /^CVE-\d{4}-\d+$/i.test(item.cveId));
       cisaKevCache = {
         fetchedAt: Date.now(),
         catalogVersion: String(parsed.catalogVersion || '').slice(0, 40),
@@ -6022,7 +7133,11 @@ const OWN_TESTS = createOwnTestLedger({
   settleMs: Math.max(10, Number(process.env.SHANNON_OWN_TEST_SETTLE_MS) || 2000),
 });
 // "www.example.com/path?x=1" or a bare host -> the host as the site reported it.
-const reportedHost = (value) => String(value || '').replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/)[0].slice(0, 255);
+const reportedHost = (value) =>
+  String(value || '')
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .split(/[/?#]/)[0]
+    .slice(0, 255);
 
 function defenderSeverity(cls) {
   const value = String(cls || '').toLowerCase();
@@ -6032,54 +7147,90 @@ function defenderSeverity(cls) {
   return 'low';
 }
 
+// How many detections one organization may store per minute from each source, and one alert per
+// kind of attack per site per minute. A leaked site key, or a real flood, must not be able to push
+// an organization's whole history out, or send its owner a message per request.
+const INTAKE = createIntakeGate({
+  perMinute: Math.max(10, Number(process.env.SHANNON_DEFENDER_INTAKE_PER_MINUTE) || 300),
+});
+function sendDefenseAlert(orgId, event, userId, site) {
+  if (!INTAKE.alertOnce(orgId, `${event.source}|${site}|${event.cls}`)) return;
+  queueIntegrationEvent(
+    orgId,
+    { id: `defender:${event.id}`, type: 'defender.detection', at: event.at, data: event },
+    userId,
+  ).catch((error) => console.error('[defender] integration event failed:', error.message));
+}
+// Stores one reported detection, or, once the minute's allowance is used, one notice that the rest
+// of the minute is not being kept. Returns whether the detection itself was stored.
+function storeDetection({ orgId, userId, source, site, detection, metadata = {} }) {
+  const turn = INTAKE.admit(orgId, source);
+  if (turn === 'drop') return false;
+  const flood = turn === 'overflow';
+  const event = {
+    id: randomUUID(),
+    orgId,
+    userId,
+    at: flood ? new Date().toISOString() : detection.at,
+    method: flood ? 'FLOOD' : detection.method,
+    url: flood
+      ? `${site}: more than ${INTAKE.perMinute} detections in one minute. The rest of this minute is not stored.`
+      : detection.url,
+    cls: flood ? 'report-flood' : detection.cls,
+    enforced: flood ? false : detection.enforced,
+    srcIp: flood ? null : detection.srcIp,
+    severity: flood ? 'high' : defenderSeverity(detection.cls),
+    source,
+    status: !flood && detection.enforced ? 'contained' : 'open',
+    metadata,
+    createdAt: Date.now(),
+  };
+  appendDefenseEvent(event);
+  sendDefenseAlert(orgId, event, userId, site);
+  return !flood;
+}
+
 app.post('/api/defender/report', (req, res) => {
   const principal = verifyDefenderKey((req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
   if (!principal) return res.status(401).json({ error: 'invalid api key' });
+  // Counted per organization, not per address: the sender is the customer's server.
+  if (!rateLimit(`defender-report:${principal.orgId}`, { limit: 240, windowMs: 60_000 }).ok) {
+    return res.status(429).json({ error: 'Too many reports. Send detections in batches.' });
+  }
   const incoming = Array.isArray(req.body?.detections) ? req.body.detections : [];
   if (!incoming.length) return res.json({ accepted: 0 });
 
   let accepted = 0;
   for (const raw of incoming.slice(0, SDK_REPORT_MAX)) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-    const d = raw;
-    const eventTime = typeof d.at === 'string' && Number.isFinite(Date.parse(d.at))
-      ? new Date(d.at).toISOString()
-      : new Date().toISOString();
+    const d = cleanDetection(raw);
     // The Express package reports a path, so it sends the site's name beside it.
-    const site = typeof d.host === 'string' && d.host ? d.host : d.url;
-    const own = ownTestOf(principal.orgId, d, site);
+    const site = typeof raw.host === 'string' && raw.host ? raw.host : d.url;
+    const own = ownTestOf(principal.orgId, raw, site);
     if (own) {
       OWN_TESTS.record({
-        orgId: principal.orgId, userId: principal.userId, source: 'sdk', token: d.test, kind: own.kind,
-        site: reportedHost(site), detection: d, at: eventTime,
+        orgId: principal.orgId,
+        userId: principal.userId,
+        source: 'sdk',
+        token: raw.test,
+        kind: own.kind,
+        site: reportedHost(site),
+        detection: d,
+        at: d.at,
       });
       accepted += 1;
       continue;
     }
-    const event = {
-      id: randomUUID(),
-      orgId: principal.orgId,
-      userId: principal.userId,
-      at: eventTime,
-      method: String(d.method || '').slice(0, 10),
-      url: String(d.url || '').slice(0, 300),
-      cls: String(d.cls || '').slice(0, 60),
-      enforced: d.enforced === true,
-      srcIp: d.srcIp ? String(d.srcIp).slice(0, 64) : null,
-      severity: defenderSeverity(d.cls),
-      source: 'sdk',
-      status: d.enforced === true ? 'contained' : 'open',
-      metadata: {},
-      createdAt: Date.now(),
-    };
-    appendDefenseEvent(event);
-    accepted += 1;
-    queueIntegrationEvent(principal.orgId, {
-      id: `defender:${event.id}`,
-      type: 'defender.detection',
-      at: event.at,
-      data: event,
-    }, principal.userId).catch((error) => console.error('[defender] integration event failed:', error.message));
+    if (
+      storeDetection({
+        orgId: principal.orgId,
+        userId: principal.userId,
+        source: 'sdk',
+        site: reportedHost(site),
+        detection: d,
+      })
+    )
+      accepted += 1;
   }
   res.json({ accepted });
 });
@@ -6088,7 +7239,10 @@ app.get('/api/defender/sdk', (req, res) => {
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const user = ctx.user;
-  res.json({ apiKey: defenderApiKey(user.id, ctx.org.id, user.defenderKeyVersion), reports: listDefenseEvents(ctx.org.id, 25) });
+  res.json({
+    apiKey: defenderApiKey(user.id, ctx.org.id, user.defenderKeyVersion),
+    reports: listDefenseEvents(ctx.org.id, 25),
+  });
 });
 
 app.post('/api/defender/sdk/rotate', (req, res) => {
@@ -6166,7 +7320,10 @@ app.get('/api/defender/sdk/download/:kind', (req, res) => {
   const code = sdkBundle(req.params.kind);
   if (!code) return res.status(404).json({ error: 'Unknown download.' });
   res.setHeader('content-type', 'text/javascript; charset=utf-8');
-  res.setHeader('content-disposition', `attachment; filename="securovix-defender${req.params.kind === 'express' ? '-express' : ''}.mjs"`);
+  res.setHeader(
+    'content-disposition',
+    `attachment; filename="securovix-defender${req.params.kind === 'express' ? '-express' : ''}.mjs"`,
+  );
   res.end(code);
 });
 
@@ -6185,7 +7342,9 @@ function defenseDigest(orgId, { from, to }) {
     orgName: getOrganization(orgId)?.name || '',
     from,
     to,
-    previousTotal: capped ? null : events.filter((event) => Number(event.createdAt) < from && event.cls !== 'repeat-offender').length,
+    previousTotal: capped
+      ? null
+      : events.filter((event) => Number(event.createdAt) < from && event.cls !== 'repeat-offender').length,
     dashboardUrl: String(process.env.SHANNON_PUBLIC_URL || '').replace(/\/$/, ''),
     capped,
   });
@@ -6198,7 +7357,8 @@ export async function runDefenseDigests(now = Date.now()) {
   }
   const week = lastCompleteWeek(now);
   // From Monday 08:00 UTC, and never more than three days late — an old summary is noise.
-  if (now < week.to + 8 * 3_600_000 || now > week.to + 3 * DAY) return { sent: 0, skipped: 'outside the sending window' };
+  if (now < week.to + 8 * 3_600_000 || now > week.to + 3 * DAY)
+    return { sent: 0, skipped: 'outside the sending window' };
   let sent = 0;
   for (const orgId of listDefenseEventOrgIds()) {
     const digest = defenseDigest(orgId, week);
@@ -6238,7 +7398,9 @@ app.get('/api/defender/digest', (req, res) => {
     ok: true,
     enabled: loadUserSettings(ctx.user.id).defenseDigest !== false,
     eligible: DIGEST_ROLES.has(ctx.membership.role),
-    digest: digest ? { subject: digest.subject, text: digest.text, totals: digest.totals, period: digest.period } : null,
+    digest: digest
+      ? { subject: digest.subject, text: digest.text, totals: digest.totals, period: digest.period }
+      : null,
   });
 });
 
@@ -6256,20 +7418,27 @@ app.post('/api/defender/digest/send', async (req, res) => {
   if (limited(req, res, 'defense-digest-send', 3, 60 * 60_000)) return;
   const now = Date.now();
   const digest = defenseDigest(ctx.org.id, { from: now - 7 * DAY, to: now });
-  if (!digest) return res.status(409).json({ error: 'No attacks were recorded in the last 7 days, so there is nothing to send.' });
+  if (!digest)
+    return res.status(409).json({ error: 'No attacks were recorded in the last 7 days, so there is nothing to send.' });
   try {
     await dispatchEmail(
       { to: ctx.user.email, subject: digest.subject, text: digest.text, html: digest.html },
       { orgId: ctx.org.id, userId: ctx.user.id },
     );
   } catch (error) {
-    return res.status(503).json({ error: `The email could not be sent: ${String(error?.message || error).slice(0, 200)}` });
+    return res
+      .status(503)
+      .json({ error: `The email could not be sent: ${String(error?.message || error).slice(0, 200)}` });
   }
   res.json({ ok: true, to: ctx.user.email });
 });
 
 // ---------- Guard: identity and cloud defence (Microsoft 365, Google Workspace) ----------
-const GUARD_PROVIDERS = { microsoft: createMicrosoftProvider(), google: createGoogleProvider(), simulation: createSimulationProvider() };
+const GUARD_PROVIDERS = {
+  microsoft: createMicrosoftProvider(),
+  google: createGoogleProvider(),
+  simulation: createSimulationProvider(),
+};
 const GUARD_STORE = {
   connections: guardConnections,
   incidents: guardIncidents,
@@ -6308,13 +7477,27 @@ registerGuardRoutes(app, {
 
 // Guard Phase 2: endpoint agents and the malware sandbox (CAPE, operator-hosted, optional).
 export const guardEndpoints = createEndpointService({
-  store: { agents: guardAgents, commands: guardCommands, samples: guardSamples, hashes: guardHashes, endpoint: guardEndpoint },
+  store: {
+    agents: guardAgents,
+    commands: guardCommands,
+    samples: guardSamples,
+    hashes: guardHashes,
+    endpoint: guardEndpoint,
+  },
   engine: guardEngine,
   cape: createCapeClient(),
   publicUrl: () => String(process.env.SHANNON_PUBLIC_URL || '').replace(/\/$/, ''),
 });
 guardEngine.attachAgents(guardEndpoints);
-registerEndpointRoutes(app, { endpoints: guardEndpoints, engine: guardEngine, store: GUARD_STORE, requirePermission, audit, limited, can });
+registerEndpointRoutes(app, {
+  endpoints: guardEndpoints,
+  engine: guardEngine,
+  store: GUARD_STORE,
+  requirePermission,
+  audit,
+  limited,
+  can,
+});
 
 // Every few minutes: pull each organization's connections and check Defender traffic against
 // open Shannon findings. One organization at a time, so a slow tenant cannot pile up syncs.
@@ -6325,7 +7508,10 @@ export async function runGuardCycles() {
   const results = {};
   try {
     const connections = await guardConnections.list({}, { limit: 500 });
-    const orgIds = new Set([...connections.filter((c) => c.enabled !== false).map((c) => c.orgId), ...listDefenseEventOrgIds()]);
+    const orgIds = new Set([
+      ...connections.filter((c) => c.enabled !== false).map((c) => c.orgId),
+      ...listDefenseEventOrgIds(),
+    ]);
     for (const orgId of orgIds) {
       try {
         results[orgId] = await guardEngine.syncOrg(orgId);
@@ -6359,13 +7545,17 @@ app.get('/api/defender/intelligence', async (req, res) => {
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   if (limited(req, res, `defender-intelligence:${ctx.org.id}`, 60, 5 * 60_000)) return;
-  const query = String(req.query.q || '').trim().toLowerCase().slice(0, 120);
+  const query = String(req.query.q || '')
+    .trim()
+    .toLowerCase()
+    .slice(0, 120);
   try {
     const catalog = await loadCisaKev();
     let matches = catalog.vulnerabilities;
     if (query) {
-      matches = matches.filter((item) => [item.cveId, item.vendor, item.product, item.name]
-        .some((value) => value.toLowerCase().includes(query)));
+      matches = matches.filter((item) =>
+        [item.cveId, item.vendor, item.product, item.name].some((value) => value.toLowerCase().includes(query)),
+      );
     }
     res.json({
       ok: true,
@@ -6380,7 +7570,10 @@ app.get('/api/defender/intelligence', async (req, res) => {
       vulnerabilities: matches.slice(0, 20),
     });
   } catch (error) {
-    res.status(503).json({ error: 'Threat intelligence is temporarily unavailable.', detail: String(error?.message || error).slice(0, 200) });
+    res.status(503).json({
+      error: 'Threat intelligence is temporarily unavailable.',
+      detail: String(error?.message || error).slice(0, 200),
+    });
   }
 });
 
@@ -6388,11 +7581,21 @@ app.get('/api/defender/program', async (req, res) => {
   const ctx = requirePermission(req, res, 'defender.manage');
   if (!ctx) return;
   const [stored, assets, cycles] = await Promise.all([
-    getDefenseProgram(ctx.org.id), listDefenseAssets(ctx.org.id), listDefenseCycles(ctx.org.id, 20),
+    getDefenseProgram(ctx.org.id),
+    listDefenseAssets(ctx.org.id),
+    listDefenseCycles(ctx.org.id, 20),
   ]);
   res.json({
     ok: true,
-    program: stored || { orgId: ctx.org.id, enabled: false, cadenceHours: 24, responseMode: 'recommend', nextRunAt: null, lastRunAt: null, lastCycleId: null },
+    program: stored || {
+      orgId: ctx.org.id,
+      enabled: false,
+      cadenceHours: 24,
+      responseMode: 'recommend',
+      nextRunAt: null,
+      lastRunAt: null,
+      lastCycleId: null,
+    },
     assets,
     cycles,
     safety: {
@@ -6417,7 +7620,11 @@ app.put('/api/defender/program', async (req, res) => {
     createdBy: ctx.user.id,
     nextRunAt: req.body?.enabled === true ? Date.now() : null,
   });
-  audit(ctx, 'defender.program_updated', 'defense-program', ctx.org.id, { enabled: program.enabled, cadenceHours, responseMode: program.responseMode });
+  audit(ctx, 'defender.program_updated', 'defense-program', ctx.org.id, {
+    enabled: program.enabled,
+    cadenceHours,
+    responseMode: program.responseMode,
+  });
   res.json({ ok: true, program });
 });
 
@@ -6427,8 +7634,12 @@ app.post('/api/defender/program/run', async (req, res) => {
   const program = await getDefenseProgram(ctx.org.id);
   const cycleId = `dcy_${randomUUID()}`;
   const job = await enqueueJob({
-    orgId: ctx.org.id, userId: ctx.user.id, type: 'defense-cycle',
-    payload: { cycleId, trigger: 'manual', responseMode: program?.responseMode || 'recommend' }, idempotencyKey: `defense-cycle:manual:${cycleId}`, maxAttempts: 3,
+    orgId: ctx.org.id,
+    userId: ctx.user.id,
+    type: 'defense-cycle',
+    payload: { cycleId, trigger: 'manual', responseMode: program?.responseMode || 'recommend' },
+    idempotencyKey: `defense-cycle:manual:${cycleId}`,
+    maxAttempts: 3,
   });
   audit(ctx, 'defender.cycle_requested', 'defense-cycle', cycleId, { jobId: job.id });
   res.status(202).json({ ok: true, cycleId, jobId: job.id });
@@ -6440,31 +7651,52 @@ app.post('/api/defender/assets', async (req, res) => {
   const type = String(req.body?.type || '').toLowerCase();
   const allowedTypes = ['web', 'api', 'domain', 'cidr', 'cloud', 'repository', 'identity', 'endpoint'];
   if (!allowedTypes.includes(type)) return res.status(400).json({ error: 'Choose a valid asset type.' });
-  let locator = String(req.body?.locator || '').trim().slice(0, 500);
+  let locator = String(req.body?.locator || '')
+    .trim()
+    .slice(0, 500);
   if (!locator) return res.status(400).json({ error: 'Asset locator is required.' });
   if (['web', 'api', 'domain'].includes(type)) {
     const host = hostOf(locator);
     if (!host) return res.status(400).json({ error: 'Provide a valid domain or URL.' });
-    if (!isLocalHost(host) && !isVerified(ctx.user.id, host)) return res.status(403).json({ error: 'Verify ownership of this domain before adding it to continuous defense.', host });
+    if (!localExempt(host) && !isVerified(ctx.user.id, host))
+      return res
+        .status(403)
+        .json({ error: 'Verify ownership of this domain before adding it to continuous defense.', host });
     locator = type === 'domain' ? host : locator;
   }
   if (type === 'cidr') {
     if (!parseCidr(locator)) return res.status(400).json({ error: 'Provide a valid IPv4 CIDR range.' });
-    if (!Object.hasOwn(listCidrs(ctx.user.id), locator)) return res.status(403).json({ error: 'Verify control of this IP range before adding it.' });
+    if (!Object.hasOwn(listCidrs(ctx.user.id), locator))
+      return res.status(403).json({ error: 'Verify control of this IP range before adding it.' });
   }
-  const criticality = ['low', 'medium', 'high', 'critical'].includes(req.body?.criticality) ? req.body.criticality : 'medium';
+  const criticality = ['low', 'medium', 'high', 'critical'].includes(req.body?.criticality)
+    ? req.body.criticality
+    : 'medium';
   const projectId = req.body?.projectId ? String(req.body.projectId) : null;
   if (projectId && !listProjects(ctx.org.id).some((project) => project.id === projectId)) {
     return res.status(400).json({ error: 'Choose a project from the active organization.' });
   }
   const asset = await saveDefenseAsset({
-    orgId: ctx.org.id, projectId, type, locator, criticality,
+    orgId: ctx.org.id,
+    projectId,
+    type,
+    locator,
+    criticality,
     name: sanitizeLabel(req.body?.name || locator, 100) || locator.slice(0, 100),
-    status: 'active', coverage: 'inventory', createdBy: ctx.user.id,
+    status: 'active',
+    coverage: 'inventory',
+    createdBy: ctx.user.id,
     config: { sensorRequired: !['web', 'api', 'domain'].includes(type) },
   });
   audit(ctx, 'defender.asset_added', 'defense-asset', asset.id, { type, locator, criticality });
-  res.status(201).json({ ok: true, asset, protected: asset.coverage === 'online', nextStep: ['web', 'api', 'domain'].includes(type) ? 'Add an Edge route or install the Defender SDK.' : 'Install or connect a supported sensor; inventory alone does not inspect this asset.' });
+  res.status(201).json({
+    ok: true,
+    asset,
+    protected: asset.coverage === 'online',
+    nextStep: ['web', 'api', 'domain'].includes(type)
+      ? 'Add an Edge route or install the Defender SDK.'
+      : 'Install or connect a supported sensor; inventory alone does not inspect this asset.',
+  });
 });
 
 app.delete('/api/defender/assets/:id', async (req, res) => {
@@ -6473,7 +7705,10 @@ app.delete('/api/defender/assets/:id', async (req, res) => {
   const existing = (await listDefenseAssets(ctx.org.id)).find((item) => item.id === req.params.id);
   if (!existing) return res.status(404).json({ error: 'Asset not found.' });
   await deleteDefenseAsset(ctx.org.id, existing.id);
-  audit(ctx, 'defender.asset_removed', 'defense-asset', existing.id, { type: existing.type, locator: existing.locator });
+  audit(ctx, 'defender.asset_removed', 'defense-asset', existing.id, {
+    type: existing.type,
+    locator: existing.locator,
+  });
   res.json({ ok: true });
 });
 
@@ -6492,12 +7727,16 @@ app.patch('/api/defender/events/:id', (req, res) => {
     metadata: { ...(current.metadata || {}), statusChangedAt: Date.now(), statusChangedBy: ctx.user.id },
   });
   audit(ctx, 'defender.incident_status_changed', 'defense-event', event.id, { from: previousStatus, to: status });
-  queueIntegrationEvent(ctx.org.id, {
-    id: `defender-status:${event.id}:${status}`,
-    type: 'defender.incident.updated',
-    at: new Date().toISOString(),
-    data: event,
-  }, ctx.user.id).catch((error) => console.error('[defender] incident integration event failed:', error.message));
+  queueIntegrationEvent(
+    ctx.org.id,
+    {
+      id: `defender-status:${event.id}:${status}`,
+      type: 'defender.incident.updated',
+      at: new Date().toISOString(),
+      data: event,
+    },
+    ctx.user.id,
+  ).catch((error) => console.error('[defender] incident integration event failed:', error.message));
   res.json({ ok: true, event });
 });
 
@@ -6510,8 +7749,11 @@ const EDGE_HEARTBEATS = new Map();
 function edgePlatformAuthorized(req) {
   const configured = String(process.env.SHANNON_EDGE_PLATFORM_TOKEN || '');
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  return configured.length >= 32 && supplied.length === configured.length
-    && _crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
+  return (
+    configured.length >= 32 &&
+    supplied.length === configured.length &&
+    _crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(configured))
+  );
 }
 
 function recordEdgeHeartbeat(req, orgId, routeCount) {
@@ -6544,33 +7786,39 @@ app.post('/api/platform/defender/edge/report', (req, res) => {
   const routesByHost = new Map(listEdgeRoutes().map((route) => [route.host, route]));
   const incoming = Array.isArray(req.body?.detections) ? req.body.detections : [];
   let accepted = 0;
-  for (const raw of incoming.slice(0, SDK_REPORT_MAX)) {
+  // The edge sends up to 500 detections at a time, for every organization it serves.
+  for (const raw of incoming.slice(0, 500)) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-    const host = String(raw.host || '').toLowerCase().split(':')[0];
+    const host = (typeof raw.host === 'string' ? raw.host : '').toLowerCase().split(':')[0];
     const route = routesByHost.get(host);
     if (!route) continue;
+    const d = cleanDetection(raw);
     const own = ownTestOf(route.orgId, raw, host);
     if (own) {
       OWN_TESTS.record({
-        orgId: route.orgId, userId: route.userId, source: 'edge', token: raw.test, kind: own.kind,
-        site: host, detection: raw, metadata: { host },
+        orgId: route.orgId,
+        userId: route.userId,
+        source: 'edge',
+        token: raw.test,
+        kind: own.kind,
+        site: host,
+        detection: d,
+        metadata: { host },
       });
       accepted += 1;
       continue;
     }
-    const event = {
-      id: randomUUID(), orgId: route.orgId, userId: route.userId,
-      at: typeof raw.at === 'string' && Number.isFinite(Date.parse(raw.at)) ? new Date(raw.at).toISOString() : new Date().toISOString(),
-      method: String(raw.method || '').slice(0, 10), url: String(raw.url || '').slice(0, 300),
-      cls: String(raw.cls || '').slice(0, 60), enforced: raw.enforced === true,
-      srcIp: raw.srcIp ? String(raw.srcIp).slice(0, 64) : null,
-      severity: defenderSeverity(raw.cls), source: 'edge', status: raw.enforced === true ? 'contained' : 'open',
-      metadata: { host }, createdAt: Date.now(),
-    };
-    appendDefenseEvent(event);
-    accepted += 1;
-    queueIntegrationEvent(route.orgId, { id: `defender:${event.id}`, type: 'defender.detection', at: event.at, data: event }, route.userId)
-      .catch((error) => console.error('[defender] integration event failed:', error.message));
+    if (
+      storeDetection({
+        orgId: route.orgId,
+        userId: route.userId,
+        source: 'edge',
+        site: host,
+        detection: d,
+        metadata: { host },
+      })
+    )
+      accepted += 1;
   }
   res.json({ accepted });
 });
@@ -6589,7 +7837,8 @@ app.post('/api/defender/sensors/heartbeat', async (req, res) => {
   const updated = await updateDefenseAsset(principal.orgId, asset.id, {
     coverage: 'online',
     config: {
-      ...(asset.config || {}), lastSeenAt: at,
+      ...(asset.config || {}),
+      lastSeenAt: at,
       sensorType: sanitizeLabel(req.body?.sensorType || 'collector', 60),
       sensorVersion: sanitizeLabel(req.body?.sensorVersion || '', 40),
     },
@@ -6602,7 +7851,12 @@ app.get('/api/defender/edge/routes', (req, res) => {
   const ctx = principal ? null : requirePermission(req, res, 'defender.manage');
   if (!principal && !ctx) return;
   const orgId = principal?.orgId || ctx.org.id;
-  const list = listEdgeRoutes({ orgId }).map((v) => ({ host: v.host, origin: v.origin, mode: v.mode, createdAt: v.createdAt }));
+  const list = listEdgeRoutes({ orgId }).map((v) => ({
+    host: v.host,
+    origin: v.origin,
+    mode: v.mode,
+    createdAt: v.createdAt,
+  }));
   if (principal && Date.now() - Number(EDGE_HEARTBEATS.get(orgId) || 0) > 60_000) {
     recordEdgeHeartbeat(req, orgId, list.length);
   }
@@ -6630,7 +7884,7 @@ app.post('/api/defender/edge/routes', async (req, res) => {
   // proven you own, and you may not point one at an origin you do not own either.
   const h = hostOf(String(host));
   if (!h) return res.status(400).json({ error: 'invalid public hostname' });
-  if (!isLocalHost(h) && !isVerified(user.id, h)) {
+  if (!localExempt(h) && !isVerified(user.id, h)) {
     return res.status(403).json({ error: 'needsVerification', host: h });
   }
   if (!isVerified(user.id, parsed.hostname)) {
@@ -6641,7 +7895,8 @@ app.post('/api/defender/edge/routes', async (req, res) => {
   }
 
   const occupied = listEdgeRoutes().find((item) => item.host === h && item.orgId !== ctx.org.id);
-  if (occupied) return res.status(409).json({ error: 'This public hostname is already assigned to another organization.' });
+  if (occupied)
+    return res.status(409).json({ error: 'This public hostname is already assigned to another organization.' });
 
   const route = {
     host: h,
@@ -6679,7 +7934,9 @@ const DEF_REPLAY = 50; // events replayed to a new SSE client so the feed is not
 
 function localDefenderUnavailable(req, res) {
   if (process.env.NODE_ENV !== 'production' && process.env.SHANNON_ENABLE_LOCAL_DEFENDER === '1') return false;
-  res.status(404).json({ error: 'Local diagnostic Defender is disabled in production. Use Edge routes or the organization SDK.' });
+  res
+    .status(404)
+    .json({ error: 'Local diagnostic Defender is disabled in production. Use Edge routes or the organization SDK.' });
   return true;
 }
 
@@ -6728,7 +7985,7 @@ app.post('/api/defender/connect', async (req, res) => {
     return res.status(400).json({ error: 'local origins are disabled in production' });
   }
 
-  if (!isLocalHost(host) && !isVerified(user.id, host)) {
+  if (!localExempt(host) && !isVerified(user.id, host)) {
     return res.status(403).json({ error: 'needsVerification', host });
   }
 
@@ -6750,7 +8007,15 @@ app.post('/api/defender/connect', async (req, res) => {
   }
 
   const id = `def-${Math.random().toString(16).slice(2, 10)}`;
-  const system = { id, userId: user.id, orgId: ctx.org.id, kind: 'web', origin, mode: 'monitor', createdAt: new Date().toISOString() };
+  const system = {
+    id,
+    userId: user.id,
+    orgId: ctx.org.id,
+    kind: 'web',
+    origin,
+    mode: 'monitor',
+    createdAt: new Date().toISOString(),
+  };
   const entry = { system, runtime: null, sseClients: [], events: [] };
   defenders.set(id, entry);
 
@@ -6782,7 +8047,11 @@ app.get('/api/defender/list', (req, res) => {
   if (!ctx) return;
   const rows = [...defenders.values()]
     .filter((e) => e.system.orgId === ctx.org.id)
-    .map((e) => ({ ...e.system, proxyUrl: e.runtime?.meta?.url || null, stats: e.runtime?.stats?.() || { events: 0, defenses: 0 } }));
+    .map((e) => ({
+      ...e.system,
+      proxyUrl: e.runtime?.meta?.url || null,
+      stats: e.runtime?.stats?.() || { events: 0, defenses: 0 },
+    }));
   res.json({ systems: rows });
 });
 
@@ -6813,11 +8082,15 @@ app.get('/api/defender/overview', (req, res) => {
       last24h: last24h.length,
       blocked: events.filter((event) => event.enforced).length,
       open: events.filter((event) => ['open', 'investigating'].includes(event.status || 'open')).length,
-      critical: events.filter((event) => event.severity === 'critical' && ['open', 'investigating'].includes(event.status || 'open')).length,
+      critical: events.filter(
+        (event) => event.severity === 'critical' && ['open', 'investigating'].includes(event.status || 'open'),
+      ).length,
       edgeRoutes: routes.length,
       enforcingRoutes: routes.filter((route) => route.mode === 'enforce').length,
       connectedSystems: systems.length,
-      protectedAssets: routes.filter((route) => route.mode === 'enforce').length + systems.filter((system) => system.mode === 'enforce').length,
+      protectedAssets:
+        routes.filter((route) => route.mode === 'enforce').length +
+        systems.filter((system) => system.mode === 'enforce').length,
     },
     topClasses: Object.entries(classes)
       .sort((a, b) => b[1] - a[1])
@@ -6843,7 +8116,8 @@ app.post('/api/defender/:id/mode', (req, res) => {
   if (!ctx) return;
   const user = ctx.user;
   const entry = defenders.get(req.params.id);
-  if (!entry || entry.system.userId !== user.id || entry.system.orgId !== ctx.org.id) return res.status(404).json({ error: 'not found' });
+  if (!entry || entry.system.userId !== user.id || entry.system.orgId !== ctx.org.id)
+    return res.status(404).json({ error: 'not found' });
   if (!entry.runtime) return res.status(409).json({ error: 'defender not running' });
   const mode = entry.runtime.setMode(req.body?.mode);
   entry.system.mode = mode;
@@ -6858,7 +8132,8 @@ app.post('/api/defender/:id/disconnect', async (req, res) => {
   if (!ctx) return;
   const user = ctx.user;
   const entry = defenders.get(req.params.id);
-  if (!entry || entry.system.userId !== user.id || entry.system.orgId !== ctx.org.id) return res.status(404).json({ error: 'not found' });
+  if (!entry || entry.system.userId !== user.id || entry.system.orgId !== ctx.org.id)
+    return res.status(404).json({ error: 'not found' });
   try {
     await entry.runtime?.stop?.();
   } catch {}
@@ -6917,7 +8192,8 @@ export async function startDashboard({ port = PORT, scheduleMonitors = true } = 
     setTimeout(runDueMonitors, 30_000).unref?.();
     setInterval(runDueMonitors, 10 * 60 * 1000).unref?.();
     // Weekly attack summary: checked hourly, sends once per person per week (see runDefenseDigests).
-    const digests = () => runDefenseDigests().catch((error) => console.error('[defender] weekly summary failed:', error.message));
+    const digests = () =>
+      runDefenseDigests().catch((error) => console.error('[defender] weekly summary failed:', error.message));
     setTimeout(digests, 60_000).unref?.();
     setInterval(digests, 60 * 60 * 1000).unref?.();
     // Guard: identity and cloud sync, every 2 minutes by default.

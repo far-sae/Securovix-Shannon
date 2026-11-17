@@ -4,6 +4,26 @@
 // DETERMINISTICALLY through the engine's SSRF-guarded fetcher. A match is reported as a labeled
 // POTENTIAL lead (it is not a benign-proof by construction), never as a confirmed finding. Pure core.
 
+import vm from 'node:vm';
+
+// A pattern written by a user (or a model) runs on the server, against a page the tested site
+// returned. A badly behaved pattern can keep a process busy for minutes, and this one serves every
+// customer: so the match gets a quarter of a second and a bounded amount of text, then counts as
+// "no match".
+export function patternMatches(pattern, body) {
+  try {
+    return (
+      vm.runInNewContext(
+        'new RegExp(p, "i").test(b)',
+        { p: String(pattern), b: String(body).slice(0, 200_000) },
+        { timeout: 250 },
+      ) === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function evaluateMatcher(resp = {}, matcher = {}) {
   const status = Number(resp.status) || 0;
   const body = String(resp.body || '');
@@ -11,11 +31,7 @@ export function evaluateMatcher(resp = {}, matcher = {}) {
   if (matcher.status !== undefined) checks.push(status === Number(matcher.status));
   if (matcher.contains) checks.push(body.includes(String(matcher.contains)));
   if (matcher.regex) {
-    try {
-      checks.push(new RegExp(matcher.regex, 'i').test(body));
-    } catch {
-      checks.push(false);
-    }
+    checks.push(patternMatches(matcher.regex, body));
   }
   if (!checks.length) return false; // no assertion → never "matched" (never invents)
   return matcher.condition === 'or' ? checks.some(Boolean) : checks.every(Boolean);

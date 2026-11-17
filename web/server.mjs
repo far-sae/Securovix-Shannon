@@ -1,5 +1,5 @@
-import http from 'node:http';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
@@ -10,15 +10,14 @@ const PORT = Number(process.env.PORT) || 3000;
 const MODEL = process.env.RBSCAN_MODEL || 'claude-opus-4-7';
 
 const LICENSES = new Map([
-  ['RBSCAN-FREE-DEMO-2026',  { plan: 'free',  label: 'Free',       dailyLimit: 3   }],
-  ['RBSCAN-PRO-DEMO-2026',   { plan: 'pro',   label: 'Pro',        dailyLimit: 100 }],
-  ['RBSCAN-TEAM-DEMO-2026',  { plan: 'team',  label: 'Team',       dailyLimit: -1  }],
+  ['RBSCAN-FREE-DEMO-2026', { plan: 'free', label: 'Free', dailyLimit: 3 }],
+  ['RBSCAN-PRO-DEMO-2026', { plan: 'pro', label: 'Pro', dailyLimit: 100 }],
+  ['RBSCAN-TEAM-DEMO-2026', { plan: 'team', label: 'Team', dailyLimit: -1 }],
 ]);
 
 const tokens = new Map();
 const today = () => new Date().toISOString().slice(0, 10);
-const newToken = () =>
-  'rbtok_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+const newToken = () => `rbtok_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 
 const SYSTEM_PROMPT = `You are a dual-mode source-code security analyzer that runs both Red Team (offensive) and Blue Team (defensive) passes over the user's submitted code.
 
@@ -68,7 +67,7 @@ function send(res, status, body, headers = {}) {
   const isString = typeof body === 'string' || Buffer.isBuffer(body);
   const payload = isString ? body : JSON.stringify(body);
   res.writeHead(status, {
-    'content-type': isString ? (headers['content-type'] || 'text/plain') : 'application/json',
+    'content-type': isString ? headers['content-type'] || 'text/plain' : 'application/json',
     'cache-control': 'no-store',
     ...headers,
   });
@@ -80,11 +79,15 @@ async function readJson(req) {
   for await (const c of req) chunks.push(c);
   const text = Buffer.concat(chunks).toString('utf8');
   if (!text) return {};
-  try { return JSON.parse(text); } catch { throw new Error('invalid json body'); }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('invalid json body');
+  }
 }
 
 function authToken(req) {
-  const h = req.headers['authorization'] || '';
+  const h = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/i.exec(h);
   if (!m) return null;
   return tokens.get(m[1]) || null;
@@ -92,7 +95,11 @@ function authToken(req) {
 
 async function handleActivate(req, res) {
   const { key } = await readJson(req);
-  const license = LICENSES.get(String(key || '').trim().toUpperCase());
+  const license = LICENSES.get(
+    String(key || '')
+      .trim()
+      .toUpperCase(),
+  );
   if (!license) return send(res, 402, { ok: false, error: 'Invalid or unpaid license key. Please subscribe.' });
   const token = newToken();
   tokens.set(token, {
@@ -116,13 +123,20 @@ async function handleActivate(req, res) {
 async function handleScan(req, res) {
   const session = authToken(req);
   if (!session) return send(res, 401, { ok: false, error: 'Subscription required. Activate a license to scan.' });
-  if (session.day !== today()) { session.day = today(); session.used = 0; }
+  if (session.day !== today()) {
+    session.day = today();
+    session.used = 0;
+  }
   if (session.dailyLimit !== -1 && session.used >= session.dailyLimit) {
-    return send(res, 429, { ok: false, error: `Daily scan limit reached for the ${session.label} plan. Upgrade to keep scanning.` });
+    return send(res, 429, {
+      ok: false,
+      error: `Daily scan limit reached for the ${session.label} plan. Upgrade to keep scanning.`,
+    });
   }
 
   const { code, filename } = await readJson(req);
-  if (!code || typeof code !== 'string') return send(res, 400, { ok: false, error: 'Provide source code in the "code" field.' });
+  if (!code || typeof code !== 'string')
+    return send(res, 400, { ok: false, error: 'Provide source code in the "code" field.' });
   if (code.length > 60_000) return send(res, 413, { ok: false, error: 'Code exceeds 60KB. Trim it before scanning.' });
 
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -136,10 +150,12 @@ async function handleScan(req, res) {
       model: MODEL,
       max_tokens: 16000,
       system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-      messages: [{
-        role: 'user',
-        content: `Analyze this source code${filename ? ` (file: ${filename})` : ''}:\n\n<code>\n${code}\n</code>`,
-      }],
+      messages: [
+        {
+          role: 'user',
+          content: `Analyze this source code${filename ? ` (file: ${filename})` : ''}:\n\n<code>\n${code}\n</code>`,
+        },
+      ],
     });
     const text = resp.content
       .filter((b) => b.type === 'text')
@@ -166,7 +182,10 @@ async function handleScan(req, res) {
 async function handleSession(req, res) {
   const session = authToken(req);
   if (!session) return send(res, 401, { ok: false });
-  if (session.day !== today()) { session.day = today(); session.used = 0; }
+  if (session.day !== today()) {
+    session.day = today();
+    session.used = 0;
+  }
   return send(res, 200, {
     ok: true,
     plan: session.plan,
@@ -184,7 +203,12 @@ async function serveStatic(req, res) {
   try {
     const data = await fs.readFile(file);
     const ext = path.extname(file).toLowerCase();
-    const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+    const types = {
+      '.html': 'text/html; charset=utf-8',
+      '.js': 'application/javascript',
+      '.css': 'text/css',
+      '.svg': 'image/svg+xml',
+    };
     return send(res, 200, data, { 'content-type': types[ext] || 'application/octet-stream' });
   } catch {
     return send(res, 404, 'not found');
@@ -195,7 +219,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'POST' && req.url === '/api/activate') return handleActivate(req, res);
     if (req.method === 'POST' && req.url === '/api/scan') return handleScan(req, res);
-    if (req.method === 'GET'  && req.url === '/api/session') return handleSession(req, res);
+    if (req.method === 'GET' && req.url === '/api/session') return handleSession(req, res);
     if (req.method === 'GET') return serveStatic(req, res);
     return send(res, 405, 'method not allowed');
   } catch (err) {
@@ -205,8 +229,9 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`RedBlue Scan listening on http://localhost:${PORT}`);
-  console.log(`Demo license keys (paywall stand-in):`);
-  for (const [k, v] of LICENSES) console.log(`  ${v.label.padEnd(5)} -> ${k}  (limit: ${v.dailyLimit === -1 ? 'unlimited' : v.dailyLimit}/day)`);
+  console.log('Demo license keys (paywall stand-in):');
+  for (const [k, v] of LICENSES)
+    console.log(`  ${v.label.padEnd(5)} -> ${k}  (limit: ${v.dailyLimit === -1 ? 'unlimited' : v.dailyLimit}/day)`);
   if (!process.env.ANTHROPIC_API_KEY) {
     console.log('\n  WARNING: ANTHROPIC_API_KEY not set. Activation works, but scans will fail.');
   }

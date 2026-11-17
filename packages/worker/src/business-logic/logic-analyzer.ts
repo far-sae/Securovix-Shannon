@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import type { StateMachine, LogicFlaw } from './types.js';
-import { type Result, ok, err } from '../result.js';
+import { type Result, err, ok } from '../result.js';
+import type { LogicFlaw, StateMachine } from './types.js';
 
 export class LogicAnalyzer {
   async analyzeStateMachine(

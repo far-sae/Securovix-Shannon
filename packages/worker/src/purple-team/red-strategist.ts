@@ -45,11 +45,7 @@ export class RedStrategist {
     return runText(this.client, this.model, prompt);
   }
 
-  async crossTeamReply(
-    finding: PurpleFinding,
-    history: string,
-    blueProposal: string,
-  ): Promise<string> {
+  async crossTeamReply(finding: PurpleFinding, history: string, blueProposal: string): Promise<string> {
     const prompt = [
       'You are the RED TEAM STRATEGIST speaking to the Blue Team.',
       'They have proposed mitigations and detections. Your job is to honestly assess whether they break your attack.',

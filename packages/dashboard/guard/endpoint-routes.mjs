@@ -163,9 +163,9 @@ export function registerEndpointRoutes(app, deps) {
   app.post('/api/guard/endpoints/enroll-token', async (req, res) => {
     const ctx = requirePermission(req, res, 'integrations.manage');
     if (!ctx) return;
-    const token = await endpoints.createEnrollToken(ctx.org.id);
+    const { token, expiresAt } = await endpoints.createEnrollToken(ctx.org.id);
     audit(ctx, 'guard.endpoint.enroll_token_created', 'guard_endpoint', ctx.org.id, {});
-    res.status(201).json({ ok: true, token });
+    res.status(201).json({ ok: true, token, expiresAt });
   });
 
   app.post('/api/guard/endpoints/policy', async (req, res) => {

@@ -32,3 +32,13 @@ test('sanitizeCheck: clamps matcher fields and body size', () => {
   assert.ok(c.matcher.contains.length <= 200);
   assert.equal(c.matcher.condition, 'or');
 });
+
+test('a runaway pattern is stopped quickly and counts as no match', async () => {
+  const { patternMatches } = await import('./packages/dashboard/custom-check.mjs');
+  const started = Date.now();
+  assert.equal(patternMatches('(a+)+$', `${'a'.repeat(40)}!`), false);
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+  assert.equal(patternMatches('hel+o', 'say HELLO'), true, 'an ordinary pattern still matches, ignoring case');
+  assert.equal(patternMatches('(', 'anything'), false, 'a pattern that is not valid is no match');
+  assert.equal(evaluateMatcher({ status: 200, body: 'Welcome admin' }, { regex: 'welcome[ ]+admin' }), true);
+});

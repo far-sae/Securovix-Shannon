@@ -547,7 +547,10 @@ test('enrollment: admins create a one-time token; the agent trades it for its ow
     (
       await call('/api/endpoint-agent/v1/enroll', {
         method: 'POST',
-        body: { token: `${made.json.token.slice(0, -1)}0` },
+        // A different character in the middle: the last one can already be the replacement.
+        body: {
+          token: `${made.json.token.slice(0, -8)}${made.json.token.at(-8) === 'a' ? 'b' : 'a'}${made.json.token.slice(-7)}`,
+        },
       })
     ).status,
     401,

@@ -1,14 +1,14 @@
-export {
-  type Team,
-  type PurpleAgentRole,
-  type PurpleChannel,
-  type PurpleMessageType,
-  type PurpleMessage,
-  type PurpleFinding,
-  type MitigationProposal,
-  type DetectionProposal,
-  type FindingConclusion,
-  type PurpleTeamResult,
+export type {
+  Team,
+  PurpleAgentRole,
+  PurpleChannel,
+  PurpleMessageType,
+  PurpleMessage,
+  PurpleFinding,
+  MitigationProposal,
+  DetectionProposal,
+  FindingConclusion,
+  PurpleTeamResult,
 } from './types.js';
 export { PurpleProtocol } from './protocol.js';
 export { RedStrategist } from './red-strategist.js';

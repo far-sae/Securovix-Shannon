@@ -1,9 +1,9 @@
-export {
-  type VulnCategory,
-  type VulnNode,
-  type Edge,
-  type AttackChain,
-  type ChainAnalysisResult,
+export type {
+  VulnCategory,
+  VulnNode,
+  Edge,
+  AttackChain,
+  ChainAnalysisResult,
 } from './types.js';
 export { AttackGraph } from './graph.js';
 export { ChainScorer } from './chain-scorer.js';

@@ -130,15 +130,50 @@ function integrationFromRow(row) {
 }
 
 function orgSecretFromRow(row) {
-  return row && { id: row.id, orgId: row.org_id, kind: row.kind, name: row.name, config: row.config || {}, secretEnc: row.secret_enc, createdBy: row.created_by || null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
+  return (
+    row && {
+      id: row.id,
+      orgId: row.org_id,
+      kind: row.kind,
+      name: row.name,
+      config: row.config || {},
+      secretEnc: row.secret_enc,
+      createdBy: row.created_by || null,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }
+  );
 }
 
 function scanAuthGrantFromRow(row) {
-  return row && { id: row.id, userId: row.user_id, orgId: row.org_id, targetOrigin: row.target_origin, secretEnc: row.secret_enc, expiresAt: Number(row.expires_at), consumedAt: row.consumed_at ? Number(row.consumed_at) : null, createdAt: Number(row.created_at) };
+  return (
+    row && {
+      id: row.id,
+      userId: row.user_id,
+      orgId: row.org_id,
+      targetOrigin: row.target_origin,
+      secretEnc: row.secret_enc,
+      expiresAt: Number(row.expires_at),
+      consumedAt: row.consumed_at ? Number(row.consumed_at) : null,
+      createdAt: Number(row.created_at),
+    }
+  );
 }
 
 function entitlementFromRow(row) {
-  return row && { orgId: row.org_id, plan: row.plan, status: row.status, provider: row.provider || null, providerCustomerId: row.provider_customer_id || null, providerSubscriptionId: row.provider_subscription_id || null, currentPeriodEnd: row.current_period_end ? Number(row.current_period_end) : null, limits: row.limits || {}, updatedAt: Number(row.updated_at) };
+  return (
+    row && {
+      orgId: row.org_id,
+      plan: row.plan,
+      status: row.status,
+      provider: row.provider || null,
+      providerCustomerId: row.provider_customer_id || null,
+      providerSubscriptionId: row.provider_subscription_id || null,
+      currentPeriodEnd: row.current_period_end ? Number(row.current_period_end) : null,
+      limits: row.limits || {},
+      updatedAt: Number(row.updated_at),
+    }
+  );
 }
 
 function jobFromRow(row) {
@@ -167,47 +202,103 @@ function jobFromRow(row) {
 }
 
 function defenseProgramFromRow(row) {
-  return row && {
-    orgId: row.org_id, enabled: row.enabled === true, cadenceHours: Number(row.cadence_hours || 24),
-    responseMode: row.response_mode || 'recommend', nextRunAt: row.next_run_at ? Number(row.next_run_at) : null,
-    lastRunAt: row.last_run_at ? Number(row.last_run_at) : null, lastCycleId: row.last_cycle_id || null,
-    createdBy: row.created_by || null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
-  };
+  return (
+    row && {
+      orgId: row.org_id,
+      enabled: row.enabled === true,
+      cadenceHours: Number(row.cadence_hours || 24),
+      responseMode: row.response_mode || 'recommend',
+      nextRunAt: row.next_run_at ? Number(row.next_run_at) : null,
+      lastRunAt: row.last_run_at ? Number(row.last_run_at) : null,
+      lastCycleId: row.last_cycle_id || null,
+      createdBy: row.created_by || null,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }
+  );
 }
 
 function defenseAssetFromRow(row) {
-  return row && {
-    id: row.id, orgId: row.org_id, projectId: row.project_id || null, type: row.type, name: row.name,
-    locator: row.locator, criticality: row.criticality, status: row.status, coverage: row.coverage,
-    config: row.config || {}, createdBy: row.created_by || null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
-  };
+  return (
+    row && {
+      id: row.id,
+      orgId: row.org_id,
+      projectId: row.project_id || null,
+      type: row.type,
+      name: row.name,
+      locator: row.locator,
+      criticality: row.criticality,
+      status: row.status,
+      coverage: row.coverage,
+      config: row.config || {},
+      createdBy: row.created_by || null,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }
+  );
 }
 
 function defenseCycleFromRow(row) {
-  return row && {
-    id: row.id, orgId: row.org_id, jobId: row.job_id || null, status: row.status,
-    window: row.window || {}, snapshot: row.snapshot || {}, learning: row.learning || {}, actions: row.actions || {},
-    error: row.error || null, startedAt: Number(row.started_at), completedAt: row.completed_at ? Number(row.completed_at) : null,
-    createdAt: Number(row.created_at),
-  };
+  return (
+    row && {
+      id: row.id,
+      orgId: row.org_id,
+      jobId: row.job_id || null,
+      status: row.status,
+      window: row.window || {},
+      snapshot: row.snapshot || {},
+      learning: row.learning || {},
+      actions: row.actions || {},
+      error: row.error || null,
+      startedAt: Number(row.started_at),
+      completedAt: row.completed_at ? Number(row.completed_at) : null,
+      createdAt: Number(row.created_at),
+    }
+  );
 }
 
 function softwareComponentFromRow(row) {
-  return row && {
-    id: row.id, orgId: row.org_id, assetId: row.asset_id || null, projectId: row.project_id || null,
-    fingerprint: row.fingerprint, source: row.source, sourceRef: row.source_ref, name: row.name,
-    version: row.version || '', ecosystem: row.ecosystem || '', purl: row.purl || '', cpe: row.cpe || '',
-    licenses: row.licenses || [], metadata: row.metadata || {}, firstSeenAt: Number(row.first_seen_at), lastSeenAt: Number(row.last_seen_at),
-  };
+  return (
+    row && {
+      id: row.id,
+      orgId: row.org_id,
+      assetId: row.asset_id || null,
+      projectId: row.project_id || null,
+      fingerprint: row.fingerprint,
+      source: row.source,
+      sourceRef: row.source_ref,
+      name: row.name,
+      version: row.version || '',
+      ecosystem: row.ecosystem || '',
+      purl: row.purl || '',
+      cpe: row.cpe || '',
+      licenses: row.licenses || [],
+      metadata: row.metadata || {},
+      firstSeenAt: Number(row.first_seen_at),
+      lastSeenAt: Number(row.last_seen_at),
+    }
+  );
 }
 
 function vulnerabilityMatchFromRow(row) {
-  return row && {
-    id: row.id, orgId: row.org_id, componentId: row.component_id, vulnerabilityId: row.vulnerability_id,
-    aliases: row.aliases || [], source: row.source, severity: row.severity, summary: row.summary,
-    details: row.details || {}, status: row.status, dueAt: row.due_at ? Number(row.due_at) : null,
-    discoveredAt: Number(row.discovered_at), updatedAt: Number(row.updated_at), resolvedAt: row.resolved_at ? Number(row.resolved_at) : null,
-  };
+  return (
+    row && {
+      id: row.id,
+      orgId: row.org_id,
+      componentId: row.component_id,
+      vulnerabilityId: row.vulnerability_id,
+      aliases: row.aliases || [],
+      source: row.source,
+      severity: row.severity,
+      summary: row.summary,
+      details: row.details || {},
+      status: row.status,
+      dueAt: row.due_at ? Number(row.due_at) : null,
+      discoveredAt: Number(row.discovered_at),
+      updatedAt: Number(row.updated_at),
+      resolvedAt: row.resolved_at ? Number(row.resolved_at) : null,
+    }
+  );
 }
 
 export function enterpriseUsesSupabase() {
@@ -375,10 +466,12 @@ export async function deleteIntegration(orgId, id) {
 
 export async function listOrgSecrets(orgId, kind, { includeSecrets = false } = {}) {
   const source = USE_SUPABASE
-    ? await rest(`/shannon_org_secrets?org_id=eq.${encodeURIComponent(orgId)}${kind ? `&kind=eq.${encodeURIComponent(kind)}` : ''}&order=created_at.asc`)
+    ? await rest(
+        `/shannon_org_secrets?org_id=eq.${encodeURIComponent(orgId)}${kind ? `&kind=eq.${encodeURIComponent(kind)}` : ''}&order=created_at.asc`,
+      )
     : local.orgSecrets.filter((item) => item.orgId === orgId && (!kind || item.kind === kind));
   const rows = USE_SUPABASE ? (source || []).map(orgSecretFromRow) : source;
-  return rows.map((item) => includeSecrets ? item : { ...item, secretEnc: undefined, configured: !!item.secretEnc });
+  return rows.map((item) => (includeSecrets ? item : { ...item, secretEnc: undefined, configured: !!item.secretEnc }));
 }
 
 export async function getOrgSecret(orgId, kind, name) {
@@ -388,18 +481,45 @@ export async function getOrgSecret(orgId, kind, name) {
 
 export async function saveOrgSecret(record) {
   if (!USE_SUPABASE) {
-    local.orgSecrets = local.orgSecrets.filter((item) => !(item.orgId === record.orgId && item.kind === record.kind && item.name === record.name));
-    local.orgSecrets.push(record); persist(); return record;
+    local.orgSecrets = local.orgSecrets.filter(
+      (item) => !(item.orgId === record.orgId && item.kind === record.kind && item.name === record.name),
+    );
+    local.orgSecrets.push(record);
+    persist();
+    return record;
   }
-  const rows = await rest('/shannon_org_secrets', { method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([{ id: record.id, org_id: record.orgId, kind: record.kind, name: record.name, config: record.config || {}, secret_enc: record.secretEnc, created_by: record.createdBy || null, created_at: record.createdAt, updated_at: record.updatedAt }]) });
+  const rows = await rest('/shannon_org_secrets', {
+    method: 'POST',
+    headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([
+      {
+        id: record.id,
+        org_id: record.orgId,
+        kind: record.kind,
+        name: record.name,
+        config: record.config || {},
+        secret_enc: record.secretEnc,
+        created_by: record.createdBy || null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      },
+    ]),
+  });
   return orgSecretFromRow(rows?.[0]);
 }
 
 export async function deleteOrgSecret(orgId, kind, name) {
   if (!USE_SUPABASE) {
-    local.orgSecrets = local.orgSecrets.filter((item) => !(item.orgId === orgId && item.kind === kind && item.name === name)); persist(); return true;
+    local.orgSecrets = local.orgSecrets.filter(
+      (item) => !(item.orgId === orgId && item.kind === kind && item.name === name),
+    );
+    persist();
+    return true;
   }
-  await rest(`/shannon_org_secrets?org_id=eq.${encodeURIComponent(orgId)}&kind=eq.${encodeURIComponent(kind)}&name=eq.${encodeURIComponent(name)}`, { method: 'DELETE', headers: { prefer: 'return=minimal' } });
+  await rest(
+    `/shannon_org_secrets?org_id=eq.${encodeURIComponent(orgId)}&kind=eq.${encodeURIComponent(kind)}&name=eq.${encodeURIComponent(name)}`,
+    { method: 'DELETE', headers: { prefer: 'return=minimal' } },
+  );
   return true;
 }
 
@@ -410,21 +530,48 @@ export async function createScanAuthGrant(record) {
     persist();
     return record;
   }
-  await rest(`/shannon_scan_auth_grants?expires_at=lt.${Date.now()}`, { method: 'DELETE', headers: { prefer: 'return=minimal' } });
-  const rows = await rest('/shannon_scan_auth_grants', { method: 'POST', body: JSON.stringify([{ id: record.id, user_id: record.userId, org_id: record.orgId, target_origin: record.targetOrigin, secret_enc: record.secretEnc, expires_at: record.expiresAt, consumed_at: null, created_at: record.createdAt }]) });
+  await rest(`/shannon_scan_auth_grants?expires_at=lt.${Date.now()}`, {
+    method: 'DELETE',
+    headers: { prefer: 'return=minimal' },
+  });
+  const rows = await rest('/shannon_scan_auth_grants', {
+    method: 'POST',
+    body: JSON.stringify([
+      {
+        id: record.id,
+        user_id: record.userId,
+        org_id: record.orgId,
+        target_origin: record.targetOrigin,
+        secret_enc: record.secretEnc,
+        expires_at: record.expiresAt,
+        consumed_at: null,
+        created_at: record.createdAt,
+      },
+    ]),
+  });
   return scanAuthGrantFromRow(rows?.[0]);
 }
 
 export async function consumeScanAuthGrant(id, userId, orgId, targetOrigin) {
   const now = Date.now();
   if (!USE_SUPABASE) {
-    const index = local.scanAuthGrants.findIndex((item) => item.id === id && item.userId === userId && item.orgId === orgId && item.targetOrigin === targetOrigin && item.expiresAt > now);
+    const index = local.scanAuthGrants.findIndex(
+      (item) =>
+        item.id === id &&
+        item.userId === userId &&
+        item.orgId === orgId &&
+        item.targetOrigin === targetOrigin &&
+        item.expiresAt > now,
+    );
     if (index < 0) return null;
     const [grant] = local.scanAuthGrants.splice(index, 1);
     persist();
     return grant;
   }
-  const rows = await rest('/rpc/shannon_consume_scan_auth_grant', { method: 'POST', body: JSON.stringify({ p_id: id, p_user_id: userId, p_org_id: orgId, p_target_origin: targetOrigin, p_now: now }) });
+  const rows = await rest('/rpc/shannon_consume_scan_auth_grant', {
+    method: 'POST',
+    body: JSON.stringify({ p_id: id, p_user_id: userId, p_org_id: orgId, p_target_origin: targetOrigin, p_now: now }),
+  });
   return scanAuthGrantFromRow(rows?.[0]);
 }
 
@@ -435,8 +582,28 @@ export async function getEntitlement(orgId) {
 }
 
 export async function saveEntitlement(record) {
-  if (!USE_SUPABASE) { local.entitlements[record.orgId] = record; persist(); return record; }
-  const rows = await rest('/shannon_org_entitlements', { method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([{ org_id: record.orgId, plan: record.plan, status: record.status, provider: record.provider || null, provider_customer_id: record.providerCustomerId || null, provider_subscription_id: record.providerSubscriptionId || null, current_period_end: record.currentPeriodEnd || null, limits: record.limits || {}, updated_at: record.updatedAt || Date.now() }]) });
+  if (!USE_SUPABASE) {
+    local.entitlements[record.orgId] = record;
+    persist();
+    return record;
+  }
+  const rows = await rest('/shannon_org_entitlements', {
+    method: 'POST',
+    headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([
+      {
+        org_id: record.orgId,
+        plan: record.plan,
+        status: record.status,
+        provider: record.provider || null,
+        provider_customer_id: record.providerCustomerId || null,
+        provider_subscription_id: record.providerSubscriptionId || null,
+        current_period_end: record.currentPeriodEnd || null,
+        limits: record.limits || {},
+        updated_at: record.updatedAt || Date.now(),
+      },
+    ]),
+  });
   return entitlementFromRow(rows?.[0]);
 }
 
@@ -447,47 +614,116 @@ export async function consumeUsage(orgId, metric, amount, limit, day = new Date(
     const row = local.usageDaily.find((item) => item.orgId === orgId && item.day === day && item.metric === metric);
     const used = Number(row?.quantity || 0);
     if (used + requested > cap) return { allowed: false, used, limit: cap, day };
-    if (row) { row.quantity = used + requested; row.updatedAt = Date.now(); }
-    else local.usageDaily.push({ orgId, day, metric, quantity: requested, updatedAt: Date.now() });
+    if (row) {
+      row.quantity = used + requested;
+      row.updatedAt = Date.now();
+    } else local.usageDaily.push({ orgId, day, metric, quantity: requested, updatedAt: Date.now() });
     persist();
     return { allowed: true, used: used + requested, limit: cap, day };
   }
-  const quantity = await rest('/rpc/shannon_consume_usage', { method: 'POST', body: JSON.stringify({ p_org_id: orgId, p_day: day, p_metric: metric, p_amount: requested, p_limit: cap, p_now: Date.now() }) });
+  const quantity = await rest('/rpc/shannon_consume_usage', {
+    method: 'POST',
+    body: JSON.stringify({
+      p_org_id: orgId,
+      p_day: day,
+      p_metric: metric,
+      p_amount: requested,
+      p_limit: cap,
+      p_now: Date.now(),
+    }),
+  });
   const used = Number(quantity || 0);
   return { allowed: used > 0, used, limit: cap, day };
 }
 
 export async function listUsage(orgId, day = new Date().toISOString().slice(0, 10)) {
   if (!USE_SUPABASE) return local.usageDaily.filter((item) => item.orgId === orgId && item.day === day);
-  const rows = await rest(`/shannon_usage_daily?org_id=eq.${encodeURIComponent(orgId)}&day=eq.${encodeURIComponent(day)}&order=metric.asc`);
-  return (rows || []).map((row) => ({ orgId: row.org_id, day: row.day, metric: row.metric, quantity: Number(row.quantity), updatedAt: Number(row.updated_at) }));
+  const rows = await rest(
+    `/shannon_usage_daily?org_id=eq.${encodeURIComponent(orgId)}&day=eq.${encodeURIComponent(day)}&order=metric.asc`,
+  );
+  return (rows || []).map((row) => ({
+    orgId: row.org_id,
+    day: row.day,
+    metric: row.metric,
+    quantity: Number(row.quantity),
+    updatedAt: Number(row.updated_at),
+  }));
 }
 
 // ----- Commerce: orders and prepaid credit grants -----
 
 function orderFromRow(row) {
-  return row && {
-    id: row.id, orgId: row.org_id, userId: row.user_id, itemId: row.item_id, itemName: row.item_name, kind: row.kind,
-    method: row.method, amount: Number(row.amount), currency: row.currency, grants: row.grants || {}, reference: row.reference,
-    status: row.status, evidence: row.evidence || null, review: row.review || null, providerRef: row.provider_ref || null,
-    createdAt: Number(row.created_at), updatedAt: Number(row.updated_at), history: row.history || [],
-  };
+  return (
+    row && {
+      id: row.id,
+      orgId: row.org_id,
+      userId: row.user_id,
+      itemId: row.item_id,
+      itemName: row.item_name,
+      kind: row.kind,
+      method: row.method,
+      amount: Number(row.amount),
+      currency: row.currency,
+      grants: row.grants || {},
+      reference: row.reference,
+      status: row.status,
+      evidence: row.evidence || null,
+      review: row.review || null,
+      providerRef: row.provider_ref || null,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      history: row.history || [],
+    }
+  );
 }
 
 function grantFromRow(row) {
-  return row && { id: row.id, orgId: row.org_id, orderId: row.order_id, grants: row.grants || {}, remaining: row.remaining || {}, expiresAt: Number(row.expires_at), createdAt: Number(row.created_at) };
+  return (
+    row && {
+      id: row.id,
+      orgId: row.org_id,
+      orderId: row.order_id,
+      grants: row.grants || {},
+      remaining: row.remaining || {},
+      expiresAt: Number(row.expires_at),
+      createdAt: Number(row.created_at),
+    }
+  );
 }
 
 export async function saveCommerceOrder(order) {
   if (!USE_SUPABASE) {
     const index = local.commerceOrders.findIndex((item) => item.id === order.id);
-    if (index >= 0) local.commerceOrders[index] = order; else local.commerceOrders.push(order);
+    if (index >= 0) local.commerceOrders[index] = order;
+    else local.commerceOrders.push(order);
     persist();
     return order;
   }
   const rows = await rest('/shannon_commerce_orders', {
-    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' },
-    body: JSON.stringify([{ id: order.id, org_id: order.orgId, user_id: order.userId, item_id: order.itemId, item_name: order.itemName, kind: order.kind, method: order.method, amount: order.amount, currency: order.currency, grants: order.grants, reference: order.reference, status: order.status, evidence: order.evidence, review: order.review, provider_ref: order.providerRef, created_at: order.createdAt, updated_at: order.updatedAt, history: order.history }]),
+    method: 'POST',
+    headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([
+      {
+        id: order.id,
+        org_id: order.orgId,
+        user_id: order.userId,
+        item_id: order.itemId,
+        item_name: order.itemName,
+        kind: order.kind,
+        method: order.method,
+        amount: order.amount,
+        currency: order.currency,
+        grants: order.grants,
+        reference: order.reference,
+        status: order.status,
+        evidence: order.evidence,
+        review: order.review,
+        provider_ref: order.providerRef,
+        created_at: order.createdAt,
+        updated_at: order.updatedAt,
+        history: order.history,
+      },
+    ]),
   });
   return orderFromRow(rows?.[0]);
 }
@@ -506,7 +742,12 @@ export async function listCommerceOrders({ orgId, status, limit = 100 } = {}) {
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, cap);
   }
-  const filters = [orgId ? `org_id=eq.${encodeURIComponent(orgId)}` : '', status ? `status=eq.${encodeURIComponent(status)}` : ''].filter(Boolean).join('&');
+  const filters = [
+    orgId ? `org_id=eq.${encodeURIComponent(orgId)}` : '',
+    status ? `status=eq.${encodeURIComponent(status)}` : '',
+  ]
+    .filter(Boolean)
+    .join('&');
   const rows = await rest(`/shannon_commerce_orders?${filters ? `${filters}&` : ''}order=created_at.desc&limit=${cap}`);
   return (rows || []).map(orderFromRow);
 }
@@ -521,8 +762,19 @@ export async function addCreditGrant(grant) {
     return { grant, created: true };
   }
   const rows = await rest('/shannon_credit_grants?on_conflict=id', {
-    method: 'POST', headers: { prefer: 'resolution=ignore-duplicates,return=representation' },
-    body: JSON.stringify([{ id: grant.id, org_id: grant.orgId, order_id: grant.orderId, grants: grant.grants, remaining: grant.remaining, expires_at: grant.expiresAt, created_at: grant.createdAt }]),
+    method: 'POST',
+    headers: { prefer: 'resolution=ignore-duplicates,return=representation' },
+    body: JSON.stringify([
+      {
+        id: grant.id,
+        org_id: grant.orgId,
+        order_id: grant.orderId,
+        grants: grant.grants,
+        remaining: grant.remaining,
+        expires_at: grant.expiresAt,
+        created_at: grant.createdAt,
+      },
+    ]),
   });
   return rows?.length ? { grant: grantFromRow(rows[0]), created: true } : { grant, created: false };
 }
@@ -543,7 +795,10 @@ export async function consumeCredits(orgId, metric, amount = 1, now = Date.now()
     persist();
     return { allowed: true, remaining: result.remaining };
   }
-  const remaining = await rest('/rpc/shannon_consume_credit', { method: 'POST', body: JSON.stringify({ p_org_id: orgId, p_metric: metric, p_amount: Math.max(1, Number(amount) || 1), p_now: now }) });
+  const remaining = await rest('/rpc/shannon_consume_credit', {
+    method: 'POST',
+    body: JSON.stringify({ p_org_id: orgId, p_metric: metric, p_amount: Math.max(1, Number(amount) || 1), p_now: now }),
+  });
   const value = Number(remaining);
   return value >= 0 ? { allowed: true, remaining: value } : { allowed: false, remaining: 0 };
 }
@@ -555,16 +810,19 @@ function makeCollection(localKey, table, fields) {
   const entries = Object.entries(fields);
   const toRow = (record) => Object.fromEntries(entries.map(([camel, snake]) => [snake, record[camel] ?? null]));
   const fromRow = (row) => row && Object.fromEntries(entries.map(([camel, snake]) => [camel, row[snake] ?? null]));
-  const matches = (record, filter) => Object.entries(filter).every(([field, value]) => value === undefined || record[field] === value);
+  const matches = (record, filter) =>
+    Object.entries(filter).every(([field, value]) => value === undefined || record[field] === value);
   // Both backends refuse a field the record type does not have. The local store used to accept
   // anything, so a sort or filter on a missing column passed every test and then failed on
   // Supabase ("column ... undefined does not exist").
   const column = (field, what) => {
-    if (!Object.hasOwn(fields, field)) throw new Error(`${table}: "${field}" is not a field of this record type (${what})`);
+    if (!Object.hasOwn(fields, field))
+      throw new Error(`${table}: "${field}" is not a field of this record type (${what})`);
     return fields[field];
   };
   // Newest first by the first timestamp the record type has; not every type has createdAt.
-  const defaultOrder = ['createdAt', 'enrolledAt', 'addedAt', 'updatedAt'].find((field) => Object.hasOwn(fields, field)) || 'id';
+  const defaultOrder =
+    ['createdAt', 'enrolledAt', 'addedAt', 'updatedAt'].find((field) => Object.hasOwn(fields, field)) || 'id';
   return {
     async save(record) {
       // A field with no column would be dropped without a word on Supabase. Under test, say so.
@@ -576,11 +834,16 @@ function makeCollection(localKey, table, fields) {
         // Keep exactly what Supabase would keep: mapped fields only, missing ones as null.
         const stored = fromRow(toRow(record));
         const index = local[localKey].findIndex((item) => item.id === record.id);
-        if (index >= 0) local[localKey][index] = stored; else local[localKey].push(stored);
+        if (index >= 0) local[localKey][index] = stored;
+        else local[localKey].push(stored);
         persist();
         return stored;
       }
-      const rows = await rest(`/${table}`, { method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([toRow(record)]) });
+      const rows = await rest(`/${table}`, {
+        method: 'POST',
+        headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify([toRow(record)]),
+      });
       return fromRow(rows?.[0]);
     },
     async get(id) {
@@ -594,7 +857,10 @@ function makeCollection(localKey, table, fields) {
       const conditions = Object.entries(filter).filter(([, value]) => value !== undefined);
       const where = conditions.map(([field, value]) => `${column(field, 'filter')}=eq.${encodeURIComponent(value)}`);
       if (!USE_SUPABASE) {
-        return local[localKey].filter((item) => matches(item, filter)).sort((a, b) => (b[orderBy] || 0) - (a[orderBy] || 0)).slice(0, cap);
+        return local[localKey]
+          .filter((item) => matches(item, filter))
+          .sort((a, b) => (b[orderBy] || 0) - (a[orderBy] || 0))
+          .slice(0, cap);
       }
       const rows = await rest(`/${table}?${[...where, `order=${order}.desc`, `limit=${cap}`].join('&')}`);
       return (rows || []).map(fromRow);
@@ -613,60 +879,228 @@ function makeCollection(localKey, table, fields) {
 }
 
 export const assistantConversations = makeCollection('assistantConversations', 'shannon_assistant_conversations', {
-  id: 'id', orgId: 'org_id', userId: 'user_id', title: 'title', messages: 'messages', createdAt: 'created_at', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  userId: 'user_id',
+  title: 'title',
+  messages: 'messages',
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
 });
 export const assistantMemory = makeCollection('assistantMemory', 'shannon_assistant_memory', {
-  id: 'id', orgId: 'org_id', text: 'text', createdBy: 'created_by', createdAt: 'created_at',
+  id: 'id',
+  orgId: 'org_id',
+  text: 'text',
+  createdBy: 'created_by',
+  createdAt: 'created_at',
 });
 export const researchReports = makeCollection('researchReports', 'shannon_research_reports', {
-  id: 'id', orgId: 'org_id', userId: 'user_id', domain: 'domain', status: 'status', markdown: 'markdown', model: 'model', error: 'error', sources: 'sources', createdAt: 'created_at', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  userId: 'user_id',
+  domain: 'domain',
+  status: 'status',
+  markdown: 'markdown',
+  model: 'model',
+  error: 'error',
+  sources: 'sources',
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
 });
 export const apiKeys = makeCollection('apiKeys', 'shannon_api_keys', {
-  id: 'id', orgId: 'org_id', name: 'name', hint: 'hint', secretHash: 'secret_hash', scopes: 'scopes', createdBy: 'created_by', createdAt: 'created_at', lastUsedAt: 'last_used_at', revokedAt: 'revoked_at',
+  id: 'id',
+  orgId: 'org_id',
+  name: 'name',
+  hint: 'hint',
+  secretHash: 'secret_hash',
+  scopes: 'scopes',
+  createdBy: 'created_by',
+  createdAt: 'created_at',
+  lastUsedAt: 'last_used_at',
+  revokedAt: 'revoked_at',
 });
 export const shareLinks = makeCollection('shareLinks', 'shannon_share_links', {
-  id: 'id', orgId: 'org_id', resourceType: 'resource_type', resourceId: 'resource_id', title: 'title', secretHash: 'secret_hash', createdBy: 'created_by', createdAt: 'created_at', expiresAt: 'expires_at', revokedAt: 'revoked_at', views: 'views',
+  id: 'id',
+  orgId: 'org_id',
+  resourceType: 'resource_type',
+  resourceId: 'resource_id',
+  title: 'title',
+  secretHash: 'secret_hash',
+  createdBy: 'created_by',
+  createdAt: 'created_at',
+  expiresAt: 'expires_at',
+  revokedAt: 'revoked_at',
+  views: 'views',
 });
 
 // Platform self-defense bans (keyed by IP) so a redeploy or a second instance keeps them.
 export const defenderBans = makeCollection('defenderBans', 'shannon_defender_bans', {
-  id: 'id', ip: 'ip', until: 'until_at', reason: 'reason', createdAt: 'created_at',
+  id: 'id',
+  ip: 'ip',
+  until: 'until_at',
+  reason: 'reason',
+  createdAt: 'created_at',
 });
 
 // Guard (identity and cloud defence). Raw provider events are not stored: only alerts (with a
 // trimmed evidence snapshot), incidents, actions, and per-person baselines.
 export const guardConnections = makeCollection('guardConnections', 'shannon_guard_connections', {
-  id: 'id', orgId: 'org_id', provider: 'provider', name: 'name', config: 'config', secretEnc: 'secret_enc', state: 'state', enabled: 'enabled', status: 'status', lastSyncAt: 'last_sync_at', lastError: 'last_error', lastEventCount: 'last_event_count', totalEvents: 'total_events', createdBy: 'created_by', createdAt: 'created_at', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  provider: 'provider',
+  name: 'name',
+  config: 'config',
+  secretEnc: 'secret_enc',
+  state: 'state',
+  enabled: 'enabled',
+  status: 'status',
+  lastSyncAt: 'last_sync_at',
+  lastError: 'last_error',
+  lastEventCount: 'last_event_count',
+  totalEvents: 'total_events',
+  createdBy: 'created_by',
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
 });
 export const guardIncidents = makeCollection('guardIncidents', 'shannon_guard_incidents', {
-  id: 'id', orgId: 'org_id', key: 'key', status: 'status', severity: 'severity', title: 'title', summary: 'summary', aiSummary: 'ai_summary', mitre: 'mitre', kinds: 'kinds', alerts: 'alerts', alertCount: 'alert_count', actions: 'actions', actionsTaken: 'actions_taken', reopened: 'reopened', firstSeenAt: 'first_seen_at', lastSeenAt: 'last_seen_at', detectedAt: 'detected_at', containedAt: 'contained_at', closedAt: 'closed_at', closedBy: 'closed_by', closeNote: 'close_note', forcedClose: 'forced_close', createdAt: 'created_at', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  key: 'key',
+  status: 'status',
+  severity: 'severity',
+  title: 'title',
+  summary: 'summary',
+  aiSummary: 'ai_summary',
+  mitre: 'mitre',
+  kinds: 'kinds',
+  alerts: 'alerts',
+  alertCount: 'alert_count',
+  actions: 'actions',
+  actionsTaken: 'actions_taken',
+  reopened: 'reopened',
+  firstSeenAt: 'first_seen_at',
+  lastSeenAt: 'last_seen_at',
+  detectedAt: 'detected_at',
+  containedAt: 'contained_at',
+  closedAt: 'closed_at',
+  closedBy: 'closed_by',
+  closeNote: 'close_note',
+  forcedClose: 'forced_close',
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
 });
 export const guardActions = makeCollection('guardActions', 'shannon_guard_actions', {
-  id: 'id', orgId: 'org_id', incidentId: 'incident_id', connectionId: 'connection_id', type: 'type', params: 'params', status: 'status', error: 'error', detail: 'detail', undo: 'undo', actor: 'actor', mode: 'mode', createdAt: 'created_at', undoneAt: 'undone_at', undoneBy: 'undone_by', undoDetail: 'undo_detail',
+  id: 'id',
+  orgId: 'org_id',
+  incidentId: 'incident_id',
+  connectionId: 'connection_id',
+  type: 'type',
+  params: 'params',
+  status: 'status',
+  error: 'error',
+  detail: 'detail',
+  undo: 'undo',
+  actor: 'actor',
+  mode: 'mode',
+  createdAt: 'created_at',
+  undoneAt: 'undone_at',
+  undoneBy: 'undone_by',
+  undoDetail: 'undo_detail',
 });
 export const guardState = makeCollection('guardState', 'shannon_guard_state', {
-  id: 'id', orgId: 'org_id', baselines: 'baselines', orgState: 'org_state', exploitSince: 'exploit_since', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  baselines: 'baselines',
+  orgState: 'org_state',
+  exploitSince: 'exploit_since',
+  updatedAt: 'updated_at',
 });
 export const guardSettings = makeCollection('guardSettings', 'shannon_guard_settings', {
-  id: 'id', orgId: 'org_id', domains: 'domains', trustedApps: 'trusted_apps', blocklist: 'blocklist', autopilot: 'autopilot', createdAt: 'created_at', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  domains: 'domains',
+  trustedApps: 'trusted_apps',
+  blocklist: 'blocklist',
+  autopilot: 'autopilot',
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
 });
 
 // Guard Phase 2: endpoint agents, their commands, sandbox samples, the cross-customer malicious
 // hash list (hash, verdict and family only), and per-organization endpoint policy/state.
 export const guardAgents = makeCollection('guardAgents', 'shannon_guard_agents', {
-  id: 'id', orgId: 'org_id', hostname: 'hostname', os: 'os', osVersion: 'os_version', arch: 'arch', version: 'version', machineId: 'machine_id', secretHash: 'secret_hash', status: 'status', isolated: 'isolated', lastSeenAt: 'last_seen_at', lastIp: 'last_ip', enrolledAt: 'enrolled_at', stats: 'stats', tamperAlertedAt: 'tamper_alerted_at', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  hostname: 'hostname',
+  os: 'os',
+  osVersion: 'os_version',
+  arch: 'arch',
+  version: 'version',
+  machineId: 'machine_id',
+  secretHash: 'secret_hash',
+  status: 'status',
+  isolated: 'isolated',
+  lastSeenAt: 'last_seen_at',
+  lastIp: 'last_ip',
+  enrolledAt: 'enrolled_at',
+  stats: 'stats',
+  tamperAlertedAt: 'tamper_alerted_at',
+  updatedAt: 'updated_at',
 });
 export const guardCommands = makeCollection('guardCommands', 'shannon_guard_commands', {
-  id: 'id', orgId: 'org_id', agentId: 'agent_id', type: 'type', params: 'params', undoData: 'undo_data', actionId: 'action_id', status: 'status', detail: 'detail', result: 'result', actor: 'actor', createdAt: 'created_at', sentAt: 'sent_at', completedAt: 'completed_at',
+  id: 'id',
+  orgId: 'org_id',
+  agentId: 'agent_id',
+  type: 'type',
+  params: 'params',
+  undoData: 'undo_data',
+  actionId: 'action_id',
+  status: 'status',
+  detail: 'detail',
+  result: 'result',
+  actor: 'actor',
+  createdAt: 'created_at',
+  sentAt: 'sent_at',
+  completedAt: 'completed_at',
 });
 export const guardSamples = makeCollection('guardSamples', 'shannon_guard_samples', {
-  id: 'id', orgId: 'org_id', agentId: 'agent_id', hostname: 'hostname', sha256: 'sha256', filename: 'filename', size: 'size', commandId: 'command_id', taskId: 'task_id', status: 'status', verdict: 'verdict', score: 'score', family: 'family', reasons: 'reasons', signatures: 'signatures', error: 'error', createdAt: 'created_at', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  agentId: 'agent_id',
+  hostname: 'hostname',
+  sha256: 'sha256',
+  filename: 'filename',
+  size: 'size',
+  commandId: 'command_id',
+  taskId: 'task_id',
+  status: 'status',
+  verdict: 'verdict',
+  score: 'score',
+  family: 'family',
+  reasons: 'reasons',
+  signatures: 'signatures',
+  error: 'error',
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
 });
 export const guardHashes = makeCollection('guardHashes', 'shannon_guard_hashes', {
-  id: 'id', verdict: 'verdict', score: 'score', family: 'family', source: 'source', addedAt: 'added_at',
+  id: 'id',
+  verdict: 'verdict',
+  score: 'score',
+  family: 'family',
+  source: 'source',
+  addedAt: 'added_at',
 });
 export const guardEndpoint = makeCollection('guardEndpoint', 'shannon_guard_endpoint', {
-  id: 'id', orgId: 'org_id', enrollHash: 'enroll_hash', enrollHint: 'enroll_hint', enrollCreatedAt: 'enroll_created_at', policy: 'policy', hosts: 'hosts', org: 'org_state', updatedAt: 'updated_at',
+  id: 'id',
+  orgId: 'org_id',
+  enrollHash: 'enroll_hash',
+  enrollHint: 'enroll_hint',
+  enrollCreatedAt: 'enroll_created_at',
+  policy: 'policy',
+  hosts: 'hosts',
+  org: 'org_state',
+  updatedAt: 'updated_at',
 });
 
 export async function enqueueJob(job) {
@@ -1090,10 +1524,18 @@ export async function upsertSoftwareComponents({ orgId, assetId = null, projectI
   if (!USE_SUPABASE) {
     const output = [];
     for (const component of input) {
-      const existing = local.softwareComponents.find((item) => item.orgId === orgId && item.fingerprint === component.fingerprint);
+      const existing = local.softwareComponents.find(
+        (item) => item.orgId === orgId && item.fingerprint === component.fingerprint,
+      );
       const normalized = {
-        ...(existing || {}), ...component, id: existing?.id || `cmp_${component.fingerprint.slice(0, 20)}`,
-        orgId, assetId, projectId, firstSeenAt: existing?.firstSeenAt || now, lastSeenAt: now,
+        ...(existing || {}),
+        ...component,
+        id: existing?.id || `cmp_${component.fingerprint.slice(0, 20)}`,
+        orgId,
+        assetId,
+        projectId,
+        firstSeenAt: existing?.firstSeenAt || now,
+        lastSeenAt: now,
       };
       if (existing) Object.assign(existing, normalized);
       else local.softwareComponents.push(normalized);
@@ -1104,21 +1546,37 @@ export async function upsertSoftwareComponents({ orgId, assetId = null, projectI
   }
   const prior = new Map((await listSoftwareComponents(orgId)).map((item) => [item.fingerprint, item]));
   const rows = input.map((component) => ({
-    id: `cmp_${component.fingerprint.slice(0, 20)}`, org_id: orgId, asset_id: assetId, project_id: projectId,
-    fingerprint: component.fingerprint, source: component.source, source_ref: component.sourceRef,
-    name: component.name, version: component.version || '', ecosystem: component.ecosystem || '',
-    purl: component.purl || '', cpe: component.cpe || '', licenses: component.licenses || [], metadata: component.metadata || {},
-    first_seen_at: prior.get(component.fingerprint)?.firstSeenAt || now, last_seen_at: now,
+    id: `cmp_${component.fingerprint.slice(0, 20)}`,
+    org_id: orgId,
+    asset_id: assetId,
+    project_id: projectId,
+    fingerprint: component.fingerprint,
+    source: component.source,
+    source_ref: component.sourceRef,
+    name: component.name,
+    version: component.version || '',
+    ecosystem: component.ecosystem || '',
+    purl: component.purl || '',
+    cpe: component.cpe || '',
+    licenses: component.licenses || [],
+    metadata: component.metadata || {},
+    first_seen_at: prior.get(component.fingerprint)?.firstSeenAt || now,
+    last_seen_at: now,
   }));
   const saved = await rest('/shannon_software_components?on_conflict=org_id,fingerprint', {
-    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify(rows),
+    method: 'POST',
+    headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify(rows),
   });
   return (saved || []).map(softwareComponentFromRow);
 }
 
 export async function listSoftwareComponents(orgId) {
-  if (!USE_SUPABASE) return local.softwareComponents.filter((item) => item.orgId === orgId).sort((a, b) => b.lastSeenAt - a.lastSeenAt);
-  const rows = await rest(`/shannon_software_components?org_id=eq.${encodeURIComponent(orgId)}&order=last_seen_at.desc&limit=5000`);
+  if (!USE_SUPABASE)
+    return local.softwareComponents.filter((item) => item.orgId === orgId).sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  const rows = await rest(
+    `/shannon_software_components?org_id=eq.${encodeURIComponent(orgId)}&order=last_seen_at.desc&limit=5000`,
+  );
   return (rows || []).map(softwareComponentFromRow);
 }
 
@@ -1138,9 +1596,15 @@ export async function upsertVulnerabilityMatches(orgId, matches) {
   const normalized = input.map((match) => {
     const current = byKey.get(`${match.componentId}|${match.vulnerabilityId}`);
     const item = {
-      ...match, id: current?.id || `vul_${createHash('sha256').update(`${orgId}|${match.componentId}|${match.vulnerabilityId}`).digest('hex').slice(0, 20)}`,
-      orgId, status: current?.status || 'new', dueAt: current?.dueAt || match.dueAt,
-      discoveredAt: current?.discoveredAt || match.discoveredAt || Date.now(), resolvedAt: current?.resolvedAt || null,
+      ...match,
+      id:
+        current?.id ||
+        `vul_${createHash('sha256').update(`${orgId}|${match.componentId}|${match.vulnerabilityId}`).digest('hex').slice(0, 20)}`,
+      orgId,
+      status: current?.status || 'new',
+      dueAt: current?.dueAt || match.dueAt,
+      discoveredAt: current?.discoveredAt || match.discoveredAt || Date.now(),
+      resolvedAt: current?.resolvedAt || null,
     };
     if (!current) created.push(item);
     else if (!current.details?.kev && item.details?.kev) newKev.push(item);
@@ -1156,20 +1620,35 @@ export async function upsertVulnerabilityMatches(orgId, matches) {
     return { matches: normalized, created, newKev };
   }
   const rows = normalized.map((item) => ({
-    id: item.id, org_id: orgId, component_id: item.componentId, vulnerability_id: item.vulnerabilityId,
-    aliases: item.aliases || [], source: item.source, severity: item.severity, summary: item.summary,
-    details: item.details || {}, status: item.status, due_at: item.dueAt, discovered_at: item.discoveredAt,
-    updated_at: item.updatedAt || Date.now(), resolved_at: item.resolvedAt,
+    id: item.id,
+    org_id: orgId,
+    component_id: item.componentId,
+    vulnerability_id: item.vulnerabilityId,
+    aliases: item.aliases || [],
+    source: item.source,
+    severity: item.severity,
+    summary: item.summary,
+    details: item.details || {},
+    status: item.status,
+    due_at: item.dueAt,
+    discovered_at: item.discoveredAt,
+    updated_at: item.updatedAt || Date.now(),
+    resolved_at: item.resolvedAt,
   }));
   const saved = await rest('/shannon_vulnerability_matches?on_conflict=org_id,component_id,vulnerability_id', {
-    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify(rows),
+    method: 'POST',
+    headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify(rows),
   });
   return { matches: (saved || []).map(vulnerabilityMatchFromRow), created, newKev };
 }
 
 export async function listVulnerabilityMatches(orgId) {
-  if (!USE_SUPABASE) return local.vulnerabilityMatches.filter((item) => item.orgId === orgId).sort((a, b) => b.updatedAt - a.updatedAt);
-  const rows = await rest(`/shannon_vulnerability_matches?org_id=eq.${encodeURIComponent(orgId)}&order=updated_at.desc&limit=10000`);
+  if (!USE_SUPABASE)
+    return local.vulnerabilityMatches.filter((item) => item.orgId === orgId).sort((a, b) => b.updatedAt - a.updatedAt);
+  const rows = await rest(
+    `/shannon_vulnerability_matches?org_id=eq.${encodeURIComponent(orgId)}&order=updated_at.desc&limit=10000`,
+  );
   return (rows || []).map(vulnerabilityMatchFromRow);
 }
 
@@ -1182,17 +1661,24 @@ export async function updateVulnerabilityMatch(orgId, id, patch) {
     if (!item) return null;
     if (patch.status !== undefined) item.status = patch.status;
     if (patch.dueAt !== undefined) item.dueAt = patch.dueAt;
-    item.resolvedAt = item.status === 'resolved' ? (item.resolvedAt || now) : null;
+    item.resolvedAt = item.status === 'resolved' ? item.resolvedAt || now : null;
     item.updatedAt = now;
     persist();
     return item;
   }
   const body = { updated_at: now };
-  if (patch.status !== undefined) { body.status = patch.status; body.resolved_at = patch.status === 'resolved' ? now : null; }
+  if (patch.status !== undefined) {
+    body.status = patch.status;
+    body.resolved_at = patch.status === 'resolved' ? now : null;
+  }
   if (patch.dueAt !== undefined) body.due_at = patch.dueAt;
-  const rows = await rest(`/shannon_vulnerability_matches?org_id=eq.${encodeURIComponent(orgId)}&id=eq.${encodeURIComponent(id)}`, {
-    method: 'PATCH', body: JSON.stringify(body),
-  });
+  const rows = await rest(
+    `/shannon_vulnerability_matches?org_id=eq.${encodeURIComponent(orgId)}&id=eq.${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    },
+  );
   return vulnerabilityMatchFromRow(rows?.[0]);
 }
 
@@ -1226,12 +1712,20 @@ export async function saveDefenseProgram(record) {
   const rows = await rest('/shannon_defense_programs', {
     method: 'POST',
     headers: { prefer: 'resolution=merge-duplicates,return=representation' },
-    body: JSON.stringify([{
-      org_id: normalized.orgId, enabled: normalized.enabled, cadence_hours: normalized.cadenceHours,
-      response_mode: normalized.responseMode, next_run_at: normalized.nextRunAt, last_run_at: normalized.lastRunAt,
-      last_cycle_id: normalized.lastCycleId, created_by: normalized.createdBy, created_at: normalized.createdAt,
-      updated_at: normalized.updatedAt,
-    }]),
+    body: JSON.stringify([
+      {
+        org_id: normalized.orgId,
+        enabled: normalized.enabled,
+        cadence_hours: normalized.cadenceHours,
+        response_mode: normalized.responseMode,
+        next_run_at: normalized.nextRunAt,
+        last_run_at: normalized.lastRunAt,
+        last_cycle_id: normalized.lastCycleId,
+        created_by: normalized.createdBy,
+        created_at: normalized.createdAt,
+        updated_at: normalized.updatedAt,
+      },
+    ]),
   });
   return defenseProgramFromRow(rows?.[0]);
 }
@@ -1251,41 +1745,68 @@ export async function claimDueDefensePrograms(limit = 20, now = Date.now()) {
     return due;
   }
   const rows = await rest('/rpc/shannon_claim_due_defense_programs', {
-    method: 'POST', body: JSON.stringify({ p_limit: limit, p_now: now }),
+    method: 'POST',
+    body: JSON.stringify({ p_limit: limit, p_now: now }),
   });
   return (rows || []).map(defenseProgramFromRow);
 }
 
 export async function listDefenseAssets(orgId) {
-  if (!USE_SUPABASE) return local.defenseAssets.filter((item) => item.orgId === orgId).sort((a, b) => b.createdAt - a.createdAt);
+  if (!USE_SUPABASE)
+    return local.defenseAssets.filter((item) => item.orgId === orgId).sort((a, b) => b.createdAt - a.createdAt);
   const rows = await rest(`/shannon_defense_assets?org_id=eq.${encodeURIComponent(orgId)}&order=created_at.desc`);
   return (rows || []).map(defenseAssetFromRow);
 }
 
 export async function saveDefenseAsset(record) {
   const now = Date.now();
-  const existing = (await listDefenseAssets(record.orgId)).find((item) => item.type === record.type && item.locator === record.locator);
+  const existing = (await listDefenseAssets(record.orgId)).find(
+    (item) => item.type === record.type && item.locator === record.locator,
+  );
   const normalized = {
-    id: existing?.id || record.id || randomUUID(), orgId: record.orgId, projectId: record.projectId || null,
-    type: record.type, name: record.name, locator: record.locator, criticality: record.criticality || 'medium',
-    status: record.status === 'paused' ? 'paused' : 'active', coverage: record.coverage === 'online' ? 'online' : 'inventory',
-    config: record.config || {}, createdBy: record.createdBy || existing?.createdBy || null, createdAt: existing?.createdAt || record.createdAt || now, updatedAt: now,
+    id: existing?.id || record.id || randomUUID(),
+    orgId: record.orgId,
+    projectId: record.projectId || null,
+    type: record.type,
+    name: record.name,
+    locator: record.locator,
+    criticality: record.criticality || 'medium',
+    status: record.status === 'paused' ? 'paused' : 'active',
+    coverage: record.coverage === 'online' ? 'online' : 'inventory',
+    config: record.config || {},
+    createdBy: record.createdBy || existing?.createdBy || null,
+    createdAt: existing?.createdAt || record.createdAt || now,
+    updatedAt: now,
   };
   if (!USE_SUPABASE) {
-    const duplicate = local.defenseAssets.find((item) => item.orgId === normalized.orgId && item.type === normalized.type && item.locator === normalized.locator);
+    const duplicate = local.defenseAssets.find(
+      (item) => item.orgId === normalized.orgId && item.type === normalized.type && item.locator === normalized.locator,
+    );
     if (duplicate) Object.assign(duplicate, normalized, { id: duplicate.id, createdAt: duplicate.createdAt });
     else local.defenseAssets.unshift(normalized);
     persist();
     return duplicate || normalized;
   }
   const rows = await rest('/shannon_defense_assets?on_conflict=org_id,type,locator', {
-    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' },
-    body: JSON.stringify([{
-      id: normalized.id, org_id: normalized.orgId, project_id: normalized.projectId, type: normalized.type,
-      name: normalized.name, locator: normalized.locator, criticality: normalized.criticality, status: normalized.status,
-      coverage: normalized.coverage, config: normalized.config, created_by: normalized.createdBy,
-      created_at: normalized.createdAt, updated_at: normalized.updatedAt,
-    }]),
+    method: 'POST',
+    headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([
+      {
+        id: normalized.id,
+        org_id: normalized.orgId,
+        project_id: normalized.projectId,
+        type: normalized.type,
+        name: normalized.name,
+        locator: normalized.locator,
+        criticality: normalized.criticality,
+        status: normalized.status,
+        coverage: normalized.coverage,
+        config: normalized.config,
+        created_by: normalized.createdBy,
+        created_at: normalized.createdAt,
+        updated_at: normalized.updatedAt,
+      },
+    ]),
   });
   return defenseAssetFromRow(rows?.[0]);
 }
@@ -1306,9 +1827,13 @@ export async function updateDefenseAsset(orgId, id, patch) {
   if (patch.status !== undefined) body.status = patch.status;
   if (patch.coverage !== undefined) body.coverage = patch.coverage;
   if (patch.config !== undefined) body.config = patch.config;
-  const rows = await rest(`/shannon_defense_assets?id=eq.${encodeURIComponent(id)}&org_id=eq.${encodeURIComponent(orgId)}`, {
-    method: 'PATCH', body: JSON.stringify(body),
-  });
+  const rows = await rest(
+    `/shannon_defense_assets?id=eq.${encodeURIComponent(id)}&org_id=eq.${encodeURIComponent(orgId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    },
+  );
   return defenseAssetFromRow(rows?.[0]);
 }
 
@@ -1319,21 +1844,38 @@ export async function deleteDefenseAsset(orgId, id) {
     if (local.defenseAssets.length !== before) persist();
     return local.defenseAssets.length !== before;
   }
-  const rows = await rest(`/shannon_defense_assets?id=eq.${encodeURIComponent(id)}&org_id=eq.${encodeURIComponent(orgId)}`, { method: 'DELETE' });
+  const rows = await rest(
+    `/shannon_defense_assets?id=eq.${encodeURIComponent(id)}&org_id=eq.${encodeURIComponent(orgId)}`,
+    { method: 'DELETE' },
+  );
   return Array.isArray(rows) && rows.length > 0;
 }
 
 export async function listDefenseCycles(orgId, limit = 30) {
-  if (!USE_SUPABASE) return local.defenseCycles.filter((item) => item.orgId === orgId).sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
-  const rows = await rest(`/shannon_defense_cycles?org_id=eq.${encodeURIComponent(orgId)}&order=created_at.desc&limit=${Math.min(100, limit)}`);
+  if (!USE_SUPABASE)
+    return local.defenseCycles
+      .filter((item) => item.orgId === orgId)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit);
+  const rows = await rest(
+    `/shannon_defense_cycles?org_id=eq.${encodeURIComponent(orgId)}&order=created_at.desc&limit=${Math.min(100, limit)}`,
+  );
   return (rows || []).map(defenseCycleFromRow);
 }
 
 export async function saveDefenseCycle(record) {
   const normalized = {
-    id: record.id || randomUUID(), orgId: record.orgId, jobId: record.jobId || null, status: record.status,
-    window: record.window || {}, snapshot: record.snapshot || {}, learning: record.learning || {}, actions: record.actions || {},
-    error: record.error || null, startedAt: record.startedAt || Date.now(), completedAt: record.completedAt || null,
+    id: record.id || randomUUID(),
+    orgId: record.orgId,
+    jobId: record.jobId || null,
+    status: record.status,
+    window: record.window || {},
+    snapshot: record.snapshot || {},
+    learning: record.learning || {},
+    actions: record.actions || {},
+    error: record.error || null,
+    startedAt: record.startedAt || Date.now(),
+    completedAt: record.completedAt || null,
     createdAt: record.createdAt || Date.now(),
   };
   if (!USE_SUPABASE) {
@@ -1346,16 +1888,29 @@ export async function saveDefenseCycle(record) {
     return normalized;
   }
   const rows = await rest('/shannon_defense_cycles', {
-    method: 'POST', headers: { prefer: 'resolution=merge-duplicates,return=representation' },
-    body: JSON.stringify([{
-      id: normalized.id, org_id: normalized.orgId, job_id: normalized.jobId, status: normalized.status,
-      window: normalized.window, snapshot: normalized.snapshot, learning: normalized.learning, actions: normalized.actions,
-      error: normalized.error, started_at: normalized.startedAt, completed_at: normalized.completedAt, created_at: normalized.createdAt,
-    }]),
+    method: 'POST',
+    headers: { prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify([
+      {
+        id: normalized.id,
+        org_id: normalized.orgId,
+        job_id: normalized.jobId,
+        status: normalized.status,
+        window: normalized.window,
+        snapshot: normalized.snapshot,
+        learning: normalized.learning,
+        actions: normalized.actions,
+        error: normalized.error,
+        started_at: normalized.startedAt,
+        completed_at: normalized.completedAt,
+        created_at: normalized.createdAt,
+      },
+    ]),
   });
   if (normalized.status === 'completed') {
     await rest(`/shannon_defense_programs?org_id=eq.${encodeURIComponent(normalized.orgId)}`, {
-      method: 'PATCH', body: JSON.stringify({ last_cycle_id: normalized.id, updated_at: Date.now() }),
+      method: 'PATCH',
+      body: JSON.stringify({ last_cycle_id: normalized.id, updated_at: Date.now() }),
     });
   }
   return defenseCycleFromRow(rows?.[0]);
@@ -1365,15 +1920,37 @@ export async function getDefenseTelemetry(orgId, since = Date.now() - 86_400_000
   if (!USE_SUPABASE) return { routes: [], events: [], findings: [], jobs: await listJobs(orgId, 200) };
   const [routeRows, eventRows, findingRows, jobs] = await Promise.all([
     rest(`/shannon_edge_routes?org_id=eq.${encodeURIComponent(orgId)}`),
-    rest(`/shannon_defense_events?org_id=eq.${encodeURIComponent(orgId)}&created_at=gte.${since}&order=created_at.desc&limit=1000`),
+    rest(
+      `/shannon_defense_events?org_id=eq.${encodeURIComponent(orgId)}&created_at=gte.${since}&order=created_at.desc&limit=1000`,
+    ),
     rest(`/shannon_findings?org_id=eq.${encodeURIComponent(orgId)}&order=updated_at.desc&limit=1000`),
     listJobs(orgId, 200),
   ]);
   return {
-    routes: (routeRows || []).map((row) => ({ host: row.host, origin: row.origin, mode: row.mode, createdAt: Number(row.created_at) })),
+    routes: (routeRows || []).map((row) => ({
+      host: row.host,
+      origin: row.origin,
+      mode: row.mode,
+      createdAt: Number(row.created_at),
+    })),
     // The organization's own tests are not attacks on it.
-    events: (eventRows || []).filter((row) => !row.metadata?.ownTest).map((row) => ({ id: row.id, cls: row.cls, severity: row.severity, status: row.status, enforced: row.enforced === true, at: row.at, createdAt: Number(row.created_at) })),
-    findings: (findingRows || []).map((row) => ({ id: row.id, severity: row.severity, status: row.status, updatedAt: Number(row.updated_at) })),
+    events: (eventRows || [])
+      .filter((row) => !row.metadata?.ownTest)
+      .map((row) => ({
+        id: row.id,
+        cls: row.cls,
+        severity: row.severity,
+        status: row.status,
+        enforced: row.enforced === true,
+        at: row.at,
+        createdAt: Number(row.created_at),
+      })),
+    findings: (findingRows || []).map((row) => ({
+      id: row.id,
+      severity: row.severity,
+      status: row.status,
+      updatedAt: Number(row.updated_at),
+    })),
     jobs,
   };
 }

@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { SessionManager } from './session.js';
+import { type Result, err, ok } from '../result.js';
 import { GitCheckpoint } from './git-checkpoint.js';
-import { type Result, ok, err } from '../result.js';
+import { SessionManager } from './session.js';
 
 export class ResumeManager {
   private sessionMgr: SessionManager;

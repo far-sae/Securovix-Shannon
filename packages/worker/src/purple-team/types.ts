@@ -1,11 +1,6 @@
 export type Team = 'red' | 'blue';
 
-export type PurpleAgentRole =
-  | 'red-strategist'
-  | 'red-attacker'
-  | 'blue-defender'
-  | 'blue-ir'
-  | 'moderator';
+export type PurpleAgentRole = 'red-strategist' | 'red-attacker' | 'blue-defender' | 'blue-ir' | 'moderator';
 
 export type PurpleChannel = 'red-internal' | 'blue-internal' | 'cross-team';
 

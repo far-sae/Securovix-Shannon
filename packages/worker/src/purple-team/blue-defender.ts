@@ -7,11 +7,7 @@ export class BlueDefender {
     private model: string,
   ) {}
 
-  async propose(
-    finding: PurpleFinding,
-    history: string,
-    irNote: string,
-  ): Promise<string> {
+  async propose(finding: PurpleFinding, history: string, irNote: string): Promise<string> {
     const prompt = [
       'You are the BLUE TEAM DEFENDER (security engineer). You design controls that make the finding non-exploitable.',
       '',
@@ -40,11 +36,7 @@ export class BlueDefender {
     return runText(this.client, this.model, prompt);
   }
 
-  async crossTeamReply(
-    finding: PurpleFinding,
-    history: string,
-    redCounter: string,
-  ): Promise<string> {
+  async crossTeamReply(finding: PurpleFinding, history: string, redCounter: string): Promise<string> {
     const prompt = [
       'You are the BLUE TEAM DEFENDER replying to the Red Strategist.',
       'They claim your controls can be bypassed. Engage seriously: agree where they are right, push back where they are wrong.',

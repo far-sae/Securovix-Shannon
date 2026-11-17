@@ -8,6 +8,7 @@
 // containment. Samples: files go to the CAPE sandbox; a malicious verdict is shared as a hash with
 // every customer (hash, family and verdict only — never the file name or who submitted it).
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { BlockList, isIP } from 'node:net';
 import { ACTIONS } from './catalog.mjs';
 import {
   ENDPOINT_DEFAULTS,
@@ -20,6 +21,35 @@ import {
 import { classify } from './sandbox.mjs';
 
 const MIN = 60_000;
+// An install command (it carries the enrolment token) works for a day. It ends up in shell history
+// and in notes, so an old copy must not be able to enrol anything.
+export const ENROLL_TOKEN_TTL_MS = 24 * 60 * MIN;
+// A machine counts as online for enrolment purposes if it checked in within this long.
+const REENROLL_QUIET_MS = 30 * MIN;
+
+// Do two requests come from the same place? The same address, or for IPv6 the same /64 (a machine
+// changes the rest of its address by itself). When neither address is known there is nothing to
+// compare, which only happens without a proxy in front (tests, a single-machine setup).
+export function sameNetwork(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  const plain = (ip) =>
+    String(ip)
+      .trim()
+      .toLowerCase()
+      .replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/, '');
+  const x = plain(a);
+  const y = plain(b);
+  if (x === y) return true;
+  if (isIP(x) !== 6 || isIP(y) !== 6) return false;
+  try {
+    const net = new BlockList();
+    net.addSubnet(x, 64, 'ipv6');
+    return net.check(y, 'ipv6');
+  } catch {
+    return false;
+  }
+}
 const HOUR = 60 * MIN;
 const EVENT_TYPES = new Set([
   'process.start',
@@ -205,7 +235,7 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
       enrollCreatedAt: now(),
       updatedAt: now(),
     });
-    return token;
+    return { token, expiresAt: now() + ENROLL_TOKEN_TTL_MS };
   }
 
   async function enroll(body = {}, ip = null) {
@@ -216,12 +246,31 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
       throw Object.assign(new Error('Enrollment token is not valid. Create a new one on the Guard page.'), {
         status: 401,
       });
+    if (now() - Number(record.enrollCreatedAt || 0) > ENROLL_TOKEN_TTL_MS)
+      throw Object.assign(
+        new Error(
+          'This install command has expired: a command works for 24 hours. On the Guard page, choose "Add a machine" for a new one.',
+        ),
+        { status: 401 },
+      );
     const machineId = str(body.machineId, 128) || null;
     const existing = machineId
       ? (await store.agents.list({ orgId: parsed.orgId }, { limit: 500 })).find(
           (a) => a.machineId === machineId && a.status !== 'retired',
         )
       : null;
+    // Enrolling again gives the machine a new credential and cancels the old one. A reinstall or an
+    // update needs exactly that, and so would someone holding a copied install command who wants
+    // to take a machine's place. So while the machine is online, the request must come from where
+    // that machine itself connects from. A machine that has been silent for half an hour (wiped,
+    // moved, reinstalled later) can be enrolled again from anywhere with a valid command.
+    if (existing && now() - Number(existing.lastSeenAt || 0) < REENROLL_QUIET_MS && !sameNetwork(existing.lastIp, ip))
+      throw Object.assign(
+        new Error(
+          `${existing.hostname || 'This machine'} is already enrolled and is online from another network. To reinstall or update it, run the command on that machine. If it has moved, remove it on the Guard page first, then run the command again.`,
+        ),
+        { status: 409 },
+      );
     if (!existing && (await store.agents.list({ orgId: parsed.orgId, status: 'active' }, { limit: 500 })).length >= 500)
       throw Object.assign(new Error('This organization already has 500 agents.'), { status: 409 });
     const raw = secret().slice(0, 64);

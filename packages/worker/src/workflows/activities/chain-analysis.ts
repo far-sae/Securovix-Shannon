@@ -1,14 +1,14 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { heartbeat } from '@temporalio/activity';
-import type { Container } from '../../di/container.js';
-import type { ChainAnalysisInput, ChainAnalysisOutput } from './index.js';
-import { unwrap } from '../../result.js';
-import { AttackGraph } from '../../attack-graph/graph.js';
 import { ChainScorer } from '../../attack-graph/chain-scorer.js';
-import type { VulnNode, VulnCategory } from '../../attack-graph/types.js';
+import { AttackGraph } from '../../attack-graph/graph.js';
+import type { VulnCategory, VulnNode } from '../../attack-graph/types.js';
+import type { Container } from '../../di/container.js';
+import { unwrap } from '../../result.js';
 import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
 import { ACTIVE_VULN_CATEGORIES } from '../categories.js';
+import type { ChainAnalysisInput, ChainAnalysisOutput } from './index.js';
 
 export async function chainAnalysisActivity(
   container: Container,
@@ -78,10 +78,7 @@ export async function chainAnalysisActivity(
     writeFileSync(chainPath, truncateForSerialization(JSON.stringify(result, null, 2)));
 
     // Save graph visualization data
-    writeFileSync(
-      join(outputDir, 'graph.md'),
-      truncateForSerialization(graph.toPromptContext()),
-    );
+    writeFileSync(join(outputDir, 'graph.md'), truncateForSerialization(graph.toPromptContext()));
 
     if (result.highestScoringChain) {
       writeFileSync(

@@ -10,7 +10,9 @@ import { checkElasticsearch, checkFtpAnon, checkMemcached, checkRedis } from './
 import { PROBERS, fetchT, injReq, setScanOrigin } from './purple-engine.mjs';
 
 const servers = [];
-after(() => servers.forEach((s) => s.close()));
+after(() => {
+  for (const s of servers) s.close();
+});
 
 function mkHttp(handler) {
   const s = http.createServer(handler);
@@ -22,14 +24,21 @@ function mkTcp(onConn) {
   servers.push(s);
   return new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 }
-const html = (res, body, extra = {}) => (res.writeHead(200, { 'content-type': 'text/html', ...extra }), res.end(body));
-const json = (res, obj) => (res.writeHead(200, { 'content-type': 'application/json' }), res.end(JSON.stringify(obj)));
+const html = (res, body, extra = {}) => {
+  res.writeHead(200, { 'content-type': 'text/html', ...extra });
+  res.end(body);
+};
+const json = (res, obj) => {
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(obj));
+};
 const found = (fs) => fs.length > 0;
 
 test('sqli: error-based confirms on DB error, abstains on clean', async () => {
   const origin = await mkHttp((req, res) => {
     const q = new URL(req.url, 'http://x').searchParams.get('q') || '';
-    if (req.url.startsWith('/vuln')) return q.includes("'") ? html(res, 'You have an error in your SQL syntax') : html(res, 'ok');
+    if (req.url.startsWith('/vuln'))
+      return q.includes("'") ? html(res, 'You have an error in your SQL syntax') : html(res, 'ok');
     return html(res, `results for ${q}`); // /safe reflects but never errors
   });
   setScanOrigin(origin);
@@ -91,7 +100,10 @@ test('csrf: no token + SameSite=None flagged; token / Lax not', async () => {
   assert.ok(found(await PROBERS.csrf.probe({ url: `${vuln}/pay`, method: 'post', params: ['amount'] })));
   setScanOrigin(lax);
   assert.ok(!found(await PROBERS.csrf.probe({ url: `${lax}/pay`, method: 'post', params: ['amount'] })));
-  assert.ok(!found(await PROBERS.csrf.probe({ url: `${vuln}/pay`, method: 'post', params: ['amount', 'csrf_token'] })), 'token present → no FP');
+  assert.ok(
+    !found(await PROBERS.csrf.probe({ url: `${vuln}/pay`, method: 'post', params: ['amount', 'csrf_token'] })),
+    'token present → no FP',
+  );
 });
 
 test('mass-assignment: selective bind flagged, echo-all abstains', async () => {
@@ -100,7 +112,13 @@ test('mass-assignment: selective bind flagged, echo-all abstains', async () => {
     let b = '';
     for await (const c of req) b += c;
     const f = new URLSearchParams(b);
-    html(res, [...f].filter(([k]) => MODEL.has(k)).map(([k, v]) => `<div>${k}:${v}</div>`).join(''));
+    html(
+      res,
+      [...f]
+        .filter(([k]) => MODEL.has(k))
+        .map(([k, v]) => `<div>${k}:${v}</div>`)
+        .join(''),
+    );
   });
   const echo = await mkHttp(async (req, res) => {
     let b = '';
@@ -110,13 +128,18 @@ test('mass-assignment: selective bind flagged, echo-all abstains', async () => {
   setScanOrigin(vuln);
   assert.ok(found(await PROBERS['mass-assignment'].probe({ url: `${vuln}/u`, method: 'post', params: ['amount'] })));
   setScanOrigin(echo);
-  assert.ok(!found(await PROBERS['mass-assignment'].probe({ url: `${echo}/u`, method: 'post', params: ['amount'] })), 'echo-all abstains');
+  assert.ok(
+    !found(await PROBERS['mass-assignment'].probe({ url: `${echo}/u`, method: 'post', params: ['amount'] })),
+    'echo-all abstains',
+  );
 });
 
 test('verbose-errors: stack trace on malformed input', async () => {
   const origin = await mkHttp((req, res) => {
     const q = new URL(req.url, 'http://x').searchParams.get('q') || '';
-    return /['"{}\[\]<>]/.test(q) ? res.end('Traceback (most recent call last):\n  File "/app/x.py", line 9') : res.end('ok');
+    return /['"{}\[\]<>]/.test(q)
+      ? res.end('Traceback (most recent call last):\n  File "/app/x.py", line 9')
+      : res.end('ok');
   });
   setScanOrigin(origin);
   assert.ok(found(await PROBERS['verbose-errors'].probe(`${origin}/e?q=1`)));
@@ -136,8 +159,13 @@ test('graphql-advanced: field suggestion + batching', async () => {
     let b = '';
     for await (const c of req) b += c;
     const p = JSON.parse(b || 'null');
-    if (Array.isArray(p)) return json(res, p.map(() => ({ data: {} })));
-    if (/usr/.test(p?.query || '')) return json(res, { errors: [{ message: 'Cannot query field "usr". Did you mean "user"?' }] });
+    if (Array.isArray(p))
+      return json(
+        res,
+        p.map(() => ({ data: {} })),
+      );
+    if (/usr/.test(p?.query || ''))
+      return json(res, { errors: [{ message: 'Cannot query field "usr". Did you mean "user"?' }] });
     return json(res, { data: {} });
   });
   setScanOrigin(origin);
@@ -147,23 +175,37 @@ test('graphql-advanced: field suggestion + batching', async () => {
 
 test('auth-testing: no rate-limit flagged on an open login form', async () => {
   const origin = await mkHttp(async (req, res) => {
-    if (req.method === 'GET') return html(res, '<form method=post><input name=username><input name=password type=password></form>');
+    if (req.method === 'GET')
+      return html(res, '<form method=post><input name=username><input name=password type=password></form>');
     let b = '';
     for await (const c of req) b += c;
     const f = new URLSearchParams(b);
-    return f.get('username') === 'realuser' ? html(res, 'ok', { 'set-cookie': 'sessionid=x' }) : html(res, 'Invalid credentials');
+    return f.get('username') === 'realuser'
+      ? html(res, 'ok', { 'set-cookie': 'sessionid=x' })
+      : html(res, 'Invalid credentials');
   });
   setScanOrigin(origin);
-  const fs = await PROBERS['auth-testing'].probe({ url: `${origin}/login`, method: 'post', params: ['username', 'password'] });
+  const fs = await PROBERS['auth-testing'].probe({
+    url: `${origin}/login`,
+    method: 'post',
+    params: ['username', 'password'],
+  });
   assert.ok(fs.some((f) => /rate-limit/i.test(f.detail)));
 });
 
 test('network-scan: unauth services flagged, auth/closed ignored', async () => {
   const redis = await mkTcp((s) => s.on('data', (d) => /PING/.test(d) && s.write('+PONG\r\n')));
-  const redisAuth = await mkTcp((s) => s.on('data', (d) => /PING/.test(d) && s.write('-NOAUTH Authentication required.\r\n')));
+  const redisAuth = await mkTcp((s) =>
+    s.on('data', (d) => /PING/.test(d) && s.write('-NOAUTH Authentication required.\r\n')),
+  );
   const memc = await mkTcp((s) => s.on('data', (d) => /stats/.test(d) && s.write('STAT version 1.6\r\nEND\r\n')));
-  const es = await mkHttp((_q, res) => json(res, { cluster_name: 'c', version: { lucene_version: '9' }, tagline: 'You Know, for Search' }));
-  const ftp = await mkTcp((s) => (s.write('220 ok\r\n'), s.on('data', (d) => s.write(/USER/i.test(d) ? '331 need pass\r\n' : /PASS/i.test(d) ? '230 in\r\n' : ''))));
+  const es = await mkHttp((_q, res) =>
+    json(res, { cluster_name: 'c', version: { lucene_version: '9' }, tagline: 'You Know, for Search' }),
+  );
+  const ftp = await mkTcp((s) => {
+    s.write('220 ok\r\n');
+    s.on('data', (d) => s.write(/USER/i.test(d) ? '331 need pass\r\n' : /PASS/i.test(d) ? '230 in\r\n' : ''));
+  });
   assert.ok(await checkRedis('127.0.0.1', redis));
   assert.ok(!(await checkRedis('127.0.0.1', redisAuth)), 'auth-required Redis ignored');
   assert.ok(await checkMemcached('127.0.0.1', memc));

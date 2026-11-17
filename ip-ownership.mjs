@@ -54,7 +54,8 @@ export function verificationInstructions(cidr, token) {
 }
 
 // Prove control: fetch the well-known token from an IP in the range (Host header optional).
-export async function checkIpControl(ip, token, fetcher = fetch, host) {
+export async function checkIpControl(ip, token, fetchWith, host) {
+  const fetcher = fetchWith ?? fetch;
   for (const scheme of ['https', 'http']) {
     try {
       const c = new AbortController();
@@ -90,7 +91,7 @@ export async function isHostAuthorizedForNetworkScan(
   resolve4,
 ) {
   const direct = ipToInt(host) !== null ? [host] : await resolve4(host).catch(() => []);
-  const ips = direct && direct.length ? direct : [];
+  const ips = direct?.length ? direct : [];
   if (!ips.length) return false;
   return ips.every((ip) => authorizedIps.has(ip) || verifiedCidrs.some((c) => ipInCidr(ip, c)));
 }

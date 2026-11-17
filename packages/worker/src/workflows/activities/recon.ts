@@ -1,12 +1,12 @@
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { heartbeat } from '@temporalio/activity';
-import type { Container } from '../../di/container.js';
-import type { ReconInput } from './index.js';
-import { unwrap } from '../../result.js';
-import { loadPrompt } from '../../prompts/loader.js';
 import { BrowserPool } from '../../browser/pool.js';
+import type { Container } from '../../di/container.js';
+import { loadPrompt } from '../../prompts/loader.js';
+import { unwrap } from '../../result.js';
 import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
+import type { ReconInput } from './index.js';
 
 export async function reconActivity(container: Container, input: ReconInput): Promise<void> {
   const config = unwrap(container.configLoader.load(input.configPath));
@@ -19,12 +19,14 @@ export async function reconActivity(container: Container, input: ReconInput): Pr
     heartbeat('Launching browser for recon');
     const session = await browserPool.acquire('recon');
 
-    const prompt = unwrap(loadPrompt('recon', {
-      targetUrl: config.target.url,
-      repoPath: config.target.repoPath,
-      configContext: JSON.stringify(config.target.urls ?? {}),
-      loginInstructions: config.loginInstructions,
-    }));
+    const prompt = unwrap(
+      loadPrompt('recon', {
+        targetUrl: config.target.url,
+        repoPath: config.target.repoPath,
+        configContext: JSON.stringify(config.target.urls ?? {}),
+        loginInstructions: config.loginInstructions,
+      }),
+    );
 
     const model = container.llmClientFactory.resolveModelForAgent('recon');
     const client = container.llmClientFactory.createClient();
@@ -42,7 +44,10 @@ export async function reconActivity(container: Container, input: ReconInput): Pr
       .join('\n');
 
     writeFileSync(join(outputDir, 'exploration.md'), truncateForSerialization(analysis));
-    writeFileSync(join(outputDir, 'api-map.json'), truncateForSerialization(JSON.stringify({ endpoints: [] }, null, 2)));
+    writeFileSync(
+      join(outputDir, 'api-map.json'),
+      truncateForSerialization(JSON.stringify({ endpoints: [] }, null, 2)),
+    );
 
     heartbeat('Recon complete');
   } catch (error) {

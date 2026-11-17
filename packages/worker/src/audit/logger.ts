@@ -6,7 +6,7 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export class AuditLogger {
   private logPath: string;
 
-  constructor(workspaceDir: string, filename: string = 'audit.jsonl') {
+  constructor(workspaceDir: string, filename = 'audit.jsonl') {
     const logDir = join(workspaceDir, 'audit');
     mkdirSync(logDir, { recursive: true });
     this.logPath = join(logDir, filename);
@@ -21,6 +21,6 @@ export class AuditLogger {
       ...data,
     };
 
-    appendFileSync(this.logPath, JSON.stringify(entry) + '\n');
+    appendFileSync(this.logPath, `${JSON.stringify(entry)}\n`);
   }
 }

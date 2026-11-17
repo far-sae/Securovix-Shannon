@@ -1,16 +1,16 @@
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { heartbeat } from '@temporalio/activity';
-import type { Container } from '../../di/container.js';
-import type { VulnAgentInput, VulnAgentOutput } from './index.js';
-import { unwrap } from '../../result.js';
-import { loadPrompt } from '../../prompts/loader.js';
-import { BrowserPool } from '../../browser/pool.js';
 import { AuditSession } from '../../audit/session.js';
+import { BrowserPool } from '../../browser/pool.js';
+import type { Container } from '../../di/container.js';
+import { loadPrompt } from '../../prompts/loader.js';
+import { unwrap } from '../../result.js';
+import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
 import { GitCheckpoint } from '../../workspace/git-checkpoint.js';
 import { SessionManager } from '../../workspace/session.js';
-import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
 import { ACTIVE_VULN_CATEGORIES } from '../categories.js';
+import type { VulnAgentInput, VulnAgentOutput } from './index.js';
 
 export function categoryAgentIndex(category: string): number {
   const idx = ACTIVE_VULN_CATEGORIES.indexOf(category as (typeof ACTIVE_VULN_CATEGORIES)[number]);
@@ -47,12 +47,14 @@ export async function vulnAgentActivity(container: Container, input: VulnAgentIn
     heartbeat(`Starting ${agentName} agent`);
     const session = await browserPool.acquire(`agent${agentIndex}`);
 
-    const prompt = unwrap(loadPrompt(`vuln/${input.category}`, {
-      targetUrl: config.target.url,
-      repoPath: config.target.repoPath,
-      configContext: JSON.stringify(config.target.urls ?? {}),
-      loginInstructions: config.loginInstructions,
-    }));
+    const prompt = unwrap(
+      loadPrompt(`vuln/${input.category}`, {
+        targetUrl: config.target.url,
+        repoPath: config.target.repoPath,
+        configContext: JSON.stringify(config.target.urls ?? {}),
+        loginInstructions: config.loginInstructions,
+      }),
+    );
 
     audit.logPromptSnapshot(prompt);
 
@@ -125,8 +127,7 @@ function extractExploitQueue(analysis: string): ExploitQueue {
   const findings: ExploitQueue['findings'] = [];
   const findingRegex = /##\s+Finding\s+(\d+)[:\s]+(.*?)(?=##\s+Finding|\Z)/gs;
 
-  let match: RegExpExecArray | null;
-  while ((match = findingRegex.exec(analysis)) !== null) {
+  for (let match = findingRegex.exec(analysis); match !== null; match = findingRegex.exec(analysis)) {
     findings.push({
       id: `finding-${match[1]}`,
       type: 'potential',

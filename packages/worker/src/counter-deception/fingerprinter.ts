@@ -20,7 +20,7 @@ const CANARY_PATTERNS = [
 const EXPECTED_HEADERS = ['content-type', 'date', 'server', 'content-length'];
 
 export class DeceptionFingerprinter {
-  async checkResponseTiming(context: BrowserContext, url: string, samples: number = 10): Promise<DeceptionSignal[]> {
+  async checkResponseTiming(context: BrowserContext, url: string, samples = 10): Promise<DeceptionSignal[]> {
     const signals: DeceptionSignal[] = [];
     const times: number[] = [];
 
@@ -52,7 +52,7 @@ export class DeceptionFingerprinter {
         indicator: `Near-zero response time variance (CV: ${cv.toFixed(4)}, mean: ${mean.toFixed(1)}ms)`,
         confidence: 0.7,
         source: 'behavioral',
-        details: `Response times are unnaturally consistent, suggesting synthetic/honeypot responses`,
+        details: 'Response times are unnaturally consistent, suggesting synthetic/honeypot responses',
       });
     }
 
@@ -94,7 +94,7 @@ export class DeceptionFingerprinter {
       }
 
       // Check server banner mismatch
-      const server = headers['server'] ?? '';
+      const server = headers.server ?? '';
       const poweredBy = headers['x-powered-by'] ?? '';
       if (server.toLowerCase().includes('apache') && poweredBy.toLowerCase().includes('express')) {
         signals.push({
@@ -142,7 +142,9 @@ export class DeceptionFingerprinter {
         await page.goto(url, { timeout: 10_000 });
 
         // Try to find and fill login form
-        const usernameField = await page.$('input[type="text"], input[type="email"], input[name*="user"], input[name*="login"]');
+        const usernameField = await page.$(
+          'input[type="text"], input[type="email"], input[name*="user"], input[name*="login"]',
+        );
         const passwordField = await page.$('input[type="password"]');
         const submitBtn = await page.$('button[type="submit"], input[type="submit"]');
 
@@ -189,7 +191,7 @@ export class DeceptionFingerprinter {
           indicator: `Canary token pattern found: ${matches[0]}`,
           confidence: 0.85,
           source: 'heuristic',
-          details: `Response contains known canary token pattern. Interacting with this may alert defenders.`,
+          details: 'Response contains known canary token pattern. Interacting with this may alert defenders.',
         });
       }
     }

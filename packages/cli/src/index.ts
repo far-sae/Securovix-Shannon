@@ -1,13 +1,10 @@
-import { program } from 'commander';
 import chalk from 'chalk';
-import { detectMode } from './modes/detect.js';
-import { runScan } from './docker/orchestrator.js';
+import { program } from 'commander';
 import { loadConfig } from './config/loader.js';
+import { runScan } from './docker/orchestrator.js';
+import { detectMode } from './modes/detect.js';
 
-program
-  .name('shannon')
-  .description('Autonomous white-box penetration testing framework')
-  .version('0.0.0');
+program.name('shannon').description('Autonomous white-box penetration testing framework').version('0.0.0');
 
 program
   .command('scan')

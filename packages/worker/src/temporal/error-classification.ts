@@ -21,5 +21,5 @@ export const MAX_ERROR_LENGTH = 2000;
 
 export function truncateForSerialization(data: string): string {
   if (data.length <= MAX_DELIVERABLE_SIZE) return data;
-  return data.slice(0, MAX_DELIVERABLE_SIZE) + '\n\n[TRUNCATED - exceeded 2MB limit]';
+  return `${data.slice(0, MAX_DELIVERABLE_SIZE)}\n\n[TRUNCATED - exceeded 2MB limit]`;
 }

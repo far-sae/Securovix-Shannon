@@ -60,6 +60,12 @@ export function buildServerFromEnv(): Server {
   const scopeRaw = process.env.SHANNON_BROKER_SCOPE;
   if (!scopeRaw) throw new Error('SHANNON_BROKER_SCOPE (JSON ScopeConfig) is required');
   const scope = JSON.parse(scopeRaw) as ScopeConfig;
+  // The scope token is the only thing that authorizes a tool run. With an empty or guessable key,
+  // anyone who can reach this port could sign their own, so the service does not start without one.
+  for (const name of ['SHANNON_BROKER_SCOPE_KEY', 'SHANNON_BROKER_RECORD_KEY']) {
+    if ((process.env[name] ?? '').length < 32)
+      throw new Error(`${name} is required and must be at least 32 characters`);
+  }
   const imageMap = process.env.SHANNON_TOOL_IMAGES
     ? (JSON.parse(process.env.SHANNON_TOOL_IMAGES) as Record<string, string>)
     : {};

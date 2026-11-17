@@ -144,7 +144,7 @@ async function httpRecon(targetUrl) {
     'referrer-policy': headers['referrer-policy'] || null,
     'permissions-policy': headers['permissions-policy'] || null,
     'access-control-allow-origin': headers['access-control-allow-origin'] || null,
-    server: headers['server'] || null,
+    server: headers.server || null,
     'x-powered-by': headers['x-powered-by'] || null,
   };
 
@@ -233,8 +233,8 @@ const session = {
   projectId: process.env.SHANNON_PROJECT_ID || null,
 };
 
-console.log(`\n  Shannon Penetration Testing Framework`);
-console.log(`  =====================================`);
+console.log('\n  Shannon Penetration Testing Framework');
+console.log('  =====================================');
 console.log(`  Target:    ${targetUrl}`);
 console.log(`  Scan ID:   ${scanId}`);
 console.log(`  Model:     ${MODEL}\n`);
@@ -293,7 +293,7 @@ function done(agent, metrics) {
 // ================================================================
 //  PHASE 0: Live HTTP Reconnaissance
 // ================================================================
-console.log(`  [Phase 0] Live HTTP Reconnaissance...`);
+console.log('  [Phase 0] Live HTTP Reconnaissance...');
 let t = Date.now();
 const recon = await httpRecon(targetUrl);
 save('pre-recon/http-probe.txt', recon.summary);
@@ -316,10 +316,10 @@ console.log(
 // ================================================================
 //  PHASE 1: Pre-Recon + Threat Modeling
 // ================================================================
-console.log(`  [Phase 1] Pre-Recon & Threat Modeling...`);
+console.log('  [Phase 1] Pre-Recon & Threat Modeling...');
 t = Date.now();
 const preReconResult = await llm(
-  `You are an elite penetration tester performing initial reconnaissance and threat modeling.`,
+  'You are an elite penetration tester performing initial reconnaissance and threat modeling.',
   `Target: ${targetUrl}
 
 LIVE PROBE RESULTS:
@@ -351,10 +351,10 @@ console.log(`           Done (${elapsed(t)}s, $${preReconResult.cost})`);
 // ================================================================
 //  PHASE 2: Deep Recon
 // ================================================================
-console.log(`  [Phase 2] Deep Recon & API Mapping...`);
+console.log('  [Phase 2] Deep Recon & API Mapping...');
 t = Date.now();
 const reconResult = await llm(
-  `You are a web application security tester specializing in deep reconnaissance.`,
+  'You are a web application security tester specializing in deep reconnaissance.',
   `Target: ${targetUrl}
 
 LIVE PROBE DATA:
@@ -489,7 +489,7 @@ save(
 //  proxy to prove the block. Best-effort: skips cleanly if Docker / prober images are
 //  unavailable (e.g. a host without the broker probers built).
 // ================================================================
-console.log(`  [Phase 3.5] Real Exploit + Defend (broker probers)...`);
+console.log('  [Phase 3.5] Real Exploit + Defend (broker probers)...');
 t = Date.now();
 try {
   const accessControl = await buildAccessControl();
@@ -520,7 +520,7 @@ try {
 //  Red <-> Blue (cross-team rebuttals)
 //  Moderator synthesizes the final conclusion.
 // ================================================================
-console.log(`  [Phase 4] PURPLE TEAM — 2 Red + 2 Blue Agents in Dialog...`);
+console.log('  [Phase 4] PURPLE TEAM — 2 Red + 2 Blue Agents in Dialog...');
 t = Date.now();
 const allRedFindings = redResults
   .map((r) => `### ${r.cat.icon} ${r.cat.name}\n${r.result.text.slice(0, 800)}`)
@@ -544,7 +544,7 @@ ${JSON.stringify(recon.securityHeaders, null, 2)}
 RED TEAM ATTACKS (8 categories):
 ${allRedFindings}`;
 
-console.log(`           Red Strategist briefing the Attacker...`);
+console.log('           Red Strategist briefing the Attacker...');
 const redStrategist = await ptTurn(
   'red-strategist',
   `You are the RED TEAM STRATEGIST. You partner with the Red Attacker to plan how to exploit the findings.
@@ -559,7 +559,7 @@ Talk to your teammate like a partner, not a report. Cite the findings explicitly
 5. ASK FOR ATTACKER — what you need them to refine on the wire`,
 );
 
-console.log(`           Red Attacker executing plan...`);
+console.log('           Red Attacker executing plan...');
 const redAttacker = await ptTurn(
   'red-attacker',
   `You are the RED TEAM ATTACKER (operator). You take the strategist plan and turn it into concrete exploit steps.
@@ -576,7 +576,7 @@ ${redStrategist}
 4. PROOF OF IMPACT — what evidence proves this works`,
 );
 
-console.log(`           Blue Defender designing mitigations...`);
+console.log('           Blue Defender designing mitigations...');
 const blueDefender = await ptTurn(
   'blue-defender',
   `You are the BLUE TEAM DEFENDER (security engineer). You design controls that make findings non-exploitable.
@@ -594,7 +594,7 @@ Also include the legacy DEFENSE SCORECARD (each category A-F):
   Input Validation, Output Encoding, Data Protection, Security Headers, Error Handling, Dependency Security`,
 );
 
-console.log(`           Blue IR designing detections...`);
+console.log('           Blue IR designing detections...');
 const blueIR = await ptTurn(
   'blue-ir',
   `You are the BLUE TEAM IR / DETECTION ENGINEER. You design detections and IR playbooks for what the Defender cannot fully close.
@@ -610,10 +610,10 @@ ${blueDefender}
 3. REPLY TO DEFENDER — gaps in their controls and where detection must cover`,
 );
 
-console.log(`           Cross-team: Red Strategist replying to Blue Defender...`);
+console.log('           Cross-team: Red Strategist replying to Blue Defender...');
 const redVsBlueDefender = await ptTurn(
   'red-strategist-x',
-  `You are the RED TEAM STRATEGIST speaking to the Blue Team. Honestly assess whether their mitigations break your attack plan.`,
+  'You are the RED TEAM STRATEGIST speaking to the Blue Team. Honestly assess whether their mitigations break your attack plan.',
   `${ptContext}
 
 ## Blue Defender proposal
@@ -625,7 +625,7 @@ ${blueDefender}
 3. CONCESSION — if a control truly closes the issue, say "CONCEDE: <which control>". Otherwise omit.`,
 );
 
-console.log(`           Cross-team: Blue Defender countering Red Strategist...`);
+console.log('           Cross-team: Blue Defender countering Red Strategist...');
 const blueVsRedStrategist = await ptTurn(
   'blue-defender-x',
   `You are the BLUE TEAM DEFENDER replying to the Red Strategist's bypass claims. Engage seriously: agree where they are right, push back where they are wrong.`,
@@ -640,10 +640,10 @@ ${redVsBlueDefender}
 3. DISPUTED — which red claims do not actually bypass your controls, with reasoning`,
 );
 
-console.log(`           Cross-team: Red Attacker replying to Blue IR...`);
+console.log('           Cross-team: Red Attacker replying to Blue IR...');
 const redVsBlueIR = await ptTurn(
   'red-attacker-x',
-  `You are the RED TEAM ATTACKER speaking directly to Blue IR. Tell them which detections would catch your steps and which you can evade.`,
+  'You are the RED TEAM ATTACKER speaking directly to Blue IR. Tell them which detections would catch your steps and which you can evade.',
   `${ptContext}
 
 ## Blue IR detection proposal
@@ -655,7 +655,7 @@ ${blueIR}
 3. EVASION — small tweaks that defeat the proposed detection`,
 );
 
-console.log(`           Cross-team: Blue IR countering Red Attacker...`);
+console.log('           Cross-team: Blue IR countering Red Attacker...');
 const blueVsRedAttacker = await ptTurn(
   'blue-ir-x',
   `You are the BLUE IR engineer replying to the Red Attacker's evasion claims. Take it seriously and adapt.`,
@@ -670,10 +670,10 @@ ${redVsBlueIR}
 3. DISPUTED — which evasions would still trip alarms you have, with reasoning`,
 );
 
-console.log(`           Moderator synthesizing conclusion...`);
+console.log('           Moderator synthesizing conclusion...');
 const moderatorConclusion = await ptTurn(
   'pt-moderator',
-  `You are the PURPLE TEAM MODERATOR. Read the full red-vs-blue exchange and write the conclusion.`,
+  'You are the PURPLE TEAM MODERATOR. Read the full red-vs-blue exchange and write the conclusion.',
   `${ptContext}
 
 ## Transcript
@@ -802,7 +802,7 @@ console.log(`           Done (${elapsed(t)}s, $${ptTotalCost.toFixed(6)} across 
 // ================================================================
 //  PHASE 5: EXPLOIT VERIFICATION — Prove it works
 // ================================================================
-console.log(`  [Phase 5] Exploit Verification — Proving attacks work...`);
+console.log('  [Phase 5] Exploit Verification — Proving attacks work...');
 t = Date.now();
 
 const confirmedAttacks = redResults.flatMap((r) =>
@@ -849,10 +849,10 @@ console.log(`           Done (${elapsed(t)}s, $${exploitResult.cost})`);
 // ================================================================
 //  PHASE 6: Attack Chain Analysis
 // ================================================================
-console.log(`  [Phase 6] Attack Chain Analysis...`);
+console.log('  [Phase 6] Attack Chain Analysis...');
 t = Date.now();
 const chainResult = await llm(
-  `You are a kill-chain analyst. Combine individual vulnerabilities into multi-step attack scenarios.`,
+  'You are a kill-chain analyst. Combine individual vulnerabilities into multi-step attack scenarios.',
   `TARGET: ${targetUrl}
 
 RED TEAM FINDINGS: ${allRedFindings.slice(0, 2000)}
@@ -874,7 +874,7 @@ console.log(`           Done (${elapsed(t)}s, $${chainResult.cost})`);
 // ================================================================
 //  PHASE 7: War Room — Red vs Blue Debate
 // ================================================================
-console.log(`  [Phase 7] War Room — Red vs Blue Adversarial Debate...`);
+console.log('  [Phase 7] War Room — Red vs Blue Adversarial Debate...');
 t = Date.now();
 
 const warRoomResult = await llm(
@@ -938,7 +938,7 @@ console.log(`           Done (${elapsed(t)}s, $${warRoomResult.cost})`);
 // ================================================================
 //  PHASE 8: Professional Report
 // ================================================================
-console.log(`  [Phase 8] Final Report (Red + Blue combined)...`);
+console.log('  [Phase 8] Final Report (Red + Blue combined)...');
 t = Date.now();
 
 const reportResult = await llm(
@@ -1030,7 +1030,7 @@ console.log(`           Done (${elapsed(t)}s, $${reportResult.cost})`);
 // ================================================================
 //  PHASE 9: Forensic Package
 // ================================================================
-console.log(`  [Phase 9] Forensic Evidence Package...`);
+console.log('  [Phase 9] Forensic Evidence Package...');
 const totalCost = Object.values(session.metrics).reduce((s, m) => s + m.cost, 0);
 const totalDuration = Date.now() - new Date(session.startedAt).getTime();
 const manifest = {
@@ -1061,7 +1061,7 @@ save(
     `- **Manifest Hash**: \`${manifest.manifestHash}\``,
     `- **Model**: ${MODEL}`,
     `- **Red Team Agents**: ${categories.length}`,
-    `- **Blue Team**: Active`,
+    '- **Blue Team**: Active',
     `- **Total Cost**: $${totalCost.toFixed(6)}`,
   ].join('\n'),
 );
@@ -1070,13 +1070,13 @@ session.status = 'completed';
 session.completedAt = new Date().toISOString();
 save('session.json', JSON.stringify(session, null, 2));
 
-console.log(`\n  =====================================`);
-console.log(`  Scan Complete!`);
-console.log(`  =====================================`);
+console.log('\n  =====================================');
+console.log('  Scan Complete!');
+console.log('  =====================================');
 console.log(`  Duration:  ${(totalDuration / 1000).toFixed(1)}s`);
 console.log(`  Cost:      $${totalCost.toFixed(6)}`);
 console.log(
   `  Agents:    ${session.completedAgents.length} (${categories.length} Red + 1 Blue + 1 Exploit + 1 Chain + 1 War Room + 1 Report)`,
 );
-console.log(`  Temporal:  http://localhost:8080`);
+console.log('  Temporal:  http://localhost:8080');
 console.log('');

@@ -68,27 +68,30 @@ export function runInSandbox(
 
   const start = nowMs();
   return new Promise<SandboxResult>((resolve) => {
-    const child = execFile(
-      'docker',
-      dockerArgs,
-      { timeout: o.timeoutMs, maxBuffer: o.maxOutputBytes },
-      (err, stdout, stderr) => {
-        const durationMs = nowMs() - start;
-        const timedOut = Boolean(err && (err as NodeJS.ErrnoException & { killed?: boolean }).killed);
-        if (timedOut) {
-          // execFile killed the `docker run` client; make sure the container dies too.
-          execFile('docker', ['kill', name], () => {});
-        }
-        const exitCode =
-          err && typeof (err as NodeJS.ErrnoException & { code?: number }).code === 'number'
-            ? ((err as unknown as { code: number }).code as number)
-            : err
-              ? null
-              : 0;
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode, durationMs, timedOut });
-      },
-    );
-    // Defensive: if the process errors before callback, child is still handled above.
-    void child;
+    // The deadline is ours, not execFile's. execFile's own timeout sends SIGTERM to the `docker run`
+    // client, which passes it on to the tool as PID 1 of the container, where it is ignored: the
+    // tool then runs to its natural end. So: stop the client outright, then remove the container by
+    // name, and only report once the container is gone.
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, o.timeoutMs);
+    const child = execFile('docker', dockerArgs, { maxBuffer: o.maxOutputBytes }, (err, stdout, stderr) => {
+      clearTimeout(deadline);
+      const durationMs = nowMs() - start;
+      const exitCode = timedOut
+        ? null
+        : err && typeof (err as NodeJS.ErrnoException & { code?: number }).code === 'number'
+          ? ((err as unknown as { code: number }).code as number)
+          : err
+            ? null
+            : 0;
+      const done = () => resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode, durationMs, timedOut });
+      // Whenever the client ended without the container's own exit code (deadline, output over the
+      // cap, client failure), the container may still be running: remove it before reporting.
+      if (timedOut || (err && exitCode === null)) execFile('docker', ['rm', '-f', name], done);
+      else done();
+    });
   });
 }

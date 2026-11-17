@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { type Result, ok, err, tryCatch } from '../result.js';
+import { type Result, err, ok, tryCatch } from '../result.js';
 
 export class GitCheckpoint {
   private workspaceDir: string;
@@ -60,14 +60,16 @@ export class GitCheckpoint {
   // Serialize git operations through a semaphore to avoid index lock conflicts
   private async serialized<T>(fn: () => Promise<T>): Promise<T> {
     const prev = GitCheckpoint.semaphore;
-    let resolve: () => void;
-    GitCheckpoint.semaphore = new Promise<void>((r) => { resolve = r; });
+    let resolve: (() => void) | undefined;
+    GitCheckpoint.semaphore = new Promise<void>((r) => {
+      resolve = r;
+    });
 
     await prev;
     try {
       return await fn();
     } finally {
-      resolve!();
+      resolve?.();
     }
   }
 

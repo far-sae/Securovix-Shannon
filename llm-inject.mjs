@@ -30,7 +30,7 @@ export async function runOraclesOnParam({ target, param, fetchT, nonce }) {
 
 // DIRECT prompt injection. `params` optional (defaults to discovered candidates).
 export async function probeDirect({ target, params, fetchT }) {
-  const cand = params && params.length ? params : candidateParams(target);
+  const cand = params?.length ? params : candidateParams(target);
   for (const p of cand) {
     const hit = await runOraclesOnParam({ target, param: p, fetchT });
     if (hit)
@@ -39,9 +39,7 @@ export async function probeDirect({ target, params, fetchT }) {
           'llm-inject-probe',
           'high',
           target,
-          `Prompt injection: the model obeyed an injected instruction via '${p}' ` +
-            `(${hit.oracle.name} oracle → emitted the computed marker ${hit.oracle.marker}, ` +
-            `which was absent from the control baseline). Deterministic proof, no LLM-judge.`,
+          `Prompt injection: the model obeyed an injected instruction via '${p}' (${hit.oracle.name} oracle → emitted the computed marker ${hit.oracle.marker}, which was absent from the control baseline). Deterministic proof, no LLM-judge.`,
         ),
       ];
   }
@@ -64,9 +62,7 @@ export async function probeIndirect({ plant, render, nonce }) {
         'llm-indirect-probe',
         'critical',
         'stored-content',
-        `Indirect (2nd-order) prompt injection: a benign instruction stored via one flow was ` +
-          `executed by the LLM in a separate render flow (emitted the computed marker ` +
-          `${oracle.marker}, never present in the render request). Deterministic proof.`,
+        `Indirect (2nd-order) prompt injection: a benign instruction stored via one flow was executed by the LLM in a separate render flow (emitted the computed marker ${oracle.marker}, never present in the render request). Deterministic proof.`,
       ),
     ];
   return [];

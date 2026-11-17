@@ -1,14 +1,14 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { heartbeat } from '@temporalio/activity';
-import type { Container } from '../../di/container.js';
-import type { DeceptionScanInput } from './index.js';
-import { unwrap } from '../../result.js';
 import { BrowserPool } from '../../browser/pool.js';
-import { DeceptionFingerprinter } from '../../counter-deception/fingerprinter.js';
 import { DeceptionClassifier } from '../../counter-deception/deception-classifier.js';
+import { DeceptionFingerprinter } from '../../counter-deception/fingerprinter.js';
 import type { DeceptionVerdict } from '../../counter-deception/types.js';
+import type { Container } from '../../di/container.js';
+import { unwrap } from '../../result.js';
 import { toTemporalError, truncateForSerialization } from '../../temporal/error-classification.js';
+import type { DeceptionScanInput } from './index.js';
 
 export async function deceptionScanActivity(container: Container, input: DeceptionScanInput): Promise<void> {
   const config = unwrap(container.configLoader.load(input.configPath));
@@ -30,8 +30,8 @@ export async function deceptionScanActivity(container: Container, input: Decepti
     if (existsSync(apiMapPath)) {
       const apiMap = JSON.parse(readFileSync(apiMapPath, 'utf-8'));
       if (apiMap.endpoints) {
-        endpoints = apiMap.endpoints.map((e: { url?: string; path?: string }) =>
-          e.url ?? `${config.target.url}${e.path ?? ''}`,
+        endpoints = apiMap.endpoints.map(
+          (e: { url?: string; path?: string }) => e.url ?? `${config.target.url}${e.path ?? ''}`,
         );
       }
     }
@@ -42,13 +42,13 @@ export async function deceptionScanActivity(container: Container, input: Decepti
       heartbeat(`Scanning ${endpoint} for deception`);
 
       const signals = [
-        ...await fingerprinter.checkHeaderAnomalies(session.context, endpoint),
+        ...(await fingerprinter.checkHeaderAnomalies(session.context, endpoint)),
         ...fingerprinter.detectCanaryTokens(await fetchBody(session.context, endpoint)),
       ];
 
       // Only run expensive checks if initial signals are suspicious
       if (signals.length > 0) {
-        signals.push(...await fingerprinter.checkResponseTiming(session.context, endpoint, 5));
+        signals.push(...(await fingerprinter.checkResponseTiming(session.context, endpoint, 5)));
       }
 
       const verdict = classifier.classify(endpoint, signals);
@@ -74,7 +74,7 @@ async function fetchBody(context: import('playwright').BrowserContext, url: stri
   const page = await context.newPage();
   try {
     const response = await page.goto(url, { timeout: 10_000 });
-    return await response?.text() ?? '';
+    return (await response?.text()) ?? '';
   } catch {
     return '';
   } finally {

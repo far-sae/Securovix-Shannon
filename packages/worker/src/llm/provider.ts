@@ -1,4 +1,4 @@
-import { type Result, ok, err } from '../result.js';
+import { type Result, err, ok } from '../result.js';
 
 export type ProviderType = 'anthropic' | 'bedrock' | 'vertex' | 'proxy';
 
@@ -61,11 +61,17 @@ export function resolveProvider(): Result<LLMProvider> {
   }
 
   if (providers.length === 0) {
-    return err(new Error('No LLM provider configured. Set ANTHROPIC_API_KEY, AWS_BEDROCK_REGION, VERTEX_PROJECT_ID, or SHANNON_LLM_BASE_URL.'));
+    return err(
+      new Error(
+        'No LLM provider configured. Set ANTHROPIC_API_KEY, AWS_BEDROCK_REGION, VERTEX_PROJECT_ID, or SHANNON_LLM_BASE_URL.',
+      ),
+    );
   }
 
   if (providers.length > 1) {
-    return err(new Error(`Exactly one LLM provider must be configured. Found: ${providers.map((p) => p.type).join(', ')}`));
+    return err(
+      new Error(`Exactly one LLM provider must be configured. Found: ${providers.map((p) => p.type).join(', ')}`),
+    );
   }
 
   return ok(providers[0]);

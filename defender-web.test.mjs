@@ -281,3 +281,37 @@ test('web: an address that sends too many requests in a minute is refused', asyn
     },
   );
 });
+
+test('web: the visitor address comes only from the header the named platform writes', async () => {
+  const { clientIp } = await import('./packages/defender-sdk/web.mjs');
+  const forged = new Request('https://shop.example.test/', {
+    headers: {
+      'x-vercel-forwarded-for': '198.51.100.1',
+      'cf-connecting-ip': '203.0.113.5',
+      'x-real-ip': '192.0.2.9',
+      'x-forwarded-for': '192.0.2.44, 10.0.0.1',
+    },
+  });
+  assert.equal(clientIp(forged, 'cloudflare'), '203.0.113.5', 'on Cloudflare a visitor-sent Vercel header is ignored');
+  assert.equal(clientIp(forged, 'vercel'), '198.51.100.1');
+  assert.equal(clientIp(forged, 'none'), null, 'an unknown host gives no address rather than a forgeable one');
+  assert.equal(clientIp(forged), '198.51.100.1', 'unset keeps the order that is right on Vercel');
+  assert.equal(
+    clientIp(new Request('https://shop.example.test/', { headers: { 'x-forwarded-for': '192.0.2.44' } }), 'cloudflare'),
+    null,
+  );
+
+  // With platform "none" nothing is keyed on an address: no ban, however many attacks arrive.
+  const defend = createWebDefender({ mode: 'enforce', platform: 'none', remotePolicy: false, ban: { threshold: 2 } });
+  for (let i = 0; i < 4; i++)
+    await defend(
+      new Request(`https://shop.example.test/?file=../../etc/passwd&i=${i}`, {
+        headers: { 'x-forwarded-for': '192.0.2.44' },
+      }),
+    );
+  const plain = await defend(
+    new Request('https://shop.example.test/', { headers: { 'x-forwarded-for': '192.0.2.44' } }),
+  );
+  assert.equal(plain, null, 'a plain request still passes');
+  assert.equal(defend.stats().activeBans, 0);
+});
