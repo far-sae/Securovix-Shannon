@@ -36,7 +36,7 @@ export function classify(event, { match = matchClass } = {}) {
   try {
     cls = match(url, body);
     // Independent of `cls` so a shadowing class cannot suppress enforcement.
-    enforcing = matchEnforceable(url, body);
+    enforcing = matchEnforceable(url, body, event.headers);
   } catch (err) {
     return benign(`classifier error — failing open: ${err?.message || err}`);
   }

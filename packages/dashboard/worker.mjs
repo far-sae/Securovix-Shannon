@@ -29,16 +29,25 @@ import {
 import { deliverIntegrationJob, queueIntegrationEvent, sendEmail } from './enterprise-integrations.mjs';
 import { decryptSecret } from './enterprise-security.mjs';
 import { buildDefenseCycle } from './continuous-defense.mjs';
+import { createProgress, feedProgress } from './scan-progress.mjs';
 import { buildVulnerabilityMatches, loadCisaKev, queryOsvComponents } from './vulnerability-management.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const WORKSPACES = join(ROOT, 'workspaces');
+const WORKSPACES = process.env.SHANNON_WORKSPACES_DIR || join(ROOT, 'workspaces');
+const SCAN_ENTRY = process.env.SHANNON_SCAN_ENTRY || join(ROOT, 'run-scan.mjs');
 const INSTANCE = process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_DEPLOYMENT_ID || `worker-${randomUUID()}`;
 const CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.SHANNON_WORKER_CONCURRENCY || 2)));
 const POLL_MS = Math.max(500, Number(process.env.SHANNON_WORKER_POLL_MS || 2500));
+// Scans run for a long time, so they have their own limit and never take a slot that mail,
+// alerts and scheduled checks need.
+const SCAN_CONCURRENCY = Math.max(1, Math.min(5, Number(process.env.SHANNON_WORKER_SCAN_CONCURRENCY || 1)));
+const HEARTBEAT_MS = Math.max(100, Number(process.env.SHANNON_WORKER_HEARTBEAT_MS || 5000));
+const SCAN_WAIT_MS = 30_000;
 const MAX_ARTIFACT_BYTES = Math.max(1024, Number(process.env.SHANNON_MAX_ARTIFACT_BYTES || 100 * 1024 * 1024));
 let stopping = false;
 const activeChildren = new Set();
+// Jobs this worker is running now: job id -> { type, promise }.
+const running = new Map();
 const workerStatus = { ready: false, startedAt: Date.now(), lastPollAt: null, activeJobs: 0, database: null };
 let healthServer = null;
 
@@ -91,20 +100,36 @@ async function uploadScanArtifacts(job, scanId) {
   return uploaded;
 }
 
+function removeWorkspace(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {}
+}
+
 async function runChild(command, args, options, job) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, options);
     activeChildren.add(child);
     let tail = '';
+    // How much the scanner has printed in total. The dashboard uses it to tell which part of the
+    // tail it has not shown yet.
+    let chars = 0;
+    const progress = createProgress();
     let cancelRequested = false;
     const capture = (chunk) => {
-      tail = `${tail}${chunk}`.slice(-32_000);
+      const text = String(chunk);
+      chars += text.length;
+      feedProgress(progress, text);
+      tail = `${tail}${text}`.slice(-32_000);
     };
     child.stdout?.on('data', capture);
     child.stderr?.on('data', capture);
     const heartbeat = setInterval(() => {
-      updateJob(job.id, { heartbeatAt: Date.now(), result: { outputTail: tail } }).catch(() => {});
-    }, 15_000);
+      updateJob(job.id, {
+        heartbeatAt: Date.now(),
+        result: { outputTail: tail, outputChars: chars, phases: progress.phases },
+      }).catch(() => {});
+    }, HEARTBEAT_MS);
     const cancellation = setInterval(async () => {
       try {
         if ((await getJob(job.id))?.status === 'cancelled' && !cancelRequested) {
@@ -124,8 +149,12 @@ async function runChild(command, args, options, job) {
       clearInterval(heartbeat);
       clearInterval(cancellation);
       activeChildren.delete(child);
-      if (code === 0) resolve({ code, outputTail: tail });
-      else reject(new Error(`scan process exited with code ${code}: ${tail.slice(-2000)}`));
+      if (code === 0) return resolve({ code, outputTail: tail, outputChars: chars, phases: progress.phases });
+      const error = new Error(`scan process exited with code ${code}: ${tail.slice(-2000)}`);
+      error.outputTail = tail;
+      error.outputChars = chars;
+      error.phases = progress.phases;
+      reject(error);
     });
   });
 }
@@ -161,10 +190,11 @@ async function executeScan(job) {
   if (payload.networkScan) env.SHANNON_NETWORK_SCAN = '1';
 
   let processResult;
+  let failure = null;
   try {
     processResult = await runChild(
       'node',
-      [join(ROOT, 'run-scan.mjs'), '--config', configPath],
+      [SCAN_ENTRY, '--config', configPath],
       {
         cwd: ROOT,
         env,
@@ -172,14 +202,47 @@ async function executeScan(job) {
       },
       job,
     );
+  } catch (error) {
+    failure = error;
   } finally {
     try {
       rmSync(tempDir, { recursive: true, force: true });
     } catch {}
   }
+  const workspace = join(WORKSPACES, scanId);
+  const sessionPath = join(workspace, 'session.json');
+  const readSession = () => {
+    try {
+      return existsSync(sessionPath) ? JSON.parse(readFileSync(sessionPath, 'utf8')) : {};
+    } catch {
+      return {};
+    }
+  };
+  if (failure) {
+    // The scanner stopped part-way. What it wrote so far is kept so the user can read it. While
+    // the worker itself is shutting down there is no time for that, and the job is run again by
+    // the next worker; a scan that failed on its own is not, because a second run costs the same
+    // again and usually fails the same way.
+    let artifacts = [];
+    if (!stopping) artifacts = await uploadScanArtifacts(job, scanId).catch(() => []);
+    const session = readSession();
+    failure.retryable = stopping;
+    failure.partial = {
+      scanId,
+      status: 'failed',
+      target: session.target || payload.targetUrl,
+      startedAt: session.startedAt || null,
+      completedAt: new Date().toISOString(),
+      artifactCount: artifacts.length,
+      outputTail: failure.outputTail || '',
+      outputChars: failure.outputChars || 0,
+      phases: failure.phases || [],
+    };
+    if (artifacts.length) removeWorkspace(workspace);
+    throw failure;
+  }
   const artifacts = await uploadScanArtifacts(job, scanId);
-  const sessionPath = join(WORKSPACES, scanId, 'session.json');
-  const session = existsSync(sessionPath) ? JSON.parse(readFileSync(sessionPath, 'utf8')) : {};
+  const session = readSession();
   const result = {
     scanId,
     status: session.status || 'completed',
@@ -188,6 +251,8 @@ async function executeScan(job) {
     completedAt: session.completedAt || new Date().toISOString(),
     artifactCount: artifacts.length,
     outputTail: processResult.outputTail,
+    outputChars: processResult.outputChars,
+    phases: processResult.phases,
   };
   const confirmed = [];
   const brokerDir = join(WORKSPACES, scanId, 'broker');
@@ -207,6 +272,8 @@ async function executeScan(job) {
     scanId,
     findings: confirmed,
   });
+  // Everything is stored now; the working copy would only fill the worker's disk.
+  removeWorkspace(workspace);
   await queueIntegrationEvent(
     job.orgId,
     {
@@ -336,12 +403,13 @@ async function handle(job) {
     const current = await getJob(job.id).catch(() => null);
     if (current?.status === 'cancelled') return;
     const message = String(error?.message || error).slice(0, 4000);
-    const exhausted = job.attempts >= job.maxAttempts;
+    const exhausted = error?.retryable === false || job.attempts >= job.maxAttempts;
     const delay = Math.min(60 * 60_000, 15_000 * 2 ** Math.max(0, job.attempts - 1));
+    const partial = error?.partial ? { result: error.partial } : {};
     await updateJob(
       job.id,
       exhausted
-        ? { status: 'dead-letter', error: message, heartbeatAt: Date.now(), lockedBy: null, lockedAt: null }
+        ? { status: 'dead-letter', error: message, heartbeatAt: Date.now(), lockedBy: null, lockedAt: null, ...partial }
         : { status: 'queued', error: message, runAt: Date.now() + delay, lockedBy: null, lockedAt: null },
     );
     await appendOperationalEvent({
@@ -353,6 +421,58 @@ async function handle(job) {
       metadata: { jobId: job.id, type: job.type, attempt: job.attempts, error: message },
     }).catch(() => {});
   }
+}
+
+// Starts a claimed job without waiting for it, so the worker keeps polling while it runs.
+function start(job) {
+  // A scan reports in through its own heartbeat, which also carries its output.
+  const beat =
+    job.type === 'scan'
+      ? null
+      : setInterval(() => updateJob(job.id, { heartbeatAt: Date.now() }).catch(() => {}), HEARTBEAT_MS * 3);
+  beat?.unref?.();
+  const promise = handle(job)
+    .catch((error) => console.error(`[worker] job ${job.id} (${job.type}) could not be recorded:`, error.message))
+    .finally(() => {
+      if (beat) clearInterval(beat);
+      running.delete(job.id);
+      workerStatus.activeJobs = running.size;
+    });
+  running.set(job.id, { type: job.type, promise });
+  workerStatus.activeJobs = running.size;
+}
+
+/** Claims as many jobs as there is room for and starts them. Returns how many were started. */
+export async function pollOnce() {
+  let scans = 0;
+  for (const item of running.values()) if (item.type === 'scan') scans += 1;
+  const free = CONCURRENCY - (running.size - scans);
+  if (free <= 0) return 0;
+  let started = 0;
+  for (const job of await claimJobs(INSTANCE, free)) {
+    if (job.type === 'scan') {
+      if (scans >= SCAN_CONCURRENCY) {
+        // Hand it back for later. Being claimed counted as an attempt; waiting is not one.
+        await updateJob(job.id, {
+          status: 'queued',
+          runAt: Date.now() + SCAN_WAIT_MS,
+          lockedBy: null,
+          lockedAt: null,
+          attempts: Math.max(0, job.attempts - 1),
+        });
+        continue;
+      }
+      scans += 1;
+    }
+    start(job);
+    started += 1;
+  }
+  return started;
+}
+
+/** Waits for every job this worker is running to finish. */
+export async function drain() {
+  while (running.size) await Promise.allSettled([...running.values()].map((item) => item.promise));
 }
 
 export async function runWorker() {
@@ -381,6 +501,7 @@ export async function runWorker() {
   let lastMaintenance = Date.now();
   let lastRetention = Date.now();
   let lastHeartbeat = 0;
+  let pollFailures = 0;
   while (!stopping) {
     workerStatus.lastPollAt = Date.now();
     if (Date.now() - lastHeartbeat > 60_000) {
@@ -389,7 +510,7 @@ export async function runWorker() {
         instanceId: INSTANCE,
         level: 'info',
         event: 'worker.heartbeat',
-        metadata: { concurrency: CONCURRENCY, activeJobs: activeChildren.size },
+        metadata: { concurrency: CONCURRENCY, scanConcurrency: SCAN_CONCURRENCY, activeJobs: running.size },
         createdAt: Date.now(),
       }).catch(() => {});
       lastHeartbeat = Date.now();
@@ -406,16 +527,20 @@ export async function runWorker() {
       );
       lastRetention = Date.now();
     }
-    const jobs = await claimJobs(INSTANCE, CONCURRENCY);
-    if (!jobs.length) {
-      await sleep(POLL_MS);
-      continue;
+    let started = 0;
+    try {
+      started = await pollOnce();
+      pollFailures = 0;
+    } catch (error) {
+      // One failed poll is a blip; a database that stays away should restart the worker.
+      pollFailures += 1;
+      console.error('[worker] could not claim jobs:', error.message);
+      if (pollFailures >= 20) throw error;
     }
-    workerStatus.activeJobs = jobs.length;
-    await Promise.all(jobs.map(handle));
-    workerStatus.activeJobs = 0;
+    await sleep(started ? 250 : POLL_MS);
   }
   workerStatus.ready = false;
+  await drain();
 }
 
 export function createWorkerHealthServer() {

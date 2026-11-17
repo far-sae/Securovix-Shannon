@@ -34,7 +34,7 @@ const trimEvent = (event) => ({
   raw: event.raw,
 });
 
-export function defenderAgent(bb, { getMode = () => 'monitor', deps = {}, allow, counters } = {}) {
+export function defenderAgent(bb, { getMode = () => 'monitor', deps = {}, allow, counters, onDefense } = {}) {
   const count = counters || { events: 0, defenses: 0 };
   function handle(event) {
     count.events++;
@@ -42,12 +42,17 @@ export function defenderAgent(bb, { getMode = () => 'monitor', deps = {}, allow,
     const result = applyResponse(verdict, { event }, { mode: getMode(), deps, allow });
     if (verdict.attack || result.action !== 'observe') {
       count.defenses++;
+      const trimmed = trimEvent(event);
       // Only a non-benign request becomes a durable fact, trimmed and capped.
       if (count.defenses <= MAX_FACTS) {
-        const trimmed = trimEvent(event);
         bb.post('attack-event', trimmed, 'connector');
         bb.post('defense', { event: trimmed, verdict, result }, 'defender');
       }
+      // The cap is on what the board keeps, not on what happens. Live reporting, alerts and the
+      // repeat-offender ban hang off this call, so they keep working after the board is full.
+      try {
+        onDefense?.({ event: trimmed, verdict, result });
+      } catch {}
     }
     return { block: result.enforced && result.action === 'block-inline' };
   }

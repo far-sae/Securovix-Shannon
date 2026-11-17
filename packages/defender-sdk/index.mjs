@@ -110,6 +110,8 @@ export function shannonDefender(opts = {}) {
 
       let body = '';
       if (typeof req.body === 'string') body = req.body;
+      // express.raw() leaves a Buffer; serialising that as JSON would hide what it contains.
+      else if (typeof Buffer !== 'undefined' && Buffer.isBuffer(req.body)) body = req.body.toString('latin1');
       else if (req.body && typeof req.body === 'object') {
         try {
           body = JSON.stringify(req.body);
@@ -125,6 +127,7 @@ export function shannonDefender(opts = {}) {
         path,
         body,
         userAgent: req.headers?.['user-agent'],
+        headers: req.headers,
         honeypot: listOption(cfg.honeypot, HONEYPOT_PATHS),
         scanners: listOption(cfg.scanners, SCANNER_AGENTS),
       });

@@ -166,3 +166,17 @@ features, and in `enforce` mode break them:
 ```js
 shannonDefender({ skip: [/^\/admin\/replay/, /^\/internal\//] })
 ```
+
+## Settings from the dashboard
+
+With an `apiKey`, the Fetch adapter (`createWebDefender`) takes its settings from the Securovix
+dashboard (**Settings → Website protection**) instead of from code: watch-only or blocking, which
+rules are on, pages never to inspect, scanner-bait pages, attack-tool refusal, the repeat-offender
+ban and a per-address request limit. A change there reaches the site within a minute
+(`policyTtlMs`), with no redeploy. If the dashboard cannot be reached the site keeps the last
+settings it received; if it never reached it, the options given in code apply. Pass
+`remotePolicy: false` to keep the settings in code.
+
+The settings belong to the organization: every site that carries that organization's key shares
+them. The same page offers the adapter as one file to download, for projects that do not install
+the package.

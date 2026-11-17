@@ -21,10 +21,35 @@ const DEFAULTS = {
   scanners: false,
   // { threshold, windowMs, ttlMs } to refuse an address after repeated confirmed attacks. Off = null.
   ban: null,
+  // { perMinute } to refuse an address that sends more requests than that in a minute. Off = null.
+  rateLimit: null,
+  // With an apiKey, the settings saved in the Securovix dashboard (watch-only or blocking, which
+  // rules are on, pages never to inspect, ban, rate limit) replace the ones given here, and a change
+  // there reaches this site within policyTtlMs — no redeploy. Set remotePolicy: false to keep the
+  // settings in code.
+  remotePolicy: true,
+  policyTtlMs: 60_000,
 };
 
-// Bodies worth reading as text. Uploads and other binary types are never buffered.
+// "/api/webhooks" covers that page and everything under it.
+const under = (path, prefix) => path === prefix || path.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`);
+
+// Bodies that are text by their declared type.
 const TEXT_BODY = /json|x-www-form-urlencoded|xml|text\/|graphql/i;
+// Bodies that are not: media and archives are never inspected. Anything else (no type, or
+// application/octet-stream) is inspected when it reads as text, because a handler can parse it as
+// JSON whatever the header said.
+const BINARY_BODY =
+  /^(?:image|video|audio|font)\/|application\/(?:pdf|zip|gzip|x-tar|x-7z-compressed|wasm|x-protobuf)|multipart\//i;
+function readsAsText(sample) {
+  let odd = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const c = sample.charCodeAt(i);
+    if (c === 0) return false;
+    if (c < 9 || (c > 13 && c < 32) || c === 0xfffd) odd += 1;
+  }
+  return odd * 20 <= sample.length;
+}
 
 // The platform-set client address, most trustworthy first. On Vercel and Cloudflare the platform
 // overwrites these, so a visitor cannot forge them; behind another proxy, pass your own `getIp`.
@@ -54,6 +79,8 @@ const json = (status, error) =>
  * @param {boolean|RegExp} [opts.honeypot]    Scanner-bait paths → 404. Off by default.
  * @param {boolean|RegExp} [opts.scanners]    Attack tools named in the User-Agent → 403. Off by default.
  * @param {object|null} [opts.ban]            { threshold = 5, windowMs = 60000, ttlMs = 900000 }.
+ * @param {object|null} [opts.rateLimit]      { perMinute } requests one address may send. Off by default.
+ * @param {boolean} [opts.remotePolicy]       Take the settings from the Securovix dashboard (default true, needs apiKey).
  * @param {(request: Request) => string|null} [opts.getIp]  Client address, if the defaults are wrong for your host.
  * @param {(d: object) => void} [opts.onDetection]  Local hook, called for every detection.
  * @returns {(request: Request, context?: {waitUntil?: Function}) => Promise<Response|null>}
@@ -63,8 +90,72 @@ export function createWebDefender(opts = {}) {
   let mode = cfg.mode === 'enforce' ? 'enforce' : 'monitor';
   const honeypot = listOption(cfg.honeypot, HONEYPOT_PATHS);
   const scanners = listOption(cfg.scanners, SCANNER_AGENTS);
-  const policy = cfg.ban ? { threshold: 5, windowMs: 60_000, ttlMs: 15 * 60_000, ...cfg.ban } : null;
-  const stats = { requests: 0, detections: 0, blocked: 0, banned: 0, reported: 0, dropped: 0 };
+  const localBan = cfg.ban ? { threshold: 5, windowMs: 60_000, ttlMs: 15 * 60_000, ...cfg.ban } : null;
+  // The ban settings in force for the request being handled (from the dashboard, or the local ones).
+  let policy = localBan;
+  const stats = { requests: 0, detections: 0, blocked: 0, banned: 0, limited: 0, reported: 0, dropped: 0 };
+
+  // ── Settings from the dashboard ──────────────────────────────────────────────────────────────
+  let remote = null; // the last settings received
+  let loadedAt = 0; // when a load last finished, whether it worked or not
+  let loading = null;
+  const usesDashboard = () => !!cfg.apiKey && cfg.remotePolicy !== false;
+  function loadSettings() {
+    if (loading) return loading;
+    let signal;
+    try {
+      signal = AbortSignal.timeout(3000);
+    } catch {}
+    loading = fetch(`${cfg.endpoint.replace(/\/$/, '')}/api/defender/sdk/policy`, {
+      headers: { authorization: `Bearer ${cfg.apiKey}` },
+      signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.policy && typeof data.policy === 'object') remote = data.policy;
+      })
+      // The dashboard being away must not change how the site is protected: keep what we have.
+      .catch(() => {})
+      .finally(() => {
+        loadedAt = Date.now();
+        loading = null;
+      });
+    return loading;
+  }
+  async function settings(context) {
+    if (!usesDashboard()) return null;
+    if (!loadedAt) {
+      // The first request of a new instance waits briefly, so blocking is on from the start
+      // rather than after the first minute. Bounded: a slow dashboard never holds the site up.
+      await Promise.race([loadSettings(), new Promise((resolve) => setTimeout(resolve, 1200))]);
+    } else if (Date.now() - loadedAt > cfg.policyTtlMs) {
+      const refresh = loadSettings();
+      try {
+        context?.waitUntil?.(refresh);
+      } catch {}
+    }
+    return remote;
+  }
+
+  // ── Rate limit ───────────────────────────────────────────────────────────────────────────────
+  // Counted in this instance's memory, like the ban: it stops a burst from one address, it is not
+  // an exact global quota.
+  const windows = new Map(); // ip -> { start, count, told }
+  function overLimit(ip, perMinute) {
+    if (!ip || !(perMinute > 0)) return null;
+    const t = Date.now();
+    let w = windows.get(ip);
+    if (!w || t - w.start >= 60_000) {
+      w = { start: t, count: 0, told: false };
+      windows.set(ip, w);
+      if (windows.size > 5000) windows.delete(windows.keys().next().value);
+    }
+    w.count += 1;
+    if (w.count <= perMinute) return null;
+    const first = !w.told;
+    w.told = true;
+    return { first, retryAfter: Math.max(1, Math.ceil((w.start + 60_000 - t) / 1000)) };
+  }
   const offences = new Map(); // ip -> number[] (ms)
   const banned = new Map(); // ip -> until (ms)
 
@@ -117,24 +208,87 @@ export function createWebDefender(opts = {}) {
 
   async function readBody(request) {
     if (request.method === 'GET' || request.method === 'HEAD' || !request.body) return '';
-    if (!TEXT_BODY.test(request.headers.get('content-type') || '')) return '';
-    const declared = Number(request.headers.get('content-length') || 0);
-    if (declared > cfg.maxBody) return '';
-    // clone() so the application still receives the body untouched.
-    const text = await request.clone().text();
-    return text.length > cfg.maxBody ? text.slice(0, cfg.maxBody) : text;
+    const type = request.headers.get('content-type') || '';
+    if (BINARY_BODY.test(type)) return '';
+    // clone() so the application still receives the body untouched. Only the first maxBody bytes
+    // are read: a larger body is inspected up to there instead of not at all.
+    const reader = request.clone().body.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    let bytes = 0;
+    try {
+      while (bytes < cfg.maxBody) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        text += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+    if (text.length > cfg.maxBody) text = text.slice(0, cfg.maxBody);
+    return TEXT_BODY.test(type) || readsAsText(text.slice(0, 2048)) ? text : '';
   }
 
   async function defend(request, context) {
     try {
       const url = new URL(request.url);
       if (cfg.skip.some((r) => r.test(url.pathname))) return null;
+
+      // What the owner set in the dashboard, when there is any; otherwise the options given in code.
+      const site = await settings(context);
+      if (site?.enabled === false) return null;
+      if (Array.isArray(site?.skip) && site.skip.some((prefix) => under(url.pathname, String(prefix)))) return null;
+      const activeMode = site ? (site.mode === 'enforce' ? 'enforce' : 'monitor') : mode;
+      policy = site
+        ? site.ban?.enabled
+          ? {
+              threshold: Number(site.ban.threshold) || 5,
+              windowMs: 60_000,
+              ttlMs: (Number(site.ban.minutes) || 15) * 60_000,
+            }
+          : null
+        : localBan;
+      const perMinute = site
+        ? site.rateLimit?.enabled
+          ? Number(site.rateLimit.perMinute)
+          : 0
+        : Number(cfg.rateLimit?.perMinute || 0);
       stats.requests++;
 
       const ip = (cfg.getIp || clientIp)(request);
-      if (policy && mode === 'enforce' && ip && isBanned(ip)) {
+      if (policy && activeMode === 'enforce' && ip && isBanned(ip)) {
         stats.banned++;
         return json(403, 'Blocked by Securovix Defender (repeat offender)');
+      }
+
+      const flood = overLimit(ip, perMinute);
+      if (flood) {
+        stats.limited++;
+        if (flood.first) {
+          report(
+            {
+              at: new Date().toISOString(),
+              method: request.method,
+              url: `${url.host}${url.pathname}`.slice(0, 300),
+              cls: 'rate-limit',
+              signal: `more than ${perMinute} requests in a minute from one address`,
+              enforced: activeMode === 'enforce',
+              srcIp: ip,
+            },
+            context,
+          );
+        }
+        if (activeMode === 'enforce') {
+          return new Response(JSON.stringify({ error: 'Too many requests' }), {
+            status: 429,
+            headers: {
+              'content-type': 'application/json',
+              'cache-control': 'no-store',
+              'retry-after': String(flood.retryAfter),
+            },
+          });
+        }
       }
 
       const verdict = inspectRequest({
@@ -142,13 +296,15 @@ export function createWebDefender(opts = {}) {
         path: url.pathname,
         body: await readBody(request),
         userAgent: request.headers.get('user-agent'),
-        honeypot,
-        scanners,
+        headers: request.headers,
+        honeypot: site ? (site.honeypot ? HONEYPOT_PATHS : null) : honeypot,
+        scanners: site ? (site.scanners ? SCANNER_AGENTS : null) : scanners,
+        disabled: Array.isArray(site?.disabled) ? site.disabled : null,
       });
       if (!verdict.attack) return null;
 
       stats.detections++;
-      const enforced = verdict.enforce && mode === 'enforce';
+      const enforced = verdict.enforce && activeMode === 'enforce';
       const instant = verdict.cls === 'honeypot' || verdict.cls === 'scanner-tool';
       if (verdict.enforce) recordOffence(ip, instant && policy ? policy.threshold : 1);
 
@@ -176,7 +332,12 @@ export function createWebDefender(opts = {}) {
     }
   }
 
-  defend.stats = () => ({ ...stats, mode, activeBans: [...banned.keys()].filter(isBanned).length });
+  defend.stats = () => ({
+    ...stats,
+    mode: remote ? (remote.mode === 'enforce' ? 'enforce' : 'monitor') : mode,
+    settings: remote ? 'dashboard' : 'local',
+    activeBans: [...banned.keys()].filter(isBanned).length,
+  });
   defend.setMode = (m) => {
     mode = m === 'enforce' ? 'enforce' : 'monitor';
     return mode;
