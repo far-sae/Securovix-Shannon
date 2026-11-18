@@ -48,6 +48,24 @@ const HOP_BY_HOP = new Set([
   'upgrade',
 ]);
 
+// The visitor's address. Directly on the internet it is the socket's. Behind Railway's edge the
+// socket is Railway's own proxy and the visitor is in X-Real-IP, which Railway sets on every request.
+// EDGE_CLIENT_IP_HEADER names another header for a different host; "none" always uses the socket.
+export function visitorAddress(req, env = process.env) {
+  const chosen = String(env.EDGE_CLIENT_IP_HEADER || '')
+    .trim()
+    .toLowerCase();
+  const header =
+    chosen === 'none'
+      ? ''
+      : chosen || (env.RAILWAY_ENVIRONMENT_ID || env.RAILWAY_SERVICE_ID || env.RAILWAY_PROJECT_ID ? 'x-real-ip' : '');
+  const raw = header ? req.headers?.[header] : '';
+  const value = String((Array.isArray(raw) ? raw[0] : raw) || '')
+    .split(',')[0]
+    .trim();
+  return isIP(value) ? value : req.socket?.remoteAddress || null;
+}
+
 // hostname → { origin, mode }. Exported so tests can drive routing without a live dashboard.
 export const routes = new Map();
 const stats = { requests: 0, detections: 0, blocked: 0, unknownHost: 0 };
@@ -200,7 +218,7 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
       }
       out.host = o.host;
       const prior = req.headers['x-forwarded-for'];
-      const ip = req.socket?.remoteAddress || '';
+      const ip = visitorAddress(req) || '';
       out['x-forwarded-for'] = prior ? `${prior}, ${ip}` : ip;
       out['x-forwarded-proto'] = 'https';
       out['x-forwarded-host'] = host;
@@ -286,7 +304,7 @@ export function createEdgeServer({ allowPrivateOrigins = false } = {}) {
               url: `${host}${req.url}`,
               cls: verdict.cls,
               enforced: blocked,
-              srcIp: req.socket?.remoteAddress || null,
+              srcIp: visitorAddress(req),
               // The owner's own test carries a signed mark; the dashboard checks it. It changes nothing here.
               test:
                 typeof req.headers['x-securovix-test'] === 'string'

@@ -536,3 +536,156 @@ test('a site behind the shared edge: its own test is filed as a test, per organi
   assert.equal(theirs[0].severity, 'critical');
   assert.equal(theirs[0].metadata.ownTest, undefined);
 });
+
+// ---------- everything of ours that tests a protected site carries the mark ----------
+
+test('a request replayed from the AI Agent page is filed as the owner’s own test, not an incident', async () => {
+  const owner = await account();
+  const shop = await protectedSite(owner.key);
+  const out = await request('/api/agent/replay', {
+    method: 'POST',
+    cookie: owner.cookie,
+    body: { method: 'GET', url: `${shop.url}/search?q=%27%20OR%20%271%27%3D%271--%20-` },
+  });
+  assert.equal(out.status, 200, JSON.stringify(out.json).slice(0, 300));
+  await shop.settled();
+  assert.equal(shop.detections.length, 1, 'Defender did catch it');
+  const events = await eventsOf(owner.cookie);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].cls, 'own-test');
+  assert.equal(events[0].metadata.ownTest.kind, 'tool');
+  assert.equal(events[0].metadata.ownTest.requests, 1);
+  const overview = (await request('/api/defender/overview', { cookie: owner.cookie })).json;
+  assert.equal(overview.stats.total, 0, 'nothing is counted as an attack');
+  assert.equal(overview.ownTests.runs, 1);
+});
+
+test('a custom check from the AI Agent page is filed as the owner’s own test too', async () => {
+  const owner = await account();
+  const shop = await protectedSite(owner.key);
+  const out = await request('/api/agent/custom-check', {
+    method: 'POST',
+    cookie: owner.cookie,
+    body: {
+      target: shop.url,
+      check: { method: 'GET', path: '/search?q=<script>alert(1)</script>', matcher: { status: 200 } },
+    },
+  });
+  assert.equal(out.status, 200, JSON.stringify(out.json).slice(0, 300));
+  await shop.settled();
+  assert.equal(shop.detections.length, 1);
+  const events = await eventsOf(owner.cookie);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].metadata.ownTest.kind, 'tool');
+  assert.ok(
+    shop.seen.some((hit) => hit.mark),
+    'the request carried the mark',
+  );
+});
+
+test('a scan’s mark lasts as long as a scan can, and is handed to the scan’s own process', async () => {
+  const { OWN_TEST_SCAN_TTL_MS, markFromEnv } = await import('./packages/dashboard/defender-own-test.mjs');
+  const HOUR = 60 * 60_000;
+  const t = Date.UTC(2026, 10, 18, 9, 0, 0);
+  const mark = signOwnTest(SECRET, {
+    orgId: 'org-a',
+    target: 'https://shop.example.test/login',
+    kind: 'scan',
+    ttlMs: OWN_TEST_SCAN_TTL_MS,
+    now: t,
+  });
+  assert.deepEqual(
+    verifyOwnTest(SECRET, mark.value, { orgId: 'org-a', url: 'www.shop.example.test/?a=1', now: t + 5 * HOUR }),
+    { kind: 'scan' },
+  );
+  assert.equal(
+    verifyOwnTest(SECRET, mark.value, { orgId: 'org-a', url: 'www.shop.example.test/?a=1', now: t + 7 * HOUR }),
+    null,
+    'and no longer',
+  );
+  assert.equal(verifyOwnTest(SECRET, mark.value, { orgId: 'org-b', url: 'shop.example.test/', now: t }), null);
+
+  const handed = markFromEnv({ SHANNON_TEST_MARK: JSON.stringify(mark) });
+  assert.equal(handed.header, OWN_TEST_HEADER);
+  assert.equal(handed.value, mark.value);
+  assert.equal(handed.applies('https://www.shop.example.test/x'), true);
+  assert.equal(handed.applies('https://other.example.test/x'), false, 'only the site under test');
+  for (const bad of [
+    undefined,
+    '',
+    'not json',
+    '{}',
+    JSON.stringify({ ...mark, header: 'cookie' }),
+    JSON.stringify({ ...mark, value: 'x' }),
+    JSON.stringify({ ...mark, site: '' }),
+  ])
+    assert.equal(markFromEnv({ SHANNON_TEST_MARK: bad }), null, String(bad));
+});
+
+test('the checking engine, started as a scan’s own process, sends the mark it was handed', async () => {
+  const { spawn } = await import('node:child_process');
+  const heard = [];
+  const listen = (host) =>
+    new Promise((resolve) => {
+      const s = http.createServer((req, res) => {
+        heard.push({ host: req.headers.host, mark: req.headers[OWN_TEST_HEADER] || null });
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('ok');
+      });
+      s.listen(0, host, () => resolve(s));
+      sites.push(s);
+    });
+  const target = await listen('127.0.0.1');
+  const targetUrl = `http://127.0.0.1:${target.address().port}/`;
+  const mark = signOwnTest(SECRET, { orgId: 'org-a', target: targetUrl, kind: 'scan' });
+  const script = `
+    const { fetchT, setScanOrigin } = await import('./purple-engine.mjs');
+    setScanOrigin(new URL(${JSON.stringify(targetUrl)}).origin);
+    await fetchT(${JSON.stringify(targetUrl)});
+    process.exit(0);
+  `;
+  const env = { ...process.env, SHANNON_TEST_MARK: JSON.stringify(mark) };
+  // Not spawnSync: the two servers above live in this process and must stay able to answer.
+  const run = await new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], { cwd: process.cwd(), env });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('close', (status) => resolve({ status, stderr }));
+  });
+  assert.equal(run.status, 0, run.stderr.slice(0, 400));
+  // (That the mark goes to the site under test only is covered above: the engine decides by site
+  // name, and the name here comes from the mark itself.)
+  assert.equal(heard.length, 1);
+  assert.equal(heard[0].mark, mark.value, 'the site under test gets the mark, with nobody calling setTestMark');
+});
+
+test('the shared edge records the visitor’s own address, not the proxy in front of it', async () => {
+  const { visitorAddress } = await import('./packages/defender-edge/server.mjs');
+  const req = {
+    headers: { 'x-real-ip': '203.0.113.10', 'x-forwarded-for': '203.0.113.10, 152.233.29.5' },
+    socket: { remoteAddress: '100.64.0.7' },
+  };
+  assert.equal(
+    visitorAddress(req, { RAILWAY_SERVICE_ID: 's' }),
+    '203.0.113.10',
+    'on Railway: the address Railway reports',
+  );
+  assert.equal(visitorAddress(req, {}), '100.64.0.7', 'directly on the internet: the connection’s own address');
+  assert.equal(visitorAddress(req, { RAILWAY_SERVICE_ID: 's', EDGE_CLIENT_IP_HEADER: 'none' }), '100.64.0.7');
+  assert.equal(
+    visitorAddress(
+      { headers: { 'x-real-ip': 'nonsense' }, socket: { remoteAddress: '100.64.0.7' } },
+      { RAILWAY_SERVICE_ID: 's' },
+    ),
+    '100.64.0.7',
+  );
+  assert.equal(
+    visitorAddress(
+      { headers: { 'cf-connecting-ip': '198.51.100.4' }, socket: {} },
+      { EDGE_CLIENT_IP_HEADER: 'CF-Connecting-IP' },
+    ),
+    '198.51.100.4',
+  );
+});

@@ -267,7 +267,7 @@ export function createEndpointService({ store, engine, cape, now = () => Date.no
     if (existing && now() - Number(existing.lastSeenAt || 0) < REENROLL_QUIET_MS && !sameNetwork(existing.lastIp, ip))
       throw Object.assign(
         new Error(
-          `${existing.hostname || 'This machine'} is already enrolled and is online from another network. To reinstall or update it, run the command on that machine. If it has moved, remove it on the Guard page first, then run the command again.`,
+          `${existing.hostname || 'This machine'} is already enrolled and is online from another network. To reinstall or update it, run the command on that machine. If it has moved, click "Retire" next to it on the Guard page (under Laptops and servers), then run the command again.`,
         ),
         { status: 409 },
       );
