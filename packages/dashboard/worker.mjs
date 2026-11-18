@@ -197,6 +197,8 @@ async function executeScan(job) {
   if (payload.monitor) env.SHANNON_MONITOR = '1';
   if (secret.alertWebhook) env.SHANNON_ALERT_WEBHOOK = secret.alertWebhook;
   if (payload.networkScan) env.SHANNON_NETWORK_SCAN = '1';
+  // The mark the dashboard signed for this scan: its requests are filed as the owner's own test.
+  if (payload.testMark) env.SHANNON_TEST_MARK = JSON.stringify(payload.testMark);
 
   let processResult;
   let failure = null;

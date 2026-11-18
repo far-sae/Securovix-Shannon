@@ -17,7 +17,11 @@ export const OWN_TEST_HEADER = 'x-securovix-test';
 // Longer than a run takes (it is signed when the run starts), short enough that an old mark is useless.
 // A run that outlasts it is not harmed: its later requests are simply reported as attacks.
 export const OWN_TEST_TTL_MS = 60 * 60_000;
-const KINDS = new Set(['agent', 'team', 'monitor']);
+// A scan runs for much longer than an AI Agent run, so its mark lasts longer.
+export const OWN_TEST_SCAN_TTL_MS = 6 * 60 * 60_000;
+// agent / team / monitor: AI Agent runs. scan: a New Scan. tool: one request sent by hand from the
+// AI Agent page (request replay, custom check).
+const KINDS = new Set(['agent', 'team', 'monitor', 'scan', 'tool']);
 const SHAPE = /^v1\.([a-z]{1,12})\.([0-9a-z]{1,12})\.([A-Za-z0-9_-]{43})$/;
 
 // The site a URL or a "host/path?query" string belongs to: its host name in lower case, without the
@@ -75,6 +79,22 @@ export function verifyOwnTest(secret, token, { orgId, url, now = Date.now() } = 
   const given = Buffer.from(m[3]);
   if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
   return { kind: m[1] };
+}
+
+// A scan runs in a process of its own. The dashboard hands it the mark it signed, in the
+// SHANNON_TEST_MARK variable, as { header, value, site }. Returns the mark in the shape the checking
+// engine uses, or null when there is none or it is not well formed.
+export function markFromEnv(env = process.env) {
+  try {
+    const given = JSON.parse(env.SHANNON_TEST_MARK || 'null');
+    if (!given || given.header !== OWN_TEST_HEADER || typeof given.value !== 'string' || !SHAPE.test(given.value))
+      return null;
+    const site = siteName(given.site);
+    if (!site) return null;
+    return { header: OWN_TEST_HEADER, value: given.value, site, applies: (url) => siteName(url) === site };
+  } catch {
+    return null;
+  }
 }
 
 // A stored Defender event that was filed as the organization's own test.

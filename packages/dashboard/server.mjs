@@ -66,6 +66,7 @@ import {
   toApiMessages,
   v1RouteScope,
 } from './assistant.mjs';
+import { clientAddress } from './client-address.mjs';
 import { locateFinding } from './code-locate.mjs';
 import {
   CODE_SCAN_MAX_CHARS,
@@ -140,7 +141,14 @@ import {
 } from './db.mjs';
 import { DAY, buildDefenseDigest, lastCompleteWeek } from './defender-digest.mjs';
 import { cleanDetection, createIntakeGate } from './defender-intake.mjs';
-import { createOwnTestLedger, isOwnTest, signOwnTest, siteName, verifyOwnTest } from './defender-own-test.mjs';
+import {
+  OWN_TEST_SCAN_TTL_MS,
+  createOwnTestLedger,
+  isOwnTest,
+  signOwnTest,
+  siteName,
+  verifyOwnTest,
+} from './defender-own-test.mjs';
 import { DEFENDER_RULES, normalizePolicy, policyFor, sdkBundle } from './defender-policy.mjs';
 import {
   addCreditGrant,
@@ -263,6 +271,9 @@ const app = express();
 // Google OAuth redirect URI is built with http://, which Google rejects.
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+// First of all: req.ip is the visitor's own address (see client-address.mjs). Everything below that
+// counts, limits, bans or compares by address depends on it.
+app.use(clientAddress());
 app.use(
   express.json({
     limit: '2mb',
@@ -670,6 +681,8 @@ const DEV_TOKENS = devTokensAllowed();
 // What a member sees of a queued job. An email's text can hold a one-time link (invitation,
 // password reset) meant for its recipient only, so the text never leaves the server.
 export function publicJob({ secretEnc: _secret, ...job }) {
+  // A scan's own-test mark is for the scan's process, not for the job list.
+  if (job.payload?.testMark) return { ...job, payload: { ...job.payload, testMark: undefined } };
   if (job.type !== 'email') return job;
   return { ...job, payload: { to: job.payload?.to, subject: job.payload?.subject }, result: null };
 }
@@ -5919,11 +5932,19 @@ app.post('/api/agent/replay', async (req, res) => {
   const m = String(method).toUpperCase();
   if (!REPLAY_METHODS.has(m)) return res.status(400).json({ error: 'Unsupported method.' });
   try {
-    setSessionHeaders({}); // send ONLY the headers the user supplied (don't leak a prior run's session)
-    setScanOrigin(new URL(url).origin);
-    const t0 = Date.now();
-    const r = await fetchT(url, { method: m, headers: headers || {}, body: body || undefined }, 12000);
-    const timeMs = Date.now() - t0;
+    // It takes its turn with the checking engine, as a run does (they share the engine's target and
+    // session), and carries the organization's own-test mark, so Defender on that site files it as
+    // a test of yours rather than an attack.
+    const { r, timeMs } = await withEngine(
+      async () => {
+        setSessionHeaders({}); // send ONLY the headers the user supplied (don't leak a prior run's session)
+        setScanOrigin(new URL(url).origin);
+        const t0 = Date.now();
+        const reply = await fetchT(url, { method: m, headers: headers || {}, body: body || undefined }, 12000);
+        return { r: reply, timeMs: Date.now() - t0 };
+      },
+      { mark: () => ownTestMark(active.org.id, url, 'tool') },
+    );
     const hdrs = {};
     try {
       if (r.headers?.forEach)
@@ -5999,9 +6020,14 @@ app.post('/api/agent/custom-check', async (req, res) => {
     return res.status(400).json({ error: 'The check needs at least one matcher (status / contains / regex).' });
   try {
     const origin = new URL(target).origin;
-    setSessionHeaders({});
-    setScanOrigin(origin);
-    const r = await fetchT(origin + c.path, { method: c.method, body: c.body }, 12000);
+    const r = await withEngine(
+      async () => {
+        setSessionHeaders({});
+        setScanOrigin(origin);
+        return fetchT(origin + c.path, { method: c.method, body: c.body }, 12000);
+      },
+      { mark: () => ownTestMark(active.org.id, origin, 'tool') },
+    );
     const matched = evaluateMatcher(r, c.matcher);
     const lead = matched
       ? {
@@ -6376,6 +6402,16 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
     if (netOk) env.SHANNON_NETWORK_SCAN = '1';
   }
 
+  // The scan's requests carry the organization's own-test mark for this site, so Defender on the
+  // site files them as a test of yours. Signed here because only the dashboard holds the key.
+  const scanMark = signOwnTest(SESSION_SECRET, {
+    orgId: ctx.org.id,
+    target: targetUrl,
+    kind: 'scan',
+    ttlMs: OWN_TEST_SCAN_TTL_MS,
+  });
+  if (scanMark) env.SHANNON_TEST_MARK = JSON.stringify(scanMark);
+
   if (isSupabase() && process.env.SHANNON_DURABLE_JOBS !== '0') {
     const durableConfig = structuredClone(config);
     Reflect.deleteProperty(durableConfig, 'authentication');
@@ -6393,6 +6429,7 @@ app.post(['/api/scans', '/api/v1/scans'], async (req, res) => {
         warRoom: warRoom === true,
         monitor: req.body.monitor === true,
         networkScan: env.SHANNON_NETWORK_SCAN === '1',
+        testMark: scanMark,
       },
       secretEnc: encryptSecret({
         apiKey,

@@ -2976,7 +2976,7 @@ async function defRefreshAll() {
 // The organization's own tests: the AI Agent, or its scheduled monitor, testing a site that Defender
 // protects. They are not incidents, so they get one quiet line above the queue (one entry per run)
 // and are counted in none of the numbers.
-const DEF_TEST_KINDS = { agent: 'AI Agent run', team: 'AI Agent team run', monitor: 'Scheduled monitor' };
+const DEF_TEST_KINDS = { agent: 'AI Agent run', team: 'AI Agent team run', monitor: 'Scheduled monitor', scan: 'Scan', tool: 'Request sent from the AI Agent page' };
 function defOwnTestsHtml(own) {
   const runs = Number(own?.runs || 0);
   if (!runs) return '';
@@ -2991,7 +2991,7 @@ function defOwnTestsHtml(own) {
     const outcome = !b ? 'not blocked' : b >= n ? 'all blocked' : `${b} of ${n} blocked`;
     return `<div class="def-test-run"><div><b>${H(DEF_TEST_KINDS[t.kind] || 'Own test')} · ${H(event.url || 'your site')}</b><small>${H(plural(n, 'test request'))} caught${kinds ? ` (${H(kinds)})` : ''} · ${outcome}</small></div><small>${event.at ? H(fmtDate(event.at)) : ''}</small></div>`;
   }).join('');
-  return `<details class="def-tests"><summary><span class="def-tests-tag">Your own tests</span><span>${H(plural(runs, 'run'))} · ${H(plural(requests, 'test request'))} caught, ${blocked.toLocaleString()} blocked${own.lastAt ? ` · last ${H(fmtDate(own.lastAt))}` : ''}</span></summary><p class="def-tests-note">These requests came from your own AI Agent testing a site that Defender protects. Defender caught them, which shows it is watching. They are not attacks and are not counted in the numbers on this page.</p>${rows}</details>`;
+  return `<details class="def-tests"><summary><span class="def-tests-tag">Your own tests</span><span>${H(plural(runs, 'run'))} · ${H(plural(requests, 'test request'))} caught, ${blocked.toLocaleString()} blocked${own.lastAt ? ` · last ${H(fmtDate(own.lastAt))}` : ''}</span></summary><p class="def-tests-note">These requests came from your own scans and AI Agent testing a site that Defender protects. Defender caught them, which shows it is watching. They are not attacks and are not counted in the numbers on this page.</p>${rows}</details>`;
 }
 
 async function defOverviewLoad() {

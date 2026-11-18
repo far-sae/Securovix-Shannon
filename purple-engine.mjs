@@ -26,6 +26,7 @@ import { probeDirect, probeIndirect } from './llm-inject.mjs';
 import { candidateParams } from './llm-surface.mjs';
 // Linear-time equivalents of /\{\{.*\}\}/, /<[a-z][^>]*>/ and /union.*select/. The regex forms are
 // quadratic on hostile input, and these filters also run on live traffic inside the Defender.
+import { markFromEnv } from './packages/dashboard/defender-own-test.mjs';
 import { hasHtmlTag, hasLooseSqli, hasTemplateMarkers, sameLine } from './packages/defender-sdk/signatures.mjs';
 
 function loadEnv() {
@@ -56,8 +57,9 @@ export function setSessionHeaders(h) {
 // The signed "this is the owner's own test" mark: one header, sent only to the site under test
 // (mark.applies(url) decides), so Defender on that site can file the request as a test instead of an
 // attack. Unlike the session it is not a credential: the site inspects and blocks a marked request
-// like any other. Set by the dashboard for the length of one run; null means no mark.
-let TEST_MARK = null;
+// like any other. Set by the dashboard for the length of one run; null means no mark. A scan started
+// by the dashboard runs in its own process and is handed its mark in the environment.
+let TEST_MARK = markFromEnv();
 export function setTestMark(mark) {
   TEST_MARK = mark?.header && mark.value && typeof mark.applies === 'function' ? mark : null;
 }
