@@ -264,3 +264,46 @@ test('operational heartbeats are queryable and worker health is explicit', async
   assert.equal((await fetch(`${base}/readyz`)).status, 503);
   await new Promise((resolve) => health.close(resolve));
 });
+
+test('every kind of organization secret the code saves is one the database accepts', async () => {
+  const { readdirSync, readFileSync } = await import('node:fs');
+  // What the database allows: the last definition of the rule, across all migrations in order.
+  let allowed = null;
+  for (const name of readdirSync('supabase/migrations').sort()) {
+    const sql = readFileSync(join('supabase/migrations', name), 'utf8');
+    if (!sql.includes('shannon_org_secrets')) continue;
+    const table = /create table if not exists public\.shannon_org_secrets \(([\s\S]*?)\n\);/.exec(sql)?.[1] || '';
+    const inline = /kind text not null check \(kind in \(([^)]*)\)\)/.exec(table)?.[1];
+    const altered = /shannon_org_secrets_kind_check\s+check \(kind in \(([^)]*)\)\)/.exec(sql)?.[1];
+    const list = altered || inline;
+    if (list) allowed = list.split(',').map((item) => item.trim().replace(/^'|'$/g, ''));
+  }
+  assert.ok(allowed, 'the rule was found in the migrations');
+  assert.deepEqual(
+    [...allowed].sort(),
+    [...database.ORG_SECRET_KINDS].sort(),
+    'the code’s list and the database’s rule are the same list',
+  );
+
+  // What the dashboard saves: every kind named in a saveOrgSecret call.
+  const source = readFileSync('packages/dashboard/server.mjs', 'utf8');
+  const saved = new Set([...source.matchAll(/saveOrgSecret\(\{[\s\S]{0,300}?kind:\s*'([a-z-]+)'/g)].map((m) => m[1]));
+  assert.ok(saved.has('defender-policy') && saved.has('repository-provider'), [...saved].join(', '));
+  for (const kind of saved)
+    assert.ok(allowed.includes(kind), `"${kind}" is saved by the dashboard but refused by the database`);
+
+  // And a kind nobody listed is refused here too, not only on the real database.
+  await assert.rejects(
+    database.saveOrgSecret({
+      id: 'osec_x',
+      orgId: 'org_x',
+      kind: 'something-new',
+      name: 'n',
+      config: {},
+      secretEnc: 'x',
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+    /unknown organization secret kind/,
+  );
+});
