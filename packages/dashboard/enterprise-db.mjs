@@ -479,7 +479,21 @@ export async function getOrgSecret(orgId, kind, name) {
   return rows.find((item) => item.name === name) || null;
 }
 
+// Every kind of record kept in shannon_org_secrets. The database refuses any other (a check on the
+// column), so a new kind needs a migration that widens that check AND an entry here. Saving an
+// unlisted kind fails at once, in tests too, instead of working locally and answering 500 on the
+// real database.
+export const ORG_SECRET_KINDS = Object.freeze([
+  'ai-provider',
+  'oidc',
+  'scim',
+  'billing',
+  'repository-provider',
+  'defender-policy',
+]);
+
 export async function saveOrgSecret(record) {
+  if (!ORG_SECRET_KINDS.includes(record?.kind)) throw new Error(`unknown organization secret kind: ${record?.kind}`);
   if (!USE_SUPABASE) {
     local.orgSecrets = local.orgSecrets.filter(
       (item) => !(item.orgId === record.orgId && item.kind === record.kind && item.name === record.name),
