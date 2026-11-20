@@ -92,16 +92,17 @@ function databaseBack() {
 
 /** Runs `fn` until it succeeds, waiting longer between tries. Returns null if the worker is told to stop. */
 export async function untilItWorks(what, fn, { wait = sleep, stopped = () => stopping } = {}) {
-  for (;;) {
+  while (!stopped()) {
     try {
       const result = await fn();
       databaseBack();
       return result;
     } catch (error) {
-      if (stopped()) return null;
+      if (stopped()) break;
       await wait(databaseAway(`${what} failed`, error));
     }
   }
+  return null;
 }
 
 /** What the health endpoint reports. */
@@ -611,6 +612,8 @@ export async function runWorker() {
   await untilItWorks('returning unfinished jobs to the queue', () =>
     requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000)),
   );
+  // Told to stop while still waiting for the database: nothing was started, so there is nothing to finish.
+  if (stopping) return;
   await scheduleDueDefenseCycles().catch((error) =>
     console.error('[worker] defense scheduling failed:', error.message),
   );

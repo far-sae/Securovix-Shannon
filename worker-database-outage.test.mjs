@@ -82,6 +82,28 @@ test('start-up stops waiting when the worker is told to shut down', async () => 
   assert.equal(calls, 3);
 });
 
+test('a shutdown that arrives during the wait ends it without one more try', async () => {
+  let calls = 0;
+  let stop = false;
+  const result = await quiet(() =>
+    worker.untilItWorks(
+      'database check',
+      async () => {
+        calls += 1;
+        throw timeout();
+      },
+      {
+        wait: async () => {
+          stop = true;
+        },
+        stopped: () => stop,
+      },
+    ),
+  );
+  assert.equal(result, null);
+  assert.equal(calls, 1);
+});
+
 test('a running worker outlasts a long outage and picks up again when the database is back', async () => {
   let away = true;
   const poll = async () => {
