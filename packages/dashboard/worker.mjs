@@ -54,6 +54,61 @@ let healthServer = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// --- A database that is not answering -------------------------------------------------------
+// The worker waits for it. It used to exit instead (at start-up on the first failed check, while
+// running after twenty failed polls). The platform restarts a failed service ten times and then
+// leaves it stopped, and ten start-up checks fail in under three minutes, so a short database
+// outage ended the worker until someone restarted it by hand. Exiting gains nothing here: every
+// request opens its own connection, so a new process is in no better position than this one.
+const RETRY_MAX_MS = 60_000;
+const outage = { failures: 0, since: 0 };
+let databaseSeen = null;
+
+/** How long to wait after `failures` failed tries in a row: the poll interval, doubling, at most a minute. */
+export function retryDelay(failures, baseMs = POLL_MS, maxMs = RETRY_MAX_MS) {
+  return Math.min(maxMs, baseMs * 2 ** Math.min(16, Math.max(0, failures - 1)));
+}
+
+function databaseAway(what, error) {
+  outage.failures += 1;
+  if (outage.failures === 1) outage.since = Date.now();
+  const wait = retryDelay(outage.failures);
+  workerStatus.database = { ...(databaseSeen || {}), ok: false, error: error.message, since: outage.since };
+  console.error(
+    `[worker] ${what}: ${error.message} (database not answering, try ${outage.failures}; next try in ${Math.round(wait / 1000)} s)`,
+  );
+  return wait;
+}
+
+function databaseBack() {
+  if (!outage.failures) return;
+  console.log(
+    `[worker] database is answering again after ${outage.failures} failed tries (${Math.round((Date.now() - outage.since) / 1000)} s)`,
+  );
+  outage.failures = 0;
+  outage.since = 0;
+  workerStatus.database = databaseSeen || { ok: true };
+}
+
+/** Runs `fn` until it succeeds, waiting longer between tries. Returns null if the worker is told to stop. */
+export async function untilItWorks(what, fn, { wait = sleep, stopped = () => stopping } = {}) {
+  for (;;) {
+    try {
+      const result = await fn();
+      databaseBack();
+      return result;
+    } catch (error) {
+      if (stopped()) return null;
+      await wait(databaseAway(`${what} failed`, error));
+    }
+  }
+}
+
+/** What the health endpoint reports. */
+export function workerState() {
+  return { ...workerStatus };
+}
+
 function contentType(path) {
   if (path.endsWith('.json')) return 'application/json';
   if (path.endsWith('.html')) return 'text/html; charset=utf-8';
@@ -536,9 +591,26 @@ export async function drain() {
   while (running.size) await Promise.allSettled([...running.values()].map((item) => item.promise));
 }
 
+/**
+ * One turn of the main loop's job pick-up. Returns how long to sleep before the next turn.
+ * Never throws: a failed poll is waited out, however long the database stays away.
+ */
+export async function pollStep(poll = pollOnce) {
+  try {
+    const started = await poll();
+    databaseBack();
+    return started ? 250 : POLL_MS;
+  } catch (error) {
+    return databaseAway('could not claim jobs', error);
+  }
+}
+
 export async function runWorker() {
-  workerStatus.database = await enterpriseHealth();
-  await requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000));
+  databaseSeen = await untilItWorks('database check', enterpriseHealth);
+  if (databaseSeen) workerStatus.database = databaseSeen;
+  await untilItWorks('returning unfinished jobs to the queue', () =>
+    requeueStaleJobs(Date.now() - Number(process.env.SHANNON_JOB_STALE_MS || 120_000)),
+  );
   await scheduleDueDefenseCycles().catch((error) =>
     console.error('[worker] defense scheduling failed:', error.message),
   );
@@ -564,7 +636,6 @@ export async function runWorker() {
   let lastMaintenance = Date.now();
   let lastRetention = Date.now();
   let lastHeartbeat = 0;
-  let pollFailures = 0;
   while (!stopping) {
     workerStatus.lastPollAt = Date.now();
     if (Date.now() - lastHeartbeat > 60_000) {
@@ -594,17 +665,7 @@ export async function runWorker() {
       );
       lastRetention = Date.now();
     }
-    let started = 0;
-    try {
-      started = await pollOnce();
-      pollFailures = 0;
-    } catch (error) {
-      // One failed poll is a blip; a database that stays away should restart the worker.
-      pollFailures += 1;
-      console.error('[worker] could not claim jobs:', error.message);
-      if (pollFailures >= 20) throw error;
-    }
-    await sleep(started ? 250 : POLL_MS);
+    await sleep(await pollStep());
   }
   workerStatus.ready = false;
   await drain();
